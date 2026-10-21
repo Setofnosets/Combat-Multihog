@@ -1,0 +1,267 @@
+# Tactical Combat
+
+Tactical Combat is a grid-based battle layer for the Multihog D&D Framework. It turns the tracker's existing state memo into a playable encounter: party members, enemies, non-party allies, stats, skills, and consumables are all read from `[CHARACTER]`, `[PARTY]`, `[COMBAT]`, and `[INVENTORY]`.
+
+Open it from **Settings → Tactical Combat** or the chess-board button in the tracker header.
+
+---
+
+## Quick start
+
+1. Open **Settings → Tactical Combat** and enable the feature.
+2. Choose a grid size, turn style, terrain theme, and (optionally) a dedicated combat-agent connection.
+3. Talk to the narrator until a `[COMBAT]` block exists, or let the encounter architect invent opposition from the current scene.
+4. Press **Start encounter**. The board opens with the party on the left and enemies on the right.
+5. Select a player unit, move to a blue-highlighted cell, then attack (red targets), use a skill or item, defend, wait, or flee.
+6. Press **End player phase** (phased mode) or **End turn** (initiative mode). The combat agent controls every enemy and non-party ally, then the next player phase begins.
+7. When one side is gone — or the party retreats — the result is written into `[COMBAT]` as `END_COMBAT` and queued as an authoritative aftermath block for the main narrator.
+
+---
+
+## Settings
+
+| Setting | Purpose |
+|---|---|
+| **Enable Tactical Combat** | Master switch. The board can be opened for inspection while disabled, but a new encounter cannot start. |
+| **Grid dimensions** | 10×10, 15×15, 20×20, **Dynamic** (8×8 to 24×24 based on roster size), or **Custom** (5–40 rows/columns). |
+| **Turn style** | **Phased** — every player unit acts in any order, then every agent unit; or **Initiative** — 1d20 + modifier, one unit at a time. |
+| **Terrain theme** | Auto (matches location keywords) or Dungeon / Forest / Cave / City / Interior / Plain. |
+| **Terrain density** | 0–100. Higher values add more cover, rubble, hazards, walls, water, and high ground. Deployment lanes stay clear. |
+| **Movement per turn** | Default speed in cells for units without an explicit speed. Diagonals cost 1; difficult terrain costs 2. |
+| **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
+| **Show grid coordinates** | Adds `x,y` labels to cells. |
+| **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
+| **Combat agent connection** | Main API, saved connection profile, Ollama, or OpenAI-compatible endpoint + completion preset + max output tokens. |
+| **Prompt Templates** | Editable tactical agent, encounter architect, and outcome-to-narration prompts. Reset restores the shipped template. |
+| **Action Catalogue & Game State** | JSON editor for the legal action vocabulary. Labels/descriptions can be changed; `"enabled": false` removes an action from the board and the agent contract. Unknown action types are rejected at runtime. |
+| **Terrain Key** | Static reference for every terrain type, colour, glyph, and effect. |
+
+All tactical settings are global. Each chat gets its own board, stored in `extension_settings.rpg_tracker.tacticalCombatByChat[chatId]`.
+
+---
+
+## Terrain
+
+| Glyph | Terrain | Effect |
+|---|---|---|
+| `·` | Open floor | Normal movement. |
+| `"` | Grass / scrub | Normal movement. |
+| `▲` | Rubble | Difficult terrain; each cell costs 2 movement. |
+| `≈` | Water | Impassable. |
+| `■` | Wall / rock | Impassable; blocks line of sight. |
+| `◈` | Cover | +2 AC while standing here. |
+| `↑` | High ground | Costs 2 movement; +1 to attack rolls made from here. |
+| `✶` | Hazard | 1d4 damage at the start of a round while standing here. |
+| `◆` | Objective | Tactical marker / narrative flavour. |
+
+The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by walls. Cover and high ground are evaluated from the combatant's current cell.
+
+---
+
+## Combat rules
+
+- **HP / AC / attacks** come from memo stat blocks when available. Missing stats fall back to level-appropriate tabletop defaults instead of failing.
+- **Damage** accepts `XdY+Z` expressions. Natural 20 is a critical (damage dice are doubled, modifier once); natural 1 always misses.
+- **Actions**: Move, Attack, Skill, Item, Defend, Wait, Flee. A unit can move before or after its main action. Bonus-action skills consume the bonus slot instead.
+- **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
+- **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, and bonus-action usage. A class-appropriate fallback skill is granted if nothing parses.
+- **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
+- **Defeat**: a unit at 0 HP is defeated and remains on the board as a faded corpse. Victory = every enemy defeated. Defeat = every player unit defeated. Retreat = every player unit fled or the player presses Retreat.
+- **Hazards** damage all units standing on them at the start of each round.
+- **Statuses** tick at the start of each round; damage-over-time effects are applied then. Defend grants +4 AC for the current round.
+
+### Turn styles
+
+**Phased** works like a tactics game:
+
+1. Player phase — every player unit may act in any order.
+2. End player phase → agent phase for all enemies and non-party allies.
+3. Agent actions are validated and applied; the next round starts with all resources reset.
+
+**Initiative** rolls `1d20 + initiative bonus` for every combatant at encounter start. Units act one at a time. Consecutive agent units are sent to the agent as one batch; after the batch resolves, play returns to the next player unit (or a new round).
+
+---
+
+## The combat agent contract
+
+The agent never mutates the board. It receives a JSON game state and returns a declarative action list. The local rules engine validates every action (turn ownership, action/movement budget, range, line of sight, terrain, skill/item uses) and rejects illegal entries with a log line.
+
+### Game state (sent to the agent / downloadable from the board)
+
+```json
+{
+  "format": "multihog-tactical-combat",
+  "version": 1,
+  "encounter": {
+    "title": "Skirmish at the Sunken Keep",
+    "location": "The Sunken Keep, Gatehouse",
+    "description": "...",
+    "round": 2,
+    "phase": "enemy",
+    "turnStyle": "phase"
+  },
+  "grid": {
+    "rows": 15,
+    "cols": 15,
+    "coordinates": "x = column, y = row, both 0-indexed",
+    "legend": { ".": "Open floor", "#": "Wall / rock", "o": "Cover (+2 AC)" },
+    "terrain": ["...............", "....##..oo....."]
+  },
+  "rules": {
+    "movement": 6,
+    "allowFlee": true,
+    "victory": "Defeat every enemy unit.",
+    "defeat": "All player units are defeated.",
+    "actions": "- move: Move — ...",
+    "actionTypes": ["move", "attack", "skill", "item", "defend", "wait", "flee"]
+  },
+  "units": [
+    {
+      "id": "enemy-3",
+      "name": "Goblin Archer",
+      "side": "enemy",
+      "x": 12, "y": 7,
+      "hp": 12, "maxHp": 12, "ac": 13,
+      "attackBonus": 5, "attackRange": 6, "damage": "1d6+2",
+      "speed": 6, "movementUsed": 0, "movementLeft": 6,
+      "actionUsed": false, "bonusUsed": false,
+      "statuses": [], "stats": { "str": 10, "dex": 14 },
+      "skills": [{ "id": "aimed-shot", "name": "Aimed Shot", "kind": "attack", "range": 6, "damage": "1d8", "uses": 2, "maxUses": 2 }],
+      "items": []
+    }
+  ],
+  "unitsToMove": [
+    {
+      "unitId": "enemy-3",
+      "reachableCells": [[11, 7], [12, 8]],
+      "attackTargets": ["pc-1"],
+      "skillTargets": { "aimed-shot": ["pc-1"] }
+    }
+  ],
+  "activationOrder": ["enemy-3"],
+  "recentLog": ["R2 attack: ..."]
+}
+```
+
+`reachableCells` already excludes walls, water, occupied cells, difficult-terrain overspend, and movement already spent. `attackTargets` and `skillTargets` already account for range and line of sight.
+
+### Action response
+
+```json
+{
+  "actions": [
+    { "type": "move", "unitId": "enemy-3", "to": { "x": 11, "y": 7 } },
+    { "type": "attack", "unitId": "enemy-3", "targetId": "pc-1" },
+    { "type": "skill", "unitId": "enemy-4", "skillId": "aimed-shot", "targetId": "pc-2" },
+    { "type": "item", "unitId": "enemy-5", "itemId": "potion", "targetId": "enemy-5" },
+    { "type": "defend", "unitId": "enemy-6" },
+    { "type": "wait", "unitId": "enemy-7" },
+    { "type": "flee", "unitId": "enemy-8" }
+  ]
+}
+```
+
+- Only units listed in `unitsToMove` may be controlled.
+- `move` accepts an optional `path`; otherwise the engine finds the shortest legal path to `to`.
+- The parser tolerates markdown fences, leading/trailing prose, bare arrays, and one correction retry with the validation error appended.
+- If the connection fails or returns no usable actions, a deterministic local tactics AI takes over for the remaining units. Combat never stalls because a model is offline.
+- The board's export button downloads the game state as a `.json` file, matching what the agent receives.
+
+### "Main connection interprets the actions"
+
+The Combat Agent is only the decision layer. The extension's action interpreter is the authority: it maps each declarative action to the pure engine, rolls dice, applies damage, and writes the combat log. The main narrator then receives the final outcome, not the raw action list.
+
+---
+
+## Prompt customization
+
+Three prompts are editable:
+
+1. **Tactical agent system prompt** — the action JSON contract, ownership rules, tactics guidance, and output size limit.
+2. **Encounter architect system prompt** — how to build a fair encounter from party, existing `[COMBAT]`, location, and scene. It can also return a terrain map using the legend characters.
+3. **Outcome-to-narration template** — the authoritative aftermath block injected into the next narrator generation. Supported placeholders:
+
+   `{{title}}`, `{{location}}`, `{{outcome}}`, `{{rounds}}`, `{{survivors}}`, `{{fallen}}`, `{{fled}}`, `{{defeated}}`, `{{details}}`, `{{summary}}`.
+
+Each has a reset button. Prompts are sent verbatim with the JSON state appended.
+
+### Action catalogue
+
+The catalogue is JSON:
+
+```json
+[
+  {
+    "type": "attack",
+    "label": "Attack",
+    "enabled": true,
+    "description": "Make one weapon or cantrip attack against a target in range."
+  }
+]
+```
+
+Valid `type` values are `move`, `attack`, `skill`, `item`, `defend`, `wait`, and `flee`. Reordering changes the order presented to the agent; the board keeps its fixed action layout. Invalid JSON never breaks combat: the shipped catalogue is used and the settings tab shows the parse error. Changes apply to the next encounter.
+
+---
+
+## Outcome and narration
+
+When combat ends:
+
+1. `[COMBAT]` is closed with `[COMBAT]END_COMBAT[/COMBAT]` (the tracker's defeated-combatant archive is cleared through `mergeMemo`).
+2. A payload is queued in `settings.tacticalCombatReturn` with the title, location, outcome, rounds, survivors, fallen, defeated enemies, and detail lines.
+3. The board shows a result dialog. **Return to narration** closes the board and calls the main `generate('normal')`. If automatic return is enabled, this happens after ~1 second.
+4. On the next real narrator generation, `rpgTrackerInterceptor` injects the rendered outcome block at the top of the core context. After `GENERATION_ENDED` (excluding quiet/impersonate passes), the payload is cleared, so it cannot leak into later scenes.
+5. If automatic return is disabled or generation is busy, the payload stays queued for the user's next message.
+
+---
+
+## Persistence and chat switching
+
+- The board lives in `settings.tacticalCombatByChat[chatId]`; it survives reloads and does not participate in Chat Link projections.
+- A chat switch aborts any in-flight agent request, resets the selection, and redraws the arriving chat's board (or the empty state).
+- Ended encounters are retained for review. Up to 16 chats are kept; inactive old boards are pruned as new ones are created.
+- **Clear board** removes the current chat's encounter after confirmation. It does not clear the pending narration block.
+- The `[COMBAT]` memo block is only closed on combat end; starting a tactical encounter does not rewrite the memo mid-fight.
+
+---
+
+## Architecture
+
+| File | Responsibility |
+|---|---|
+| `src/features/tactical-combat/tactical-combat-constants.js` | Terrain, action types, grid presets, themes, defaults. |
+| `tactical-combat-prompts.js` | Shipped prompt templates + placeholder renderer. |
+| `tactical-combat-actions.js` | Catalogue validation, response parsing, action normalization/allow-lists. |
+| `tactical-combat-engine.js` | Pure grid/dice/rules engine: terrain, placement, movement, LOS, attacks, skills, items, turn flow, outcomes, agent state. |
+| `tactical-combat-context.js` | Memo parsing (`[CHARACTER]`, `[PARTY]`, `[COMBAT]`, `[INVENTORY]`), location/theme inference, fallback roster/encounters. |
+| `tactical-combat-agent.js` | Encounter architect + tactical agent requests, correction retries, local tactics fallback, connection probe. |
+| `tactical-combat-store.js` | Per-chat board and pending-narration persistence. |
+| `tactical-combat-outcome.js` | Memo closure, outcome payload, narration block, automatic continuation. |
+| `tactical-combat-markup.js` | Pure HTML for the board, sidebar, legend, log, and result dialog. |
+| `tactical-combat-ui.js` | Overlay controller, targeting, delegated events, async agent turns, export. |
+| `tactical-combat-settings.js` | Settings tab binding, catalogue validation, board launchers. |
+
+Integration points: `index.js` (init, connection binder, chat switch), `narrative-hooks.js` (one-shot outcome injection/clear), `settings.html`, `src/ui/settings-overlay.js`, `src/state/defaults.js`, `src/state/settings.js`, `src/state/connection-setups.js`, `style.css`, `src/ui/panel/panel-markup.js`.
+
+---
+
+## Tests
+
+```bash
+npx vitest run --pool=threads
+```
+
+The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, and settings/UI contracts.
+
+> On Android/Termux the default Vitest `forks` pool cannot spawn workers; use `--pool=threads`. The `vitest.config.js` in this fork sets `pool: 'threads'` so `npm test` works there too.
+
+---
+
+## Current limitations
+
+- Skills are single-target; area-of-effect templates are not implemented.
+- Reactions/opportunity attacks are tracked but not yet used by an action.
+- The memo parser is tolerant but heuristic; it prioritizes listed totals (`Total AC`, melee/ranged attack values) and falls back to derived values.
+- Enemy `[COMBAT]` skill text is parsed heuristically; ambiguous abilities may become a generic attack or buff.
+- Automatic narration calls the main generation API; if another generation is running, the queued result waits for the next message instead.

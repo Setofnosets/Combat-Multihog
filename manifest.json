@@ -1,8 +1,8 @@
 {
 
-    "display_name": "Multihog D&D Framework",
+    "display_name": "Multihog D&D Framework — Tactical Combat",
 
-    "version": "2026.9.25",
+    "version": "2026.10.1",
 
     "author": "Disgusting Fatbody",
 
@@ -16,6 +16,8 @@
 
     "homePage": "https://github.com/MultihogAurelius/SillyTavern-MultihogDnDFramework",
 
-    "auto_update": true
+    "forkHomePage": "https://github.com/Setofnosets/Combat-Multihog",
+
+    "auto_update": false
 
 }

@@ -19,6 +19,12 @@ import { DEFAULT_WORLD_PROGRESSION_SYSTEM_PROMPT } from '../../world-progression
 import { MAIN_SYSPROMPT_BACKUP_KEY } from './main-sysprompt-backup.js';
 import { DEFAULT_MAP_THEME } from './map-themes.js';
 import {
+    DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
+    DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
+    DEFAULT_TACTICAL_OUTCOME_PROMPT,
+} from '../features/tactical-combat/tactical-combat-prompts.js';
+import { DEFAULT_TACTICAL_ACTION_CATALOG_JSON } from '../features/tactical-combat/tactical-combat-constants.js';
+import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
     DEFAULT_ROUTER_COMBAT_PROFILE_GUIDANCE_AGENT,
     DEFAULT_ROUTER_COMBAT_PROFILE_GUIDANCE_BASIC,
@@ -174,6 +180,37 @@ export function buildDefaultSettings() {
         characterCreationOpenaiUrl: "",
         characterCreationOpenaiKey: "",
         characterCreationOpenaiModel: "",
+
+        // ── Tactical Combat ────────────────────────────────────────────────
+        // Per-chat encounters live in tacticalCombatByChat keyed by chat id. The
+        // transient outcome block is consumed by the narrator interceptor.
+        tacticalCombatEnabled: false,
+        tacticalCombatGridPreset: "15x15",
+        tacticalCombatGridRows: 15,
+        tacticalCombatGridCols: 15,
+        tacticalCombatTurnStyle: "phase",
+        tacticalCombatTerrainTheme: "auto",
+        tacticalCombatTerrainDensity: 35,
+        tacticalCombatMovement: 6,
+        tacticalCombatEncounterSource: "auto",
+        tacticalCombatAutoNarrate: true,
+        tacticalCombatShowCoordinates: false,
+        tacticalCombatConnectionSource: "default",
+        tacticalCombatConnectionProfileId: "",
+        tacticalCombatCompletionPresetId: "",
+        tacticalCombatOllamaUrl: "http://localhost:11434",
+        tacticalCombatOllamaModel: "",
+        tacticalCombatOpenaiUrl: "",
+        tacticalCombatOpenaiKey: "",
+        tacticalCombatOpenaiModel: "",
+        tacticalCombatMaxTokens: 6000,
+        tacticalCombatAgentPrompt: DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
+        tacticalCombatEncounterPrompt: DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
+        tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT,
+        tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
+        tacticalCombatByChat: {},
+        tacticalCombatReturn: null,
+
         renderedViewActive: true,
 
         panelLayoutMode: 'stack',   // 'stack' = classic vertical stack | 'tabs' = compact tab mode (Character/Combat pinned, rest behind tabs)

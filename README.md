@@ -8,6 +8,15 @@ By default, ships with a plug-and-play "hardcore" setup that can best be describ
 
 I know it says "D&D Framework," but in addition to fantasy, the system works just as well for casual "slice of life" scenarios, modern settings, or anything else imaginable, so you're by no means limited to wizards and goblins. Everything is FULLY customizable and homebrew-friendly, complete with AI wizards, so next to no technical knowledge is required.
 
+> ### ⚔ Tactical Combat fork
+> This fork adds a grid-based tactical combat layer: a 10×10 / 15×15 / 20×20 / dynamic / custom battlefield, colored terrain with a legend, player unit movement, attacks, skills, items, defend/wait/flee, and two turn styles (phased or initiative).
+>
+> Encounters are built from the existing `[CHARACTER]`, `[PARTY]`, and `[COMBAT]` memo blocks. A dedicated **Combat Agent** (Main API, connection profile, Ollama, or OpenAI-compatible) designs encounters and controls every enemy/non-party ally; it receives the full game state as JSON and returns a declarative list of actions that the local rules engine validates and applies. When combat ends, `[COMBAT]` is closed and an authoritative outcome block is queued for the main narrator.
+>
+> Open it from the new **Settings → Tactical Combat** tab or the chess-board button in the tracker header. Full setup, the JSON action contract, and prompt/catalogue customization are documented in [`docs/tactical-combat.md`](docs/tactical-combat.md).
+>
+> Fork: https://github.com/Setofnosets/Combat-Multihog — upstream: https://github.com/MultihogAurelius/SillyTavern-MultihogDnDFramework. `auto_update` is disabled so this fork is never overwritten by upstream updates.
+
 ---
 
 <p align="center">

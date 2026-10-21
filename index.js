@@ -81,6 +81,14 @@ import {
     closeSettingsOverlay,
     getSettingsOverlayRoot,
 } from './src/ui/settings-overlay.js';
+import {
+    installTacticalCombatUi,
+    onTacticalCombatChatChanged,
+} from './src/features/tactical-combat/tactical-combat-ui.js';
+import {
+    bindTacticalCombatSettings,
+    syncTacticalCombatSettingsUi,
+} from './src/features/tactical-combat/tactical-combat-settings.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
 import { restoreEscapedCyoaChoiceMarkup } from './src/ui/panel/cyoa-markup.js';
 import { captureXpGainAnimationState, playXpGainAnimation } from './src/ui/panel/xp-gain-animation.js';
@@ -2733,6 +2741,7 @@ async function onChatChanged(newChatId) {
         markStartupChatProjectionReady(resolvedId);
         if (migratedPortraitScope) void saveSettings(true);
         void ensureLocalMemoRecovery(resolvedId);
+        try { syncTacticalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Tactical Combat settings refresh skipped:', error); }
         updateChatLinkUI();
         return;
     }
@@ -2813,6 +2822,7 @@ async function onChatChanged(newChatId) {
     }
 
     runtimeState.currentChatId = resolvedId;
+    try { onTacticalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Tactical Combat chat switch skipped:', error); }
     const ownsChat = createChatCommitGuard(resolvedId, getActiveChatId);
     runtimeState.hasActiveDungeonMap = false;
     if (s.chatLinkEnabled && oldChatId) {
@@ -6458,6 +6468,10 @@ function organizeConnectionSettingsUI() {
 
         // Inject settings into the overlay BEFORE ID-based jQuery bindings below.
         initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });
+        installTacticalCombatUi();
+        document.addEventListener('rt_open_settings_overlay', (event) => {
+            openSettingsOverlay(event?.detail?.tab || 'tactical');
+        });
 
         organizeConnectionSettingsUI();
         bindConnectionApplyAllControls();
@@ -6533,6 +6547,14 @@ function organizeConnectionSettingsUI() {
             settings,
             presetManager: pm,
         });
+        await bindFeatureConnectionSettings({
+            uiPrefix: 'rpg_tactical_combat',
+            keyPrefix: 'tacticalCombat',
+            settings,
+            presetManager: pm,
+        });
+        bindTacticalCombatSettings({ settings, saveSettings, presetManager: pm });
+        syncTacticalCombatSettingsUi({ settings, saveSettings, presetManager: pm });
         applyMapArchitectOpenerToUi(settings.mapArchitectOpener);
         syncMapArchitectOpenerNestedVisibility(settings.syspromptModules?.[LOCATION_MAPPING_SECTION_TAG] ?? true);
         $('input[name="rpg_map_architect_opener"], input[name="rpg_map_architect_opener_components"]').on('change', function () {

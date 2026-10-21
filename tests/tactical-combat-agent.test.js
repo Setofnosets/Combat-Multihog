@@ -1,0 +1,278 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { sendStateRequest } = vi.hoisted(() => ({ sendStateRequest: vi.fn() }));
+vi.mock('../llm-client.js', () => ({ sendStateRequest }));
+
+import {
+    buildAgentPrompts,
+    buildEncounterRequestPayload,
+    buildEncounterUserPrompt,
+    buildLocalAiActions,
+    normalizeEncounterPayload,
+    parseAgentActionResponse,
+    requestAgentActions,
+    runAgentTurn,
+} from '../src/features/tactical-combat/tactical-combat-agent.js';
+import {
+    getActionCatalog,
+    describeActionCatalog,
+    parseActionCatalog,
+    parseActionsResponse,
+    sanitizeActionsPayload,
+} from '../src/features/tactical-combat/tactical-combat-actions.js';
+import {
+    applyAction,
+    completeAgentTurn,
+    createEncounterState,
+    endTurn,
+    getPendingAgentUnitIds,
+    getUnitById,
+    interpretActions,
+} from '../src/features/tactical-combat/tactical-combat-engine.js';
+
+const SETTINGS = {
+    tacticalCombatAgentPrompt: 'You are a test agent.',
+    tacticalCombatEncounterPrompt: 'You are a test architect.',
+    tacticalCombatConnectionSource: 'default',
+    tacticalCombatMaxTokens: 6000,
+    tacticalCombatActionCatalogJson: '',
+    tacticalCombatEncounterSource: 'auto',
+    tacticalCombatGridPreset: '10x10',
+};
+
+function makeState() {
+    const state = createEncounterState({
+        seed: 11,
+        grid: { rows: 8, cols: 8 },
+        terrainRows: Array.from({ length: 8 }, () => '........'),
+        turnStyle: 'phase',
+        movement: 6,
+        units: [
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 24, hp: 24, ac: 14, attackBonus: 5, damage: '1d8+2' },
+            { id: 'enemy-2', name: 'Goblin', side: 'enemy', maxHp: 9, hp: 9, ac: 11, attackBonus: 3, damage: '1d6' },
+        ],
+    });
+    state.units[0].x = 1;
+    state.units[0].y = 1;
+    state.units[1].x = 2;
+    state.units[1].y = 1;
+    state.phase = 'enemy';
+    state.pendingAgentUnitIds = ['enemy-2'];
+    return state;
+}
+
+describe('tactical action catalogue', () => {
+    it('validates the shipped catalogue and accepts an object wrapper', () => {
+        const direct = parseActionCatalog(JSON.stringify([{ type: 'move', label: 'Move' }, { type: 'attack', enabled: false }]));
+        expect(direct.ok).toBe(true);
+        expect(direct.catalog).toHaveLength(2);
+        expect(direct.catalog[1].enabled).toBe(false);
+        const wrapped = parseActionCatalog({ actions: [{ type: 'wait' }] });
+        expect(wrapped.ok).toBe(true);
+    });
+
+    it('rejects unknown, duplicate, and malformed action types', () => {
+        expect(parseActionCatalog('[{"type":"teleport"}]').ok).toBe(false);
+        expect(parseActionCatalog('[{"type":"wait"},{"type":"wait"}]').ok).toBe(false);
+        expect(parseActionCatalog('not json').ok).toBe(false);
+        expect(parseActionCatalog('[]').ok).toBe(false);
+    });
+
+    it('falls back to the shipped catalogue when settings JSON is invalid', () => {
+        const result = getActionCatalog({ tacticalCombatActionCatalogJson: '{"broken":' });
+        expect(result.usingDefault).toBe(true);
+        expect(result.error).toMatch(/invalid json/i);
+        expect(result.catalog.some(entry => entry.type === 'attack')).toBe(true);
+    });
+
+    it('describes enabled actions for the agent', () => {
+        const { catalog } = getActionCatalog({ tacticalCombatActionCatalogJson: '' });
+        const description = describeActionCatalog(catalog.map(entry => entry.type === 'flee' ? { ...entry, enabled: false } : entry));
+        expect(description).toContain('attack');
+        expect(description).not.toContain('flee');
+    });
+});
+
+describe('tactical action response parsing', () => {
+    it('parses plain objects, bare arrays, and fenced JSON', () => {
+        expect(parseActionsResponse('{"actions":[{"type":"wait","unitId":"enemy-2"}]}').actions).toHaveLength(1);
+        expect(parseActionsResponse('[{"type":"wait","unitId":"enemy-2"}]').actions).toHaveLength(1);
+        expect(parseActionsResponse('```json\n{"actions":[{"type":"wait","unitId":"enemy-2"}]}\n```').actions).toHaveLength(1);
+        expect(parseActionsResponse('Sure! {"actions":[{"type":"wait","unitId":"enemy-2"}]} done').actions).toHaveLength(1);
+    });
+
+    it('reports empty and malformed responses instead of throwing', () => {
+        expect(parseActionsResponse('').error).toMatch(/empty/i);
+        expect(parseActionsResponse('hello').error).toMatch(/JSON/i);
+        expect(parseActionsResponse('{"foo":1}').error).toMatch(/actions/i);
+    });
+
+    it('normalizes fields and enforces the units-to-move allow-list', () => {
+        const sanitized = sanitizeActionsPayload([
+            { type: 'move', unitId: 'enemy-2', to: { x: '3', y: 4 } },
+            { type: 'attack', unitId: 'pc-1', targetId: 'enemy-2' },
+            { type: 'flee', unitId: 'enemy-2' },
+            { type: 'teleport', unitId: 'enemy-2' },
+        ], { unitIds: ['enemy-2'], catalog: getActionCatalog({}).catalog });
+        expect(sanitized.actions).toHaveLength(2);
+        expect(sanitized.actions[0].to).toEqual({ x: 3, y: 4 });
+        expect(sanitized.rejected).toHaveLength(2);
+        expect(sanitized.rejected[0].error).toMatch(/player|unitsToMove/i);
+        expect(sanitized.rejected[1].error).toMatch(/unsupported/i);
+    });
+
+    it('rejects disabled action types', () => {
+        const catalog = getActionCatalog({}).catalog.map(entry => entry.type === 'wait' ? { ...entry, enabled: false } : entry);
+        const sanitized = sanitizeActionsPayload([{ type: 'wait', unitId: 'enemy-2' }], { unitIds: ['enemy-2'], catalog });
+        expect(sanitized.actions).toHaveLength(0);
+        expect(sanitized.rejected[0].error).toMatch(/disabled/i);
+    });
+
+    it('parses a full agent response through the public helper', () => {
+        const parsed = parseAgentActionResponse('{"actions":[{"type":"move","unitId":"enemy-2","to":{"x":2,"y":2}},{"type":"attack","unitId":"enemy-2","targetId":"pc-1"}]}', {
+            unitIds: ['enemy-2'],
+            catalog: getActionCatalog({}).catalog,
+        });
+        expect(parsed.actions).toHaveLength(2);
+        expect(parsed.rejected).toEqual([]);
+    });
+});
+
+describe('tactical encounter architect payloads', () => {
+    it('normalizes a valid encounter and applies safe defaults', () => {
+        const result = normalizeEncounterPayload({
+            title: 'Bridge Ambush',
+            description: 'Raiders hold the bridge.',
+            terrainTheme: 'city',
+            grid: { rows: 9, cols: 11 },
+            terrain: ['...........', '....oo.....'],
+            enemies: [
+                { name: 'Raider', maxHp: '14', ac: '12', attackBonus: '4', damage: '1d6+2', attackRange: '1' },
+                { name: 'Archer', maxHp: 10, ac: 11, attackBonus: 5, damage: '1d8+1', attackRange: 6, skills: [{ name: 'Aimed Shot', kind: 'attack', range: 6, damage: '1d8', maxUses: 2 }] },
+            ],
+        });
+        expect(result.ok).toBe(true);
+        expect(result.encounter.grid).toEqual({ rows: 9, cols: 11 });
+        expect(result.encounter.enemies).toHaveLength(2);
+        expect(result.encounter.enemies[0].maxHp).toBe(14);
+        expect(result.encounter.enemies[0].initiativeBonus).toBe(0);
+        expect(result.encounter.enemies[1].skills[0].maxUses).toBe(2);
+    });
+
+    it('reports missing titles/enemies and invalid terrain widths', () => {
+        expect(normalizeEncounterPayload({ enemies: [] }).errors).toEqual(expect.arrayContaining([expect.stringMatching(/title/i), expect.stringMatching(/enemy/i)]));
+        const badTerrain = normalizeEncounterPayload({
+            title: 'Bad',
+            terrain: ['...', '..'],
+            enemies: [{ name: 'X', maxHp: 5, ac: 10, attackBonus: 1, damage: '1d4' }],
+        });
+        expect(badTerrain.ok).toBe(false);
+        expect(badTerrain.errors.join(' ')).toMatch(/terrain/i);
+    });
+
+    it('builds an architect request with party, enemies, location, and grid rules', () => {
+        const context = {
+            playerUnits: [{ name: 'Aria', classLabel: 'Fighter', hp: 20, maxHp: 24, ac: 15, attackBonus: 5, attackRange: 1, damage: '1d8+2', skills: [] }],
+            allies: [],
+            enemies: [{ name: 'Goblin', hp: 9, maxHp: 9, ac: 11, attackBonus: 3, attackRange: 1, damage: '1d6', skills: [] }],
+            location: 'The Sunken Keep',
+            sceneExcerpt: 'Arrows hiss from the murder holes.',
+            summary: { party: ['Aria (Fighter, 20/24 HP)'] },
+            existingCombat: true,
+        };
+        const payload = buildEncounterRequestPayload(context, SETTINGS);
+        expect(payload.party[0].name).toBe('Aria');
+        expect(payload.existingCombat[0].name).toBe('Goblin');
+        expect(payload.location).toBe('The Sunken Keep');
+        expect(payload.requestedGrid.rows).toBe(10);
+        expect(payload.terrainLegend['#']).toMatch(/wall/i);
+        const prompt = buildEncounterUserPrompt(context, SETTINGS);
+        expect(prompt).toContain('ENCOUNTER REQUEST');
+        expect(prompt).toContain('The Sunken Keep');
+    });
+});
+
+describe('tactical local AI & agent turn execution', () => {
+    beforeEach(() => {
+        sendStateRequest.mockReset();
+    });
+
+    it('builds local actions that move into range and attack', () => {
+        const state = makeState();
+        getUnitById(state, 'enemy-2').x = 6;
+        getUnitById(state, 'enemy-2').y = 6;
+        const actions = buildLocalAiActions(state, ['enemy-2']);
+        expect(actions.length).toBeGreaterThan(0);
+        expect(actions[0].type).toBe('move');
+        expect(['attack', 'defend', 'wait']).toContain(actions[actions.length - 1].type);
+        const applied = interpretActions(state, actions, { unitIds: ['enemy-2'], actorSide: 'agent', source: 'agent', rng: () => 0.5 });
+        expect(applied.applied.length).toBeGreaterThan(0);
+        expect(applied.rejected).toEqual([]);
+    });
+
+    it('uses the agent action list when the connection returns valid JSON', async () => {
+        const state = makeState();
+        sendStateRequest.mockResolvedValue('{"actions":[{"type":"wait","unitId":"enemy-2"}]}');
+        const result = await runAgentTurn(state, ['enemy-2'], SETTINGS);
+        expect(result.source).toBe('agent');
+        expect(result.applied).toHaveLength(1);
+        expect(getUnitById(state, 'enemy-2').doneForRound).toBe(true);
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        const call = sendStateRequest.mock.calls[0];
+        expect(call[1]).toBe(SETTINGS.tacticalCombatAgentPrompt);
+        expect(call[2]).toContain('GAME STATE');
+        expect(call[2]).toContain('"unitId":"enemy-2"');
+    });
+
+    it('falls back to local tactics when the connection fails', async () => {
+        const state = makeState();
+        sendStateRequest.mockRejectedValue(new Error('offline'));
+        const result = await runAgentTurn(state, ['enemy-2'], SETTINGS);
+        expect(result.source).toBe('local');
+        expect(result.error).toMatch(/offline/i);
+        expect(result.applied.length).toBeGreaterThan(0);
+        expect(state.status).toBe('active');
+    });
+
+    it('retries once with a correction prompt when the first response is malformed', async () => {
+        const state = makeState();
+        sendStateRequest
+            .mockResolvedValueOnce('not json')
+            .mockResolvedValueOnce('{"actions":[{"type":"wait","unitId":"enemy-2"}]}');
+        const result = await requestAgentActions(state, ['enemy-2'], SETTINGS);
+        expect(result.ok).toBe(true);
+        expect(result.attempts).toBe(2);
+        expect(sendStateRequest).toHaveBeenCalledTimes(2);
+        expect(sendStateRequest.mock.calls[1][2]).toContain('CORRECTION');
+    });
+
+    it('completes an agent phase and starts the next player round', async () => {
+        const state = makeState();
+        sendStateRequest.mockResolvedValue('{"actions":[{"type":"wait","unitId":"enemy-2"}]}');
+        const result = await runAgentTurn(state, ['enemy-2'], SETTINGS);
+        expect(result.applied).toHaveLength(1);
+        const completion = completeAgentTurn(state, () => 0.5);
+        expect(completion.phase).toBe('player');
+        expect(state.round).toBe(2);
+        expect(getUnitById(state, 'pc-1').movementUsed).toBe(0);
+    });
+
+    it('never lets the agent act for player units', async () => {
+        const state = makeState();
+        const actions = buildLocalAiActions(state, ['pc-1']);
+        const applied = interpretActions(state, actions, { unitIds: ['pc-1'], actorSide: 'agent', source: 'agent' });
+        expect(applied.applied).toHaveLength(0);
+        expect(applied.rejected.length).toBeGreaterThan(0);
+        expect(applied.rejected[0].error).toMatch(/player-controlled/i);
+    });
+
+    it('bundles the game state and action contract into the prompt', () => {
+        const state = makeState();
+        const { catalog } = getActionCatalog(SETTINGS);
+        const prompts = buildAgentPrompts(state, ['enemy-2'], SETTINGS, catalog);
+        expect(prompts.payload.unitsToMove[0].unitId).toBe('enemy-2');
+        expect(prompts.user).toContain('GAME STATE');
+        expect(prompts.user).toContain('enemy-2');
+        expect(prompts.system).toBe(SETTINGS.tacticalCombatAgentPrompt);
+    });
+});

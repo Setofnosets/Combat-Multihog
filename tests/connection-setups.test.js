@@ -22,6 +22,7 @@ describe('connection setup apply-to-all', () => {
             'map_evolution',
             'world_progression',
             'portraits',
+            'tactical_combat',
         ]);
         expect(keys).not.toContain('combat_override');
         expect(findAgentConnectionSetup('state_tracker')?.label).toBe('State Tracker');

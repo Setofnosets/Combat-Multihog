@@ -2315,6 +2315,232 @@
                 </div>
             </div>
 
+            <!-- SUB-DRAWER: TACTICAL COMBAT -->
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header">
+                    <i class="fa-solid fa-chess-board" style="margin-right: 8px; opacity: 0.7;"></i>
+                    <b>Tactical Combat</b>
+                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+                </div>
+                <div class="inline-drawer-content">
+                    <div class="rt-tc-settings-intro">
+                        Grid-based combat built from the current <code>[CHARACTER]</code>, <code>[PARTY]</code>, and <code>[COMBAT]</code> state. Move your units, use skills and items, then hand the enemy phase to the combat agent. Combat ends with a result queued for the main narrator.
+                    </div>
+
+                    <label class="checkbox_label" for="rpg_tactical_combat_enabled">
+                        <input type="checkbox" id="rpg_tactical_combat_enabled" />
+                        <span>Enable Tactical Combat</span>
+                    </label>
+
+                    <div class="rt-tc-settings-actions">
+                        <button type="button" id="rpg_tactical_combat_open" class="menu_button interactable"><i class="fa-solid fa-table-cells-large"></i> Open board</button>
+                        <button type="button" id="rpg_tactical_combat_start" class="menu_button interactable"><i class="fa-solid fa-crosshairs"></i> Start encounter</button>
+                        <button type="button" id="rpg_tactical_combat_stop" class="menu_button interactable"><i class="fa-solid fa-stop"></i> Stop agent</button>
+                        <button type="button" id="rpg_tactical_combat_reset" class="menu_button interactable"><i class="fa-solid fa-trash"></i> Clear board</button>
+                    </div>
+                    <div id="rpg_tactical_combat_status" class="rt-tc-setting-status">Tactical Combat is disabled. Enable it to start an encounter.</div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-table-cells" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Battlefield</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_grid_preset">Grid dimensions</label>
+                                <select id="rpg_tactical_combat_grid_preset" class="text_pole">
+                                    <option value="10x10">10 × 10 — Skirmish</option>
+                                    <option value="15x15">15 × 15 — Standard</option>
+                                    <option value="20x20">20 × 20 — Battlefield</option>
+                                    <option value="dynamic">Dynamic — scales to combatants</option>
+                                    <option value="custom">Custom size…</option>
+                                </select>
+                                <div id="rpg_tactical_combat_grid_note" class="rt-tc-settings-note"></div>
+                            </div>
+                            <div id="rpg_tactical_combat_grid_custom" class="rt-tc-field-row" style="display: none;">
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_grid_rows">Rows</label>
+                                    <input type="number" id="rpg_tactical_combat_grid_rows" class="text_pole" min="5" max="40" step="1" value="15" />
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_grid_cols">Columns</label>
+                                    <input type="number" id="rpg_tactical_combat_grid_cols" class="text_pole" min="5" max="40" step="1" value="15" />
+                                </div>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_turn_style">Turn style</label>
+                                <select id="rpg_tactical_combat_turn_style" class="text_pole">
+                                    <option value="phase">Phased — move every allied unit, then the enemy phase</option>
+                                    <option value="initiative">Initiative — one unit acts at a time in initiative order</option>
+                                </select>
+                                <div class="rt-tc-settings-note">Phased plays like a tactics game: all player units act, then all agent units act. Initiative rolls 1d20 + modifier and interleaves every combatant.</div>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_terrain_theme">Terrain theme</label>
+                                <select id="rpg_tactical_combat_terrain_theme" class="text_pole">
+                                    <option value="auto">Auto — match the current location</option>
+                                    <option value="dungeon">Dungeon</option>
+                                    <option value="forest">Forest / wilds</option>
+                                    <option value="cave">Cave / crypt</option>
+                                    <option value="city">City / streets</option>
+                                    <option value="interior">Interior / tavern</option>
+                                    <option value="plain">Open plain</option>
+                                </select>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_terrain_density">Terrain density <span id="rpg_tactical_combat_terrain_density_value">35%</span></label>
+                                <input type="range" id="rpg_tactical_combat_terrain_density" min="0" max="100" step="5" value="35" />
+                                <div class="rt-tc-settings-note">Higher density adds more cover, rubble, hazards, and walls. Deployment lanes always stay clear.</div>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_movement">Movement per turn (cells)</label>
+                                <input type="number" id="rpg_tactical_combat_movement" class="text_pole" min="1" max="24" step="1" value="6" />
+                                <div class="rt-tc-settings-note">Default speed for combatants without an explicit speed. Diagonal movement costs one cell; difficult terrain costs two.</div>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_encounter_source">Encounter source</label>
+                                <select id="rpg_tactical_combat_encounter_source" class="text_pole">
+                                    <option value="auto">Auto — reuse active [COMBAT], otherwise ask the agent</option>
+                                    <option value="existing">Existing [COMBAT] only</option>
+                                    <option value="agent">Always ask the combat agent to design a new encounter</option>
+                                </select>
+                            </div>
+                            <label class="checkbox_label" for="rpg_tactical_combat_show_coordinates">
+                                <input type="checkbox" id="rpg_tactical_combat_show_coordinates" />
+                                <span>Show grid coordinates</span>
+                            </label>
+                            <label class="checkbox_label" for="rpg_tactical_combat_auto_narrate">
+                                <input type="checkbox" id="rpg_tactical_combat_auto_narrate" checked />
+                                <span>Automatically return to narration when combat ends</span>
+                            </label>
+                            <div class="rt-tc-settings-note">The final outcome is always queued for the next narrator generation. Automatic return simply triggers that generation for you.</div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-plug-circle-bolt" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Combat agent connection</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-settings-note">The agent designs encounters and controls every enemy and non-party ally. It never moves player units. Use Main API, a saved connection profile, Ollama, or an OpenAI-compatible endpoint. Connection settings are global.</div>
+                            <div class="flex-container flexFlowColumn gap-1">
+                                <label for="rpg_tactical_combat_connection_source">Connection source</label>
+                                <select id="rpg_tactical_combat_connection_source" class="text_pole">
+                                    <option value="default">Main API</option>
+                                    <option value="profile">Profile</option>
+                                    <option value="ollama">Ollama</option>
+                                    <option value="openai">OpenAI-compatible</option>
+                                </select>
+                                <div id="rpg_tactical_combat_profile_group" style="display: none;">
+                                    <label for="rpg_tactical_combat_connection_profile">Profile</label>
+                                    <select id="rpg_tactical_combat_connection_profile" class="text_pole"></select>
+                                </div>
+                                <div id="rpg_tactical_combat_ollama_group" style="display: none;">
+                                    <label for="rpg_tactical_combat_ollama_url">Ollama URL</label>
+                                    <input id="rpg_tactical_combat_ollama_url" type="text" class="text_pole" placeholder="http://localhost:11434" />
+                                    <label for="rpg_tactical_combat_ollama_model">Ollama model</label>
+                                    <div class="flex-container gap-1">
+                                        <select id="rpg_tactical_combat_ollama_model" class="text_pole" style="flex: 1;"></select>
+                                        <button type="button" id="rpg_tactical_combat_ollama_refresh" class="menu_button interactable" title="Refresh Ollama models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                    </div>
+                                </div>
+                                <div id="rpg_tactical_combat_openai_group" style="display: none;">
+                                    <label for="rpg_tactical_combat_openai_url">Endpoint URL</label>
+                                    <input id="rpg_tactical_combat_openai_url" type="text" class="text_pole" placeholder="URL" />
+                                    <label for="rpg_tactical_combat_openai_key">API key</label>
+                                    <input id="rpg_tactical_combat_openai_key" type="password" class="text_pole" placeholder="Key" />
+                                    <label for="rpg_tactical_combat_openai_model">Model</label>
+                                    <div class="flex-container gap-1">
+                                        <select id="rpg_tactical_combat_openai_model" class="text_pole" style="flex: 1;"></select>
+                                        <button type="button" id="rpg_tactical_combat_openai_refresh" class="menu_button interactable" title="Refresh OpenAI-compatible models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                    </div>
+                                    <input id="rpg_tactical_combat_openai_model_manual" type="text" class="text_pole" placeholder="Manual model name" />
+                                </div>
+                                <label for="rpg_tactical_combat_completion_preset">Completion preset</label>
+                                <select id="rpg_tactical_combat_completion_preset" class="text_pole"></select>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_max_tokens">Agent max output tokens</label>
+                                    <input type="number" id="rpg_tactical_combat_max_tokens" class="text_pole" min="1000" max="32000" step="500" value="6000" />
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-scroll" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Prompt Templates</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-settings-note">Prompts are sent verbatim (with the JSON state appended). Reset restores the shipped template for this build.</div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_agent_prompt">Tactical agent system prompt</label>
+                                <textarea id="rpg_tactical_combat_agent_prompt" class="text_pole rt-tc-prompt-input" rows="12" spellcheck="false"></textarea>
+                                <button type="button" id="rpg_tactical_combat_agent_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset agent prompt</button>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_encounter_prompt">Encounter architect system prompt</label>
+                                <textarea id="rpg_tactical_combat_encounter_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                <button type="button" id="rpg_tactical_combat_encounter_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset encounter prompt</button>
+                            </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_outcome_prompt">Outcome-to-narration template</label>
+                                <textarea id="rpg_tactical_combat_outcome_prompt" class="text_pole rt-tc-prompt-input" rows="6" spellcheck="false"></textarea>
+                                <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{details}}</code>.</div>
+                                <button type="button" id="rpg_tactical_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome template</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-list-check" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Action Catalogue & Game State</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-settings-note">This catalogue is sent to the agent as the legal action vocabulary and drives the board buttons. Edit labels/descriptions, disable an action with <code>"enabled": false</code>, or reorder entries. Unknown action types are rejected by the interpreter.</div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_action_catalog">Action catalogue (JSON)</label>
+                                <textarea id="rpg_tactical_combat_action_catalog" class="text_pole rt-tc-catalog-input" rows="14" spellcheck="false"></textarea>
+                                <div id="rpg_tactical_combat_catalog_status" class="rt-tc-setting-status"></div>
+                                <div class="rt-tc-settings-actions">
+                                    <button type="button" id="rpg_tactical_combat_action_catalog_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset catalogue</button>
+                                </div>
+                            </div>
+                            <div class="rt-tc-settings-note">The exported game state contains the grid, terrain rows, every unit's position, HP, AC, attack, stats, resources, skills, items, reachable cells, and legal targets. Changes to this catalogue apply to the next encounter.</div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-key" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Terrain Key</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-key-grid">
+                                <div class="rt-tc-key"><i style="background:#3c4652;color:#dbe4ee">·</i><div><b>Open floor</b><span>Clear ground. Normal movement.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#3d5a3d;color:#dcefd8">"</i><div><b>Grass / scrub</b><span>Open ground. Normal movement.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#6b5a45;color:#f2e5d2">▲</i><div><b>Rubble</b><span>Difficult terrain. Costs 2 movement per cell.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#2b567a;color:#d7ecff">≈</i><div><b>Water</b><span>Impassable. Blocks movement.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#20242c;color:#b9c3cf">■</i><div><b>Wall / rock</b><span>Impassable. Blocks line of sight.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#7a6a3a;color:#fff2c7">◈</i><div><b>Cover</b><span>+2 AC while standing here.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#7a522f;color:#ffe6c9">↑</i><div><b>High ground</b><span>Costs 2 movement. +1 to attack rolls from here.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#8f3328;color:#ffd7d0">✶</i><div><b>Hazard</b><span>1d4 damage at the start of a round while standing here.</span></div></div>
+                                <div class="rt-tc-key"><i style="background:#5c467f;color:#e8dcff">◆</i><div><b>Objective</b><span>Tactical marker. Narrative flavour.</span></div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="rt-tc-settings-note">Combat results are written to <code>[COMBAT]</code> as <code>END_COMBAT</code> and queued as an authoritative aftermath block for the narrator. The board is saved per chat under the extension settings.</div>
+                </div>
+            </div>
+
             
 
         </div>

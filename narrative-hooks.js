@@ -29,6 +29,7 @@ import { saveSettings } from './src/app/runtime-bridge.js';
 import { runtimeState } from './src/app/runtime-state.js';
 import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.js';
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
+import { buildNarrationBlock, clearNarrationAfterGeneration } from './src/features/tactical-combat/tactical-combat-outcome.js';
 import { isCyoaEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
 import {
@@ -1417,6 +1418,11 @@ export function installInterceptor() {
         // CYOA / pacing follow the State Tracker master toggle (same as Persistent Maps).
         if (!skipInjection && (settings.enabled || cyoaActive || pacingInject)) {
             if (settings.enabled) {
+                // [TACTICAL COMBAT RESULT] — authoritative aftermath from the board.
+                // It is one-shot: onGenerationEnded clears it after this generation.
+                const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
+                if (tacticalBlock) injections += tacticalBlock;
+
                 // [PLAYER_CHARACTER] — always injected at the top of the core block
                 const curChatId = SillyTavern.getContext().chatId || globalThis._rpgCurrentChatId?.();
                 if (curChatId && settings.chatStates?.[curChatId]?.playerCharacter) {
@@ -2998,6 +3004,12 @@ export async function onGenerationEnded() {
         const currentType = _lastGenerationType;
         const ctx = SillyTavern.getContext();
         const { chat } = ctx;
+
+        // Tactical Combat outcome blocks are one-shot. Consume them after a real
+        // narrator generation, but never after quiet/impersonate passes.
+        if (currentType !== 'quiet' && currentType !== 'impersonate') {
+            clearNarrationAfterGeneration(settings, getActiveChatId(), { save: true });
+        }
 
         // Fence handshake beats ST/LA, including while a previous tracker pass is still running
         // and even when the latest row is a tool-call system message.

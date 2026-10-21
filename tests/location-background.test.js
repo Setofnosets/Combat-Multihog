@@ -68,6 +68,8 @@ describe('location background syncing', () => {
 
     beforeEach(() => {
         vi.resetAllMocks();
+        try { sessionStorage.clear(); } catch (_) { /* Node without Web Storage */ }
+        try { localStorage.clear(); } catch (_) { /* Node without Web Storage */ }
         host.settings = { locationImages: true, portraitAutoApplyLocationBackground: true };
         host.images = { A: 'A.png', B: 'B.png' };
         host.trackedChatId = undefined;

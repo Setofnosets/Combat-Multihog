@@ -30,6 +30,7 @@ const TAB_DEFS = [
     { id: 'maparchitect', icon: 'fa-map', label: 'Persistent Maps', match: /Persistent Maps/i },
     { id: 'worldprog', icon: 'fa-globe', label: 'World Progression', match: /World Progression/i },
     { id: 'companion', icon: 'fa-comments', label: 'Adventure Companion', match: /Adventure Companion/i },
+    { id: 'tactical', icon: 'fa-chess-board', label: 'Tactical Combat', match: /Tactical Combat/i },
 ];
 
 let _lastTab = 'general';

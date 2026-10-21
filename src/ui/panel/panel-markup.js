@@ -17,6 +17,7 @@ export function buildPanelMarkup({ settings, agentPanelCollapsedClass }) {
                 <div class="rpg-tracker-header-center" id="rpg-tracker-pause-banner"></div>
                 <div class="rpg-tracker-header-right">
                     <button type="button" class="rpg-tracker-icon-btn" id="rpg-tracker-settings-btn" title="Open Settings"><i class="fa-solid fa-wrench" aria-hidden="true"></i></button>
+                    <button type="button" class="rpg-tracker-icon-btn rt-tactical-combat-btn" id="rt-tactical-combat-btn" title="Tactical Combat" aria-label="Open Tactical Combat"><i class="fa-solid fa-chess-board" aria-hidden="true"></i></button>
                     <button class="rpg-tracker-icon-btn rt-tutorial-help-btn" id="rpg-tracker-help-btn" title="CHAT">CHAT</button>
                     <button class="rpg-tracker-icon-btn" id="rpg-tracker-view-btn" title="Toggle rendered view">⊞</button>
                     <button class="rpg-tracker-icon-btn" id="rpg-tracker-enable-btn" title="${settings.enabled ? 'Disable Multihog Framework' : 'Enable Multihog Framework'}" style="${settings.enabled ? '' : 'opacity:0.4;'}" >⏻</button>
@@ -34,6 +35,7 @@ export function buildPanelMarkup({ settings, agentPanelCollapsedClass }) {
                     </div>
                     <div class="rpg-tracker-header-center" id="rt-agent-pause-banner" style="color:#ffa500; font-size:0.7em; font-weight:bold; letter-spacing:0.04em;">${settings.routerPaused ? 'AGENT PAUSED' : ''}</div>
                     <div class="rpg-tracker-header-right">
+                        <button type="button" class="rpg-tracker-icon-btn rt-tactical-combat-btn" data-tc-open-board title="Tactical Combat" aria-label="Open Tactical Combat"><i class="fa-solid fa-chess-board" aria-hidden="true"></i></button>
                         <div id="rt-research-menu-wrap" style="position:relative; display:inline-flex;">
                             <button class="rpg-tracker-icon-btn" id="rt-agent-router-manual-run" title="Run Research Now — Lorebook Agent, Map Updater, or Map Evolution" style="color: var(--rt-accent);"><i class="fa-solid fa-play"></i></button>
                             <div id="rt-research-dropdown" class="rt-update-menu rt-research-dropdown" style="display:none;">

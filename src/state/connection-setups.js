@@ -319,6 +319,34 @@ export const AGENT_CONNECTION_SETUPS = [
             openaiGroup: '#rpg_portrait_openai_group',
         },
     },
+    {
+        key: 'tactical_combat',
+        label: 'Tactical Combat Agent',
+        settingsKeys: {
+            connectionSource: 'tacticalCombatConnectionSource',
+            connectionProfileId: 'tacticalCombatConnectionProfileId',
+            completionPresetId: 'tacticalCombatCompletionPresetId',
+            ollamaUrl: 'tacticalCombatOllamaUrl',
+            ollamaModel: 'tacticalCombatOllamaModel',
+            openaiUrl: 'tacticalCombatOpenaiUrl',
+            openaiKey: 'tacticalCombatOpenaiKey',
+            openaiModel: 'tacticalCombatOpenaiModel',
+        },
+        ui: {
+            source: '#rpg_tactical_combat_connection_source',
+            profile: '#rpg_tactical_combat_connection_profile',
+            preset: '#rpg_tactical_combat_completion_preset',
+            ollamaUrl: '#rpg_tactical_combat_ollama_url',
+            ollamaModel: '#rpg_tactical_combat_ollama_model',
+            openaiUrl: '#rpg_tactical_combat_openai_url',
+            openaiKey: '#rpg_tactical_combat_openai_key',
+            openaiModel: '#rpg_tactical_combat_openai_model',
+            openaiManual: '#rpg_tactical_combat_openai_model_manual',
+            profileGroup: '#rpg_tactical_combat_profile_group',
+            ollamaGroup: '#rpg_tactical_combat_ollama_group',
+            openaiGroup: '#rpg_tactical_combat_openai_group',
+        },
+    },
 ];
 
 /** @param {string} key */
