@@ -444,15 +444,17 @@ function normalizeSkill(raw, index, side) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || raw.label || `Skill ${index + 1}`).trim().slice(0, 80);
     const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
-    const kind = ['attack', 'heal', 'buff'].includes(kindRaw) ? kindRaw : 'attack';
+    const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
-    const range = kind === 'buff' ? clampInt(raw.range, 0, 24) : clampInt(raw.range, 1, 24) || 1;
+    const range = kind === 'buff' ? clampInt(raw.range, 0, 24)
+        : kind === 'special' ? (raw.range == null ? 6 : clampInt(raw.range, 1, 24))
+            : clampInt(raw.range, 1, 24) || 1;
     return {
         id: String(raw.id || `skill-${slug(name, `skill-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || raw.effect || '').slice(0, 500),
         kind,
-        target: String(raw.target || (kind === 'attack' ? 'enemy' : 'ally')).toLowerCase(),
+        target: String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase(),
         range,
         damage: String(raw.damage || (kind === 'attack' ? '1d8' : '')).trim().slice(0, 40),
         heal: String(raw.heal || (kind === 'heal' ? '1d8+2' : '')).trim().slice(0, 40),
@@ -474,13 +476,13 @@ function normalizeItem(raw, index) {
         id: String(raw.id || `item-${slug(name, `item-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || '').slice(0, 300),
-        kind: ['heal', 'buff'].includes(String(raw.kind || '').toLowerCase())
+        kind: ['heal', 'buff', 'special'].includes(String(raw.kind || '').toLowerCase())
             ? String(raw.kind).toLowerCase()
             : 'heal',
-        amount: String(raw.amount || raw.heal || '2d4+2').slice(0, 40),
+        amount: String(raw.amount || raw.heal || ((raw.kind || 'heal') === 'heal' ? '2d4+2' : '')).slice(0, 40),
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
-        range: clampInt(raw.range, 0, 12) || 0,
+        range: raw.range == null ? 0 : clampInt(raw.range, 0, 12),
     };
 }
 
@@ -551,6 +553,18 @@ export function normalizeUnitSeed(seed, meta) {
         statuses: [],
         skills,
         items,
+        inventory: (Array.isArray(seed?.inventory) ? seed.inventory : [])
+            .filter(entry => entry && typeof entry === 'object')
+            .slice(0, 30)
+            .map(entry => ({
+                name: String(entry.name || '').slice(0, 80),
+                description: String(entry.description || '').slice(0, 300),
+                section: String(entry.section || '').slice(0, 20),
+                equipped: !!entry.equipped,
+                rarity: String(entry.rarity || '').slice(0, 20),
+                quantity: clampIntOr(entry.quantity, 1, 1, 99),
+            }))
+            .filter(entry => entry.name),
         stats,
         level: clampInt(seed?.level, 1, 30) || 1,
         notes: String(seed?.notes || '').slice(0, 500),
@@ -984,11 +998,12 @@ export function buildOutcomeSummary(state) {
             : status === 'retreat' ? 'Retreat'
                 : 'Draw';
     // A unit that fled is still a survivor; only 0 HP counts as fallen.
-    const playerSurvivors = state.units.filter(unit => unit.side === 'player' && !unit.defeated);
-    const playerFallen = state.units.filter(unit => unit.side === 'player' && unit.defeated);
-    const playerFled = state.units.filter(unit => unit.side === 'player' && unit.fled && !unit.defeated);
-    const enemyDefeated = state.units.filter(unit => unit.side === 'enemy' && (unit.defeated || unit.fled));
-    const allyFallen = state.units.filter(unit => unit.side === 'ally' && unit.defeated);
+    const realUnits = state.units.filter(unit => !unit.summoned);
+    const playerSurvivors = realUnits.filter(unit => unit.side === 'player' && !unit.defeated);
+    const playerFallen = realUnits.filter(unit => unit.side === 'player' && unit.defeated);
+    const playerFled = realUnits.filter(unit => unit.side === 'player' && unit.fled && !unit.defeated);
+    const enemyDefeated = realUnits.filter(unit => unit.side === 'enemy' && (unit.defeated || unit.fled));
+    const allyFallen = realUnits.filter(unit => unit.side === 'ally' && unit.defeated);
     const details = [];
 
     if (status === 'victory') {
@@ -1031,9 +1046,9 @@ export function buildOutcomeSummary(state) {
  */
 export function checkEncounterEnd(state) {
     if (!state || state.status !== 'active') return !!state && state.status !== 'active';
-    const players = state.units.filter(unit => unit.side === 'player');
+    const players = state.units.filter(unit => unit.side === 'player' && !unit.summoned);
     const livingPlayers = players.filter(unit => !unit.defeated && !unit.fled);
-    const livingEnemies = state.units.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled);
+    const livingEnemies = state.units.filter(unit => unit.side === 'enemy' && !unit.summoned && !unit.defeated && !unit.fled);
     const livingAllUnits = state.units.filter(unit => !unit.defeated && !unit.fled);
 
     let status = null;
@@ -1074,6 +1089,170 @@ export function retreatEncounter(state) {
     state.outcome = buildOutcomeSummary(state);
     addLog(state, 'end', state.outcome.summary, null);
     return true;
+}
+
+/**
+ * Apply a resolved special-ability effect list. This is the only mutation path
+ * for `kind: 'special'` skills/items: the combat agent converts a freeform
+ * ability description into these primitives, then the engine validates them.
+ *
+ * Supported effects:
+ *   {type:'damage', targetId, amount}
+ *   {type:'heal', targetId, amount}
+ *   {type:'status', targetId, label, rounds, acBonus, attackBonus, damage}
+ *   {type:'terrain', cells:[{x,y,terrain}], terrain?}
+ *   {type:'summon', name, maxHp, ac, attackBonus, damage, attackRange, skills?}
+ *   {type:'log', text}
+ *
+ * @param {object} state
+ * @param {object[]} effects
+ * @param {{ casterId?: string, skillId?: string, itemId?: string, log?: string, rng?: () => number }} [options]
+ * @returns {{ ok: boolean, error?: string, applied: object[], rejected: string[], ended: boolean }}
+ */
+export function applySpecialEffects(state, effects, options = {}) {
+    if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is over.', applied: [], rejected: [], ended: true };
+    const caster = getUnitById(state, options.casterId);
+    if (!caster || caster.defeated || caster.fled) {
+        return { ok: false, error: 'The caster is not available.', applied: [], rejected: [], ended: false };
+    }
+    const skill = options.skillId ? findSkill(caster, options.skillId) : null;
+    const item = options.itemId ? findItem(caster, options.itemId) : null;
+    if (options.skillId && !skill) return { ok: false, error: 'Unknown ability.', applied: [], rejected: [], ended: false };
+    if (options.itemId && !item) return { ok: false, error: 'Unknown item.', applied: [], rejected: [], ended: false };
+    if (skill && skill.uses <= 0) return { ok: false, error: `${skill.name} has no uses left.`, applied: [], rejected: [], ended: false };
+    if (item && item.uses <= 0) return { ok: false, error: `${item.name} has no uses left.`, applied: [], rejected: [], ended: false };
+    if (skill && (skill.bonusAction ? caster.bonusUsed : caster.actionUsed)) {
+        return { ok: false, error: 'That action is already spent.', applied: [], rejected: [], ended: false };
+    }
+    if (item && caster.actionUsed) return { ok: false, error: 'The main action is already spent.', applied: [], rejected: [], ended: false };
+
+    const rng = options.rng || createStateRng(state);
+    const label = options.label || skill?.name || item?.name || options.log || 'Special ability';
+    const narrative = options.narrative || '';
+    const applied = [];
+    const rejected = [];
+    const list = Array.isArray(effects) ? effects.slice(0, 8) : [];
+
+    for (const effect of list) {
+        if (!effect || typeof effect !== 'object') {
+            rejected.push('Effect was not an object.');
+            continue;
+        }
+        const type = String(effect.type || '').toLowerCase();
+        if (type === 'damage' || type === 'heal' || type === 'status') {
+            const target = getUnitById(state, effect.targetId);
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${effect.targetId}".`);
+                continue;
+            }
+            if (type === 'damage') {
+                const damage = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
+                applyDamageToUnit(state, target, damage, label);
+                applied.push({ type, targetId: target.id, amount: damage });
+            } else if (type === 'heal') {
+                const healed = healUnit(state, target, rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total, label);
+                applied.push({ type, targetId: target.id, amount: healed });
+            } else {
+                addStatus(target, {
+                    id: String(effect.id || effect.label || label).slice(0, 40),
+                    label: String(effect.label || effect.name || label).slice(0, 60),
+                    rounds: effect.rounds ?? 2,
+                    acBonus: effect.acBonus,
+                    attackBonus: effect.attackBonus,
+                    damage: effect.damage || '',
+                    description: effect.description || '',
+                });
+                applied.push({ type, targetId: target.id, label: effect.label || label });
+            }
+            continue;
+        }
+        if (type === 'terrain') {
+            const cells = Array.isArray(effect.cells) ? effect.cells
+                : Array.isArray(effect.tiles) ? effect.tiles
+                    : effect.x != null && effect.y != null ? [effect] : [];
+            let changed = 0;
+            for (const cell of cells.slice(0, 24)) {
+                const x = Number(cell?.x);
+                const y = Number(cell?.y);
+                const terrainId = String(cell?.terrain || effect.terrain || '').toLowerCase();
+                if (!inBounds(state, x, y) || !TC_TERRAIN[terrainId]) continue;
+                state.terrain[y][x] = terrainId;
+                changed += 1;
+            }
+            if (changed) {
+                applied.push({ type, cells: changed, terrain: effect.terrain || '' });
+                addLog(state, 'terrain', `${caster.name} reshapes the battlefield (${changed} cell${changed === 1 ? '' : 's'}).`, caster.id);
+            } else {
+                rejected.push('Terrain effect had no valid cells.');
+            }
+            continue;
+        }
+        if (type === 'summon') {
+            const seed = effect.unit && typeof effect.unit === 'object' ? effect.unit : effect;
+            const summon = normalizeUnitSeed({
+                ...seed,
+                name: seed.name || 'Summon',
+                side: caster.side,
+                color: seed.color || caster.color,
+            }, {
+                index: state.units.length,
+                side: caster.side,
+                defaultSpeed: caster.speed,
+            });
+            summon.summoned = true;
+            summon.summonedBy = caster.id;
+            summon.doneForRound = true;
+            summon.actionUsed = true;
+            summon.bonusUsed = true;
+            const usedIds = new Set(state.units.map(unit => unit.id));
+            let summonId = summon.id;
+            let suffix = 2;
+            while (usedIds.has(summonId)) {
+                summonId = `${summon.id}-${suffix}`;
+                suffix += 1;
+            }
+            summon.id = summonId;
+            const occupied = new Set(state.units.filter(unit => !unit.defeated && !unit.fled).map(unit => cellKey(unit.x, unit.y)));
+            const spot = findFreeCell(state, caster.x, caster.y, occupied);
+            if (!spot) {
+                rejected.push(`No free cell for ${summon.name}.`);
+                continue;
+            }
+            summon.x = spot.x;
+            summon.y = spot.y;
+            state.units.push(summon);
+            if (state.turnStyle === 'initiative' && Array.isArray(state.initiativeOrder) && !state.initiativeOrder.includes(summon.id)) {
+                state.initiativeOrder.push(summon.id);
+            }
+            addLog(state, 'summon', `${caster.name} summons ${summon.name} (${summon.hp}/${summon.maxHp} HP).`, caster.id);
+            applied.push({ type, unitId: summon.id, name: summon.name });
+            continue;
+        }
+        if (type === 'log' || type === 'note') {
+            if (effect.text) addLog(state, 'special', String(effect.text).slice(0, 400), caster.id);
+            applied.push({ type: 'log' });
+            continue;
+        }
+        rejected.push(`Unsupported effect type "${type}".`);
+    }
+
+    if (!applied.length) {
+        return { ok: false, error: rejected.join(' ') || 'No usable effects were returned.', applied, rejected, ended: false };
+    }
+
+    if (skill) {
+        skill.uses = Math.max(0, Number(skill.uses) - 1);
+        if (skill.bonusAction) caster.bonusUsed = true;
+        else caster.actionUsed = true;
+    }
+    if (item) {
+        item.uses = Math.max(0, Number(item.uses) - 1);
+        caster.actionUsed = true;
+    }
+    if (narrative) addLog(state, 'special', String(narrative).slice(0, 600), caster.id);
+    addLog(state, 'special', `${caster.name} uses ${label}.`, caster.id);
+    checkEncounterEnd(state);
+    return { ok: true, applied, rejected, ended: state.status !== 'active' };
 }
 
 // ── Action interpretation ────────────────────────────────────────────────────
@@ -1220,6 +1399,9 @@ export function applyAction(state, action, options = {}) {
         case 'skill': {
             const skill = findSkill(unit, action.skillId);
             if (!skill) return rejectAction(state, action, `Unknown skill "${action.skillId}".`, source);
+            if (skill.kind === 'special') {
+                return rejectAction(state, action, `${skill.name} requires special resolution by the combat agent.`, source);
+            }
             if (skill.uses <= 0) return rejectAction(state, action, `${skill.name} has no uses left.`, source);
             const resourceKey = skill.bonusAction ? 'bonusUsed' : 'actionUsed';
             if (unit[resourceKey]) {
@@ -1276,6 +1458,9 @@ export function applyAction(state, action, options = {}) {
             if (unit.actionUsed) return rejectAction(state, action, `${unit.name} has already used their action.`, source);
             const item = findItem(unit, action.itemId);
             if (!item) return rejectAction(state, action, `Unknown item "${action.itemId}".`, source);
+            if (item.kind === 'special') {
+                return rejectAction(state, action, `${item.name} requires special resolution by the combat agent.`, source);
+            }
             if (item.uses <= 0) return rejectAction(state, action, `${item.name} has no uses left.`, source);
             const targetResult = action.targetId ? resolveTarget(state, unit, action, options) : { target: unit };
             const target = targetResult.target;
@@ -1461,7 +1646,7 @@ export function describeUnitOptions(state, unit) {
         .map(target => target.id);
     const skillTargets = {};
     for (const skill of unit.skills || []) {
-        if (skill.uses <= 0) continue;
+        if (skill.uses <= 0 || skill.kind === 'special') continue;
         const options = state.units
             .filter(target => !target.defeated && !target.fled)
             .filter(target => canTarget(unit, target, skill.kind))
@@ -1508,7 +1693,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds, acBonus: status.acBonus, attackBonus: status.attackBonus })),
         stats: unit.stats,
         initiative: unit.initiative,
-        skills: (unit.skills || []).map(skill => ({
+        skills: (unit.skills || []).filter(skill => skill.kind !== 'special' || unit.side === 'player').map(skill => ({
             id: skill.id,
             name: skill.name,
             kind: skill.kind,
@@ -1519,14 +1704,25 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             maxUses: skill.maxUses,
             bonusAction: skill.bonusAction,
             description: skill.description,
+            usable: skill.kind !== 'special',
         })),
-        items: (unit.items || []).map(item => ({
+        items: (unit.items || []).filter(item => item.kind !== 'special' || unit.side === 'player').map(item => ({
             id: item.id,
             name: item.name,
             kind: item.kind,
             uses: item.uses,
             maxUses: item.maxUses,
             amount: item.amount,
+            description: item.description,
+            usable: item.kind !== 'special',
+        })),
+        inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
+            name: entry.name,
+            description: entry.description,
+            equipped: !!entry.equipped,
+            section: entry.section,
+            rarity: entry.rarity,
+            quantity: entry.quantity,
         })),
         notes: unit.notes,
     }));

@@ -12003,6 +12003,9 @@ body.rt-tc-modal-open {
 .rt-tc-log-attack .rt-tc-log-text { color: #ffe0b0; }
 .rt-tc-log-rejected .rt-tc-log-text { color: #ffb86b; }
 .rt-tc-log-defeat .rt-tc-log-text { color: #ff9b9b; font-weight: 700; }
+.rt-tc-log-special .rt-tc-log-text { color: #d8c2ff; }
+.rt-tc-log-summon .rt-tc-log-text { color: #9fe3ff; }
+.rt-tc-log-terrain .rt-tc-log-text { color: #b9d6a8; }
 .rt-tc-log-end .rt-tc-log-text { color: var(--tc-accent-2); font-weight: 700; }
 .rt-tc-log-empty { padding: 0 8px 8px; color: var(--tc-dim); }
 

@@ -85,13 +85,14 @@ function parseAttributes(lines) {
 function classifySkillKind(name, description) {
     const text = `${name} ${description}`.toLowerCase();
     if (/\b(heal|cure|restore|mend|regenerat|reviv|recover|second wind|potion)\b/.test(text)) return 'heal';
+    if (/\b(summon|conjure|terrain|vein|shapechange|teleport|banish|create|wall of|pillar|hydrokinesis|illusion|charm|dominate|stun|paralyze|petrify|fear|prestidigitation|thaumaturgy|druidcraft|minor illusion|mage hand|message|light|transform|transformation|polymorph)\b/.test(text)) return 'special';
     if (/\b(bless|shield|ward|guard|haste|inspire|rage|protect|sanctuary|invisib|mirror image|resist|aura)\b/.test(text)) return 'buff';
     return 'attack';
 }
 
 function parseUses(text, fallback = 1) {
     const source = String(text || '');
-    const slash = source.match(/\((\d+)\s*\/\s*(\d+)\)/);
+    const slash = source.match(/(\d+)\s*\/\s*(\d+)/);
     if (slash) return clampInt(slash[2], 1, 99);
     const uses = source.match(/(\d+)\s*uses?\b/i);
     if (uses) return clampInt(uses[1], 1, 99);
@@ -120,8 +121,8 @@ function buildSkillFromName(name, description, options = {}) {
         name: cleanedName,
         description: cleanText(description).slice(0, 400),
         kind,
-        target: kind === 'attack' ? 'enemy' : 'ally',
-        range: kind === 'attack' ? (ranged ? 6 : 1) : (ranged ? 6 : 0),
+        target: kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally',
+        range: kind === 'attack' ? (ranged ? 6 : 1) : kind === 'special' ? (options.range == null ? 6 : clampInt(options.range, 1, 24)) : (ranged ? 6 : 0),
         damage,
         heal,
         acBonus,
@@ -161,21 +162,24 @@ function parseAbilities(lines, existingNames = new Set()) {
     return skills;
 }
 
-function parseSpells(lines, existingNames = new Set()) {
-    const spellLines = (lines || []).filter(line => /^(Spells|Cantrips):/i.test(String(line || '').trim()));
+function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6) {
     const skills = [];
-    for (const line of spellLines) {
-        const isCantrip = /^Cantrips:/i.test(line) || /\bCantrips:\s*/i.test(line);
-        const source = line.replace(/^(Spells|Cantrips):\s*/i, '');
-        const usageMatch = source.match(/\(([^)]*)\)/);
+    for (const rawLine of lines || []) {
+        let line = String(rawLine || '').trim();
+        if (!line) continue;
+        line = line.replace(/^Spells:\s*/i, '');
+        if (!/^(Cantrips:|Level\s+\d+)/i.test(line)) continue;
+        const isCantrip = /^Cantrips:/i.test(line);
+        const usageMatch = line.match(/\(([^)]*)\)/);
         const usage = usageMatch ? usageMatch[1] : '';
-        const namesPart = source.replace(/^[^:]*:\s*/, '').replace(/\([^)]*\)/g, '');
+        const namesPart = line.replace(/^[^:]*:\s*/, '').replace(/\([^)]*\)/g, '');
         const names = namesPart.split(/[,;]/).map(cleanText).filter(Boolean);
         for (const name of names) {
             if (/^(level|cantrips?|spells?)$/i.test(name)) continue;
             const description = usage ? `${isCantrip ? 'Cantrip' : 'Spell'} (${usage})` : (isCantrip ? 'Cantrip' : 'Spell');
             const skill = buildSkillFromName(name, description, {
                 ranged: true,
+                range: 6,
                 defaultUses: isCantrip ? 9 : parseUses(usage, 2),
                 defaultDamage: isCantrip ? '1d10' : '2d6',
             });
@@ -183,11 +187,41 @@ function parseSpells(lines, existingNames = new Set()) {
                 skills.push(skill);
                 existingNames.add(skill.name.toLowerCase());
             }
-            if (skills.length >= 6) break;
+            if (skills.length >= maxSkills) break;
         }
-        if (skills.length >= 6) break;
+        if (skills.length >= maxSkills) break;
     }
     return skills;
+}
+
+function parseSpells(lines, existingNames = new Set()) {
+    return parseSpellLines(lines, existingNames, 6);
+}
+
+function parseStandaloneAbilities(memo, existingNames = new Set()) {
+    const content = parseMemoBlock(memo, 'ABILITIES');
+    if (!content) return [];
+    const skills = [];
+    for (const rawLine of content.split(/\r?\n/)) {
+        const line = stripBullet(rawLine).trim();
+        if (!line) continue;
+        const match = line.match(/^(.+?)\s*\((.*)\)\s*$/);
+        const name = match ? match[1] : line;
+        const description = match ? match[2] : '';
+        const skill = buildSkillFromName(name, description, { defaultUses: 1, range: 6 });
+        if (skill && !existingNames.has(skill.name.toLowerCase())) {
+            skills.push(skill);
+            existingNames.add(skill.name.toLowerCase());
+        }
+        if (skills.length >= 8) break;
+    }
+    return skills;
+}
+
+function parseStandaloneSpells(memo, existingNames = new Set()) {
+    const content = parseMemoBlock(memo, 'SPELLS');
+    if (!content) return [];
+    return parseSpellLines(content.split(/\r?\n/), existingNames, 8);
 }
 
 function parseGear(lines) {
@@ -415,40 +449,84 @@ export function parseCombatUnits(memo) {
 }
 
 /**
- * Parse healing consumables from the inventory block.
+ * Parse the full inventory block into context entries plus usable items.
+ * Gear is passed to the encounter agent as context; consumables/scrolls become
+ * clickable items in the tactical board.
+ * @param {string} memo
+ * @returns {{ items: object[], inventory: object[] }}
+ */
+export function parseInventoryLoadout(memo) {
+    const content = parseMemoBlock(memo, 'INVENTORY');
+    const items = [];
+    const inventory = [];
+    if (!content) return { items, inventory };
+    let section = 'other';
+    const seen = new Set();
+    for (const rawLine of content.split(/\r?\n/)) {
+        let line = stripBullet(rawLine).trim();
+        if (!line) continue;
+        const sectionHeader = line.match(/^(Gear|Other Items)\s*:\s*(.*)$/i);
+        if (sectionHeader) {
+            section = /^Gear$/i.test(sectionHeader[1]) ? 'gear' : 'other';
+            line = sectionHeader[2].trim();
+            if (!line) continue;
+        }
+        const equipped = /\[E\]/i.test(line);
+        const rarity = line.match(/\[(Common|Uncommon|Rare|Epic|Legendary|Artifact)\]/i)?.[1] || '';
+        const description = cleanText(line.match(/\(([^)]*)\)/)?.[1] || '');
+        const name = cleanText(
+            line
+                .replace(/\[[^\]]*\]/g, '')
+                .replace(/\([^)]*\)/g, '')
+                .replace(/^[^A-Za-z0-9]+/, '')
+                .replace(/\s+(?:x|×)\s*\d+.*$/i, '')
+                .replace(/\s*[~–—-]\s*$/, ''),
+        ).slice(0, 80);
+        if (!name || /^\d+\s*(?:gp|sp|cp|pp|gold|credits?)\b/i.test(name)) continue;
+        const qtyMatch = line.match(/\b(?:x|×)\s*(\d+)\b/i) || line.match(/\((\d+)\)/);
+        const quantity = qtyMatch ? clampInt(qtyMatch[1], 1, 20) : 1;
+        const key = name.toLowerCase();
+        if (!seen.has(key)) {
+            seen.add(key);
+            inventory.push({ name, description, section, equipped, rarity, quantity });
+        }
+        const usable = /\b(potion|elixir|tonic|salve|remedy|antidote|scroll|bomb|flask|powder|poison|poultice|ration|food)\b/i.test(name);
+        if (!usable) continue;
+        const healing = /\b(potion|elixir|tonic|salve|remedy|antidote|heal|cure|restore|poultice|ration|food)\b/i.test(`${name} ${description}`);
+        if (!healing && !/\b(scroll|bomb|flask|powder|poison)\b/i.test(name)) continue;
+        const id = `item-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
+        if (items.some(item => item.id === id)) continue;
+        items.push(healing ? {
+            id,
+            name: name.slice(0, 80),
+            description: cleanText(description || line).slice(0, 300),
+            kind: 'heal',
+            amount: /greater|superior|supreme/i.test(name) ? '4d4+4' : '2d4+2',
+            maxUses: quantity,
+            uses: quantity,
+            range: 0,
+        } : {
+            id,
+            name: name.slice(0, 80),
+            description: cleanText(description || line).slice(0, 300),
+            kind: 'special',
+            amount: '',
+            maxUses: quantity,
+            uses: quantity,
+            range: 6,
+        });
+        if (items.length >= 6) break;
+    }
+    return { items, inventory };
+}
+
+/**
+ * Backwards-compatible helper: usable consumables only.
  * @param {string} memo
  * @returns {object[]}
  */
 export function parseInventoryItems(memo) {
-    const content = parseMemoBlock(memo, 'INVENTORY');
-    if (!content) return [];
-    const lines = content.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    const items = [];
-    const seen = new Set();
-    for (const line of lines) {
-        if (!/\b(potion|elixir|tonic|salve|healing|remedy|antidote)\b/i.test(line)) continue;
-        if (!/\b(heal|restore|recover|cure|potion|elixir|tonic|salve|remedy)\b/i.test(line)) continue;
-        const afterColon = line.includes(':') ? line.split(':').slice(1).join(':') : line;
-        const cleanedItem = cleanText(afterColon).replace(/\[[^\]]*\]/g, '').replace(/^[^A-Za-z]+/, '').trim();
-        const nameMatch = cleanedItem.match(/^([A-Za-z][A-Za-z' -]{2,40}?)(?:\s+x\d+|\s*\(|$)/i);
-        const rawName = cleanText(nameMatch?.[1] || 'Healing Potion');
-        if (seen.has(rawName.toLowerCase())) continue;
-        seen.add(rawName.toLowerCase());
-        const qtyMatch = line.match(/\b(?:x|×)\s*(\d+)\b/i) || line.match(/\((\d+)\)/);
-        const uses = qtyMatch ? clampInt(qtyMatch[1], 1, 20) : 1;
-        items.push({
-            id: `item-${rawName.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`,
-            name: rawName.slice(0, 80),
-            description: cleanText(line).slice(0, 300),
-            kind: 'heal',
-            amount: /greater|superior|supreme/i.test(rawName) ? '4d4+4' : '2d4+2',
-            maxUses: uses,
-            uses,
-            range: 0,
-        });
-        if (items.length >= 4) break;
-    }
-    return items;
+    return parseInventoryLoadout(memo).items;
 }
 
 function fallbackSkills(side, classLabel = '') {
@@ -522,6 +600,7 @@ export function buildFallbackPlayer(ctx = {}, movement = 6) {
         stats: { str: 12, dex: 14, con: 12, int: 10, wis: 12, cha: 10, strMod: 1, dexMod: 2, conMod: 1, intMod: 0, wisMod: 1, chaMod: 0 },
         skills: fallbackSkills('player', 'Fighter'),
         items: [defaultPotion()],
+        inventory: [],
         level: 1,
         notes: 'A capable adventurer thrown into the fight.',
         source: 'fallback',
@@ -584,16 +663,33 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
     const movement = clampIntOr(settings?.tacticalCombatMovement, 6, 1, 24);
     const characterUnits = parsePlayerUnits(memo, ctx);
     const { enemies, allies } = parseCombatUnits(memo);
-    const inventory = parseInventoryItems(memo);
+    const { items: inventoryItems, inventory } = parseInventoryLoadout(memo);
+    const standaloneNames = new Set();
+    const standaloneSkills = [
+        ...parseStandaloneAbilities(memo, standaloneNames),
+        ...parseStandaloneSpells(memo, standaloneNames),
+    ];
     const playerUnits = characterUnits.length ? characterUnits : [buildFallbackPlayer(ctx, movement)];
 
-    if (inventory.length && playerUnits.length) {
+    if (playerUnits.length) {
         const first = playerUnits[0];
-        first.items = [...(first.items || []), ...inventory];
+        const byName = new Map();
+        for (const skill of [...(first.skills || []), ...standaloneSkills]) {
+            const key = String(skill?.name || '').toLowerCase();
+            if (key && !byName.has(key)) byName.set(key, skill);
+        }
+        first.skills = [...byName.values()];
+        const itemById = new Map();
+        for (const item of [...(first.items || []), ...inventoryItems]) {
+            if (item?.id && !itemById.has(item.id)) itemById.set(item.id, item);
+        }
+        first.items = [...itemById.values()];
+        first.inventory = inventory;
     }
     for (const unit of playerUnits) {
         if (!unit.skills?.length) unit.skills = fallbackSkills('player', unit.classLabel);
         if (!unit.items?.length && unit === playerUnits[0]) unit.items = [defaultPotion()];
+        if (!Array.isArray(unit.inventory)) unit.inventory = [];
         if (!unit.speed) unit.speed = movement;
     }
     for (const unit of [...enemies, ...allies]) {

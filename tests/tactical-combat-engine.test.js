@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     applyAction,
+    applySpecialEffects,
     beginRound,
     buildAgentGameState,
     buildOutcomeSummary,
@@ -263,6 +264,45 @@ describe('tactical combat movement & actions', () => {
 
         const wrongSide = applyAction(state, { type: 'wait', unitId: 'enemy-3' }, { actorSide: 'player' });
         expect(wrongSide.ok).toBe(false);
+    });
+
+    it('applies resolved special effects (damage, terrain, summon) and consumes the ability', () => {
+        const state = makeState();
+        const caster = getUnitById(state, 'pc-1');
+        caster.skills.push({
+            id: 'dragon-vein', name: 'Dragon Vein Manipulation', kind: 'special',
+            description: 'Alter terrain and call a water pillar.', range: 6, maxUses: 1, uses: 1,
+        });
+        const beforeHp = state.units[2].hp;
+        const result = applySpecialEffects(state, [
+            { type: 'damage', targetId: 'enemy-3', amount: '1d6+1' },
+            { type: 'terrain', terrain: 'water', cells: [{ x: 4, y: 4 }, { x: 5, y: 4 }] },
+            { type: 'summon', name: 'Water Pillar', maxHp: 12, ac: 13, attackBonus: 4, damage: '1d8', attackRange: 6 },
+        ], { casterId: 'pc-1', skillId: 'dragon-vein', log: 'Dragon Vein Manipulation' });
+        expect(result.ok).toBe(true);
+        expect(state.units[2].hp).toBeLessThan(beforeHp);
+        expect(state.terrain[4][4]).toBe('water');
+        expect(state.terrain[4][5]).toBe('water');
+        expect(state.units).toHaveLength(4);
+        const summon = state.units[3];
+        expect(summon.name).toBe('Water Pillar');
+        expect(summon.side).toBe('player');
+        expect(summon.doneForRound).toBe(true);
+        expect(caster.skills.find(skill => skill.id === 'dragon-vein').uses).toBe(0);
+        expect(caster.actionUsed).toBe(true);
+    });
+
+    it('does not consume a special ability when no effect is legal', () => {
+        const state = makeState();
+        const caster = getUnitById(state, 'pc-1');
+        caster.skills.push({ id: 'bad-special', name: 'Bad Special', kind: 'special', maxUses: 1, uses: 1, range: 6 });
+        const result = applySpecialEffects(state, [
+            { type: 'damage', targetId: 'missing', amount: '1d6' },
+            { type: 'terrain', terrain: 'not-terrain', cells: [{ x: 4, y: 4 }] },
+        ], { casterId: 'pc-1', skillId: 'bad-special' });
+        expect(result.ok).toBe(false);
+        expect(caster.skills.find(skill => skill.id === 'bad-special').uses).toBe(1);
+        expect(caster.actionUsed).toBe(false);
     });
 
     it('interprets an action list, stops on end, and rejects units outside the allow-list', () => {

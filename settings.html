@@ -2493,6 +2493,12 @@
                                 <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{details}}</code>.</div>
                                 <button type="button" id="rpg_tactical_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome template</button>
                             </div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_special_prompt">Special ability resolver prompt</label>
+                                <textarea id="rpg_tactical_combat_special_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                <div class="rt-tc-settings-note">Used only when a non-standard ability, spell, or item is cast. It converts summoning, terrain reshaping, and other complex effects into engine effects; ordinary attacks/heals/buffs never call it.</div>
+                                <button type="button" id="rpg_tactical_combat_special_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset special resolver prompt</button>
+                            </div>
                         </div>
                     </div>
 

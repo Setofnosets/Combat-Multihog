@@ -9,8 +9,10 @@ import {
     buildEncounterUserPrompt,
     buildLocalAiActions,
     normalizeEncounterPayload,
+    normalizeSpecialEffects,
     parseAgentActionResponse,
     requestAgentActions,
+    resolveSpecialEffectWithAgent,
     runAgentTurn,
 } from '../src/features/tactical-combat/tactical-combat-agent.js';
 import {
@@ -189,6 +191,42 @@ describe('tactical encounter architect payloads', () => {
         const prompt = buildEncounterUserPrompt(context, SETTINGS);
         expect(prompt).toContain('ENCOUNTER REQUEST');
         expect(prompt).toContain('The Sunken Keep');
+    });
+
+    it('normalizes resolver effects and drops invalid targets/terrain', () => {
+        const state = makeState();
+        const normalized = normalizeSpecialEffects({
+            log: 'Water bursts from the stones.',
+            effects: [
+                { type: 'damage', targetId: 'enemy-2', amount: '2d6' },
+                { type: 'damage', targetId: 'missing', amount: '2d6' },
+                { type: 'terrain', terrain: 'water', cells: [{ x: 3, y: 3 }, { x: 99, y: 3 }] },
+                { type: 'summon', name: 'Water Pillar', maxHp: 12, ac: 13, attackBonus: 4, damage: '1d8', attackRange: 6 },
+            ],
+        }, state);
+        expect(normalized.effects).toHaveLength(3);
+        expect(normalized.effects[1]).toMatchObject({ type: 'terrain', cells: [{ x: 3, y: 3, terrain: 'water' }] });
+        expect(normalized.rejected.join(' ')).toMatch(/missing/);
+        expect(normalized.log).toContain('Water bursts');
+    });
+
+    it('resolves a special ability through the compact resolver call', async () => {
+        const state = makeState();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            log: 'Water bursts from the stones.',
+            effects: [{ type: 'damage', targetId: 'enemy-2', amount: '2d6' }],
+        }));
+        const result = await resolveSpecialEffectWithAgent(
+            state,
+            state.units[0],
+            { kind: 'skill', name: 'Hydrokinesis', description: 'Blast a foe with water.' },
+            state.units[1],
+            SETTINGS,
+        );
+        expect(result.ok).toBe(true);
+        expect(result.effects).toHaveLength(1);
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        expect(sendStateRequest.mock.calls[0][2]).toContain('SPECIAL ABILITY');
     });
 });
 

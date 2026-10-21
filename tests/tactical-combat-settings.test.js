@@ -34,6 +34,8 @@ describe('Tactical Combat settings tab contract', () => {
             'rpg_tactical_combat_encounter_prompt_reset',
             'rpg_tactical_combat_outcome_prompt',
             'rpg_tactical_combat_outcome_prompt_reset',
+            'rpg_tactical_combat_special_prompt',
+            'rpg_tactical_combat_special_prompt_reset',
             'rpg_tactical_combat_action_catalog',
             'rpg_tactical_combat_action_catalog_reset',
             'rpg_tactical_combat_catalog_status',
@@ -101,6 +103,7 @@ describe('Tactical Combat settings tab contract', () => {
             'tacticalCombatAgentPrompt: DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT',
             'tacticalCombatEncounterPrompt: DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT',
             'tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT',
+            'tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT',
             'tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON',
             'tacticalCombatByChat: {}',
             'tacticalCombatReturn: null',
@@ -124,6 +127,7 @@ describe('Tactical Combat settings tab contract', () => {
 
     it('wires the tab, board install, connection binder, and chat-change reset in index.js', () => {
         expect(indexSource).toContain('installTacticalCombatUi');
+        expect(indexSource).toContain('registerTacticalCombatTool');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");
         expect(indexSource).toContain("keyPrefix: 'tacticalCombat'");
@@ -137,6 +141,9 @@ describe('Tactical Combat settings tab contract', () => {
     it('injects the authoritative outcome and clears it after a real generation', () => {
         expect(hooksSource).toContain('buildNarrationBlock');
         expect(hooksSource).toContain('clearNarrationAfterGeneration');
+        expect(hooksSource).toContain('registerTacticalCombatTool');
+        expect(hooksSource).toContain("name: 'StartTacticalCombat'");
+        expect(hooksSource).toContain('startTacticalCombatFromNarrator');
         expect(hooksSource).toContain('const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());');
         expect(hooksSource).toContain("currentType !== 'quiet' && currentType !== 'impersonate'");
     });

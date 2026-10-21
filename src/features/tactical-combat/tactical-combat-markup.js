@@ -237,7 +237,7 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-skill-list">${skills.map(skill => `
             <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" ${!canAct || skill.uses <= 0 ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `ATK ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}` : `BUFF ${skill.range}c`)}${skill.bonusAction ? ' · bonus' : ''}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `ATK ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${skill.bonusAction ? ' · bonus' : ''}</span>
                 <span class="rt-tc-skill-uses">${Number(skill.uses) || 0}/${Number(skill.maxUses) || 0}</span>
             </button>`).join('')}</div>
     </div>` : '';
@@ -247,7 +247,7 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-skill-list">${items.map(item => `
             <button type="button" class="rt-tc-skill" data-tc-action="select-item" data-tc-item-id="${escapeHtml(item.id)}" ${!canAct || item.uses <= 0 ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(item.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL ${item.amount || ''}` : 'ITEM')}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL ${item.amount || ''}` : item.kind === 'special' ? 'SPECIAL' : 'ITEM')}</span>
                 <span class="rt-tc-skill-uses">${Number(item.uses) || 0}/${Number(item.maxUses) || 0}</span>
             </button>`).join('')}</div>
     </div>` : '';

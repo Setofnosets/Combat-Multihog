@@ -17,6 +17,7 @@ import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
+    DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from './tactical-combat-prompts.js';
 import { getEncounterForChat } from './tactical-combat-store.js';
 import {
@@ -132,6 +133,7 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_agent_prompt'), settings.tacticalCombatAgentPrompt || DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT);
     setValue(el('rpg_tactical_combat_encounter_prompt'), settings.tacticalCombatEncounterPrompt || DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT);
     setValue(el('rpg_tactical_combat_outcome_prompt'), settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT);
+    setValue(el('rpg_tactical_combat_special_prompt'), settings.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT);
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     syncGridControls(settings);
     catalogStatus(settings);
@@ -260,6 +262,7 @@ export function bindTacticalCombatSettings(deps) {
         ['rpg_tactical_combat_agent_prompt', 'tacticalCombatAgentPrompt', DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT],
         ['rpg_tactical_combat_encounter_prompt', 'tacticalCombatEncounterPrompt', DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT],
         ['rpg_tactical_combat_outcome_prompt', 'tacticalCombatOutcomePrompt', DEFAULT_TACTICAL_OUTCOME_PROMPT],
+        ['rpg_tactical_combat_special_prompt', 'tacticalCombatSpecialPrompt', DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT],
     ]) {
         const node = el(id);
         if (!node) continue;

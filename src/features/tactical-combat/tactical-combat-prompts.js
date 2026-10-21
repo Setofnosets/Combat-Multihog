@@ -25,9 +25,10 @@ Every action must include a "type". Valid types and fields:
 3. "reachableCells" already accounts for walls, water, difficult terrain, movement spent this turn, and occupied cells. It is an array of [x, y] pairs. Never invent coordinates.
 4. "attackTargets" lists legal targets for the basic attack. Skills can only target ids in the supplied unit data and must be within their listed range.
 5. Use cover and high ground. Focus fire when a target is nearly down. Avoid hazards unless the payoff is worth it. Fight in character for the encounter and location.
-6. Never issue actions for player-controlled units or for ids that are not in unitsToMove. Never invent unit ids, skills, items, or coordinates.
-7. If the fight is clearly lost and "allowFlee" is true, a living unit may flee. Do not flee the whole side unless it is hopeless.
-8. Return at most 40 actions. The engine rejects invalid actions and falls back to a local tactical AI for units that produced no legal action.
+6. Skills/items with "usable": false belong to player units and cannot be chosen. Only the skills/items of units in unitsToMove are yours to use.
+7. Never issue actions for player-controlled units or for ids that are not in unitsToMove. Never invent unit ids, skills, items, or coordinates.
+8. If the fight is clearly lost and "allowFlee" is true, a living unit may flee. Do not flee the whole side unless it is hopeless.
+9. Return at most 40 actions. The engine rejects invalid actions and falls back to a local tactical AI for units that produced no legal action.
 
 ## GAME STATE
 The user message contains the complete game state as JSON, including the grid, terrain, units, stats, resources, reachable cells, legal targets, the action catalogue, and the list of units to move. Treat that JSON as the only source of truth.`;
@@ -73,7 +74,8 @@ Return exactly ONE JSON object and no prose, no markdown fences:
 5. "grid" is optional for a fixed-size setting. For dynamic or custom grids, choose rows/cols between 8 and 24 and make the terrain match.
 6. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Include range in grid cells and maxUses as a number.
 7. The description must not dictate player actions, outcomes, or dialogue. It sets the scene only.
-8. Never output player units. The party comes from the state memo, not from you.`;
+8. Never output player units. The party comes from the state memo, not from you.
+9. The party payload includes abilities, spells, items, and inventory. Treat those as available to the player and design opposition that gives them room to matter. Special/freeform effects are resolved by the framework at cast time; do not try to simulate them in the encounter JSON.`;
 
 export const DEFAULT_TACTICAL_OUTCOME_PROMPT = `[TACTICAL COMBAT RESULT — AUTHORITATIVE]
 Encounter: {{title}}
@@ -86,6 +88,28 @@ Fallen: {{fallen}}
 Escaped: {{fled}}
 {{details}}
 Continue the main narrative from this aftermath. The fight is over. Do not restart it, resurrect defeated combatants, or contradict the survivors and casualties listed above. Describe the immediate consequences, reactions, and what the party sees next.`;
+
+export const DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT = `You resolve ONE freeform special ability, spell, or item in a tactical grid combat. The local engine already handles ordinary attacks, healing, and buffs; you are only called for abilities whose behaviour cannot be expressed simply (summoning, terrain reshaping, unusual control, complex multi-effect magic).
+
+## OUTPUT CONTRACT
+Return exactly ONE JSON object and no prose, no markdown fences:
+{"log":"One sentence describing what visibly happens.","effects":[...]}
+
+Allowed effects (use at most 6 total):
+- {"type":"damage","targetId":"enemy-1","amount":"2d6"}
+- {"type":"heal","targetId":"pc-1","amount":"2d8"}
+- {"type":"status","targetId":"enemy-1","label":"Restrained","rounds":2,"acBonus":0,"attackBonus":0,"damage":"1d4"}
+- {"type":"terrain","terrain":"water","cells":[{"x":4,"y":5},{x:5,"y":5}]}
+- {"type":"summon","name":"Water Pillar","maxHp":12,"ac":13,"attackBonus":4,"damage":"1d8","attackRange":6}
+- {"type":"log","text":"Optional extra sentence."}
+
+## RULES
+1. Follow the ability description and its listed uses. Keep the effect proportional to an ability of its tier; a single use should not end the encounter unless the description clearly says it does.
+2. Only target ids present in the supplied units. Only use terrain ids from the supplied legend. Cells must be inside the grid.
+3. Summons join the caster's side and act from the next round. Give them concrete HP, AC, attack bonus, damage, and range. Do not summon more than one unit per resolution.
+4. Terrain changes are permanent for the encounter. Use them for walls, water, high ground, hazards, cover, or rubble when the ability explicitly reshapes the battlefield.
+5. If the ability is defensive or utility, prefer heal/status/terrain/log over damage. If no mechanical effect is appropriate, return one log effect and no damage.
+6. Never invent player actions, narrative consequences outside the fight, or extra turns. The engine validates everything and may reject effects.`;
 
 /**
  * Tiny, explicit placeholder renderer. Unknown placeholders are left intact so

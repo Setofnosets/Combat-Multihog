@@ -10,6 +10,7 @@ import {
     parsePlayerUnits,
     resolveTerrainTheme,
 } from '../src/features/tactical-combat/tactical-combat-context.js';
+import { buildEncounterRequestPayload } from '../src/features/tactical-combat/tactical-combat-agent.js';
 
 const MEMO = `[CHARACTER]
 {{user}} (Fighter): 34/40 HP
@@ -193,6 +194,69 @@ describe('tactical combat memo context', () => {
         expect(state.terrainTheme).toBe('city');
         expect(state.terrain[2][2]).toBe('cover');
         expect(state.units.filter(unit => unit.side === 'enemy').map(unit => unit.name)).toEqual(['Bridge Raider', 'Bridge Archer']);
+    });
+
+    it('parses the standalone [ABILITIES], [SPELLS], and [INVENTORY] blocks into the character loadout', () => {
+        const memo = `[CHARACTER]
+Corrin (Manakete): 68/68 HP
+Combat: BAB: +6 | Ranged (1 attack): +9 | Melee (1 attack): +11 | Base AC: 15 | Total AC: 18
+Gear: Yato (1d8+3 Slashing, +2 to hit) | Dragonstone (transformation focus) | Scale Armor (+3 AC)
+Attr: STR 16 (+3), DEX 14 (+2), CON 16 (+3), INT 12 (+1), WIS 14 (+2), CHA 16 (+3)
+HD: d10 (6/6)
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Dragonstone Transformation (Bonus action, assume partial or full dragon form; gains scales, spear-like appendages, and hydrokinetic attacks; 2/2 per long rest)
+- Hydrokinesis (While transformed, summon water pillars or blast foes with water projectiles; 3/3 per long rest)
+- Dragon Vein Manipulation (Alter terrain for tactical advantage within a sensed Dragon Vein; 1/1 per long rest)
+[/ABILITIES]
+
+[SPELLS]
+Cantrips: Prestidigitation
+Level 1 (2/2): Cure Wounds, Shield of Faith
+[/SPELLS]
+
+[INVENTORY]
+Gear:
+- ⚔️ [Epic] [E] Yato (1d8+3 Slashing, +2 to hit) (~5,000 GP)
+- 🐉 [Rare] [E] Dragonstone (Transformation focus; enables dragon form) (~2,500 GP)
+- 🛡️ [Uncommon] [E] Scale Armor (AC +3) (~150 GP)
+Other Items:
+- 💰 45 GP
+- 🧪 Healing Potion x2 [Common]
+[/INVENTORY]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Corrin', chatId: 'loadout', chat: [] });
+        const corrin = context.playerUnits[0];
+        expect(corrin.name).toBe('Corrin');
+        const skills = Object.fromEntries(corrin.skills.map(skill => [skill.name, skill]));
+        expect(skills['Dragonstone Transformation']).toMatchObject({ kind: 'special', maxUses: 2 });
+        expect(skills.Hydrokinesis).toMatchObject({ kind: 'special', maxUses: 3 });
+        expect(skills['Dragon Vein Manipulation']).toMatchObject({ kind: 'special', maxUses: 1 });
+        expect(skills['Cure Wounds']).toMatchObject({ kind: 'heal' });
+        expect(skills['Shield of Faith']).toMatchObject({ kind: 'buff' });
+        expect(skills.Prestidigitation).toMatchObject({ kind: 'special' });
+        expect(corrin.inventory.map(entry => entry.name)).toEqual(expect.arrayContaining(['Yato', 'Dragonstone', 'Scale Armor']));
+        expect(corrin.inventory.map(entry => entry.name)).not.toContain('45 GP');
+        expect(corrin.items.map(item => item.name)).toContain('Healing Potion');
+    });
+
+    it('passes abilities, spells, items, and inventory to the encounter architect payload', () => {
+        const context = {
+            playerUnits: [{
+                name: 'Corrin', classLabel: 'Manakete', hp: 68, maxHp: 68, ac: 18, attackBonus: 11,
+                attackRange: 1, damage: '1d8+3', skills: [
+                    { name: 'Dragonstone Transformation', kind: 'special', range: 6, maxUses: 2, description: 'Transform.' },
+                    { name: 'Cure Wounds', kind: 'heal', range: 6, heal: '1d8+2', maxUses: 2 },
+                ], items: [{ name: 'Healing Potion', kind: 'heal', amount: '2d4+2', maxUses: 2 }],
+                inventory: [{ name: 'Yato', description: '1d8+3', equipped: true }],
+            }],
+            allies: [], enemies: [], location: "Dragon's Gate", sceneExcerpt: '', summary: {},
+        };
+        const payload = buildEncounterRequestPayload(context, BASE_SETTINGS);
+        expect(payload.party[0].skills.map(skill => skill.name)).toContain('Dragonstone Transformation');
+        expect(payload.party[0].items[0].name).toBe('Healing Potion');
+        expect(payload.party[0].inventory[0].name).toBe('Yato');
     });
 
     it('fails clearly when existing-only mode has no active [COMBAT] block', () => {

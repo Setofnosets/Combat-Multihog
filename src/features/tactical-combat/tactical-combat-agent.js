@@ -18,6 +18,7 @@ import {
     TC_TERRAIN_CHARS,
     resolveGridDimensions,
     clampInt,
+    terrainChar,
 } from './tactical-combat-constants.js';
 import {
     getActionCatalog,
@@ -27,6 +28,7 @@ import {
 import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
+    DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from './tactical-combat-prompts.js';
 import {
     buildAgentGameState,
@@ -81,6 +83,23 @@ function compactUnitForContext(unit) {
             damage: skill.damage,
             heal: skill.heal,
             maxUses: skill.maxUses,
+            bonusAction: !!skill.bonusAction,
+            description: skill.description || '',
+        })),
+        items: (unit.items || []).map(item => ({
+            name: item.name,
+            kind: item.kind,
+            amount: item.amount || '',
+            maxUses: item.maxUses,
+            description: item.description || '',
+        })),
+        inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
+            name: entry.name,
+            description: entry.description || '',
+            section: entry.section || '',
+            equipped: !!entry.equipped,
+            rarity: entry.rarity || '',
+            quantity: entry.quantity || 1,
         })),
         notes: unit.notes || '',
     };
@@ -438,6 +457,159 @@ function hostileTo(unit, target) {
     const friendly = new Set(['player', 'ally']);
     return (friendly.has(unit.side) && target.side === 'enemy')
         || (unit.side === 'enemy' && friendly.has(target.side));
+}
+
+function compactSpecialUnit(unit) {
+    return {
+        id: unit.id,
+        name: unit.name,
+        side: unit.side,
+        x: unit.x,
+        y: unit.y,
+        hp: unit.hp,
+        maxHp: unit.maxHp,
+        ac: unit.ac,
+        statuses: (unit.statuses || []).map(status => status.label),
+    };
+}
+
+/**
+ * Validate the effect list returned by the special-ability resolver.
+ * @param {any} value
+ * @param {object} state
+ * @returns {{ effects: object[], log: string, rejected: string[] }}
+ */
+export function normalizeSpecialEffects(value, state) {
+    let payload = value;
+    if (payload && !Array.isArray(payload) && Array.isArray(payload.effects)) payload = payload.effects;
+    const effects = [];
+    const rejected = [];
+    const list = Array.isArray(payload) ? payload.slice(0, 6) : [];
+    for (const raw of list) {
+        if (!raw || typeof raw !== 'object') continue;
+        const type = String(raw.type || '').toLowerCase();
+        if (type === 'damage' || type === 'heal' || type === 'status') {
+            const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${raw.targetId || ''}".`);
+                continue;
+            }
+            if (type === 'damage') {
+                const amount = String(raw.amount ?? raw.damage ?? '1d6').slice(0, 40);
+                if (!/\d/.test(amount)) { rejected.push('Damage effect needs a dice amount.'); continue; }
+                effects.push({ type, targetId: target.id, amount });
+            } else if (type === 'heal') {
+                const amount = String(raw.amount ?? raw.heal ?? '1d8+2').slice(0, 40);
+                if (!/\d/.test(amount)) { rejected.push('Heal effect needs a dice amount.'); continue; }
+                effects.push({ type, targetId: target.id, amount });
+            } else {
+                effects.push({
+                    type,
+                    targetId: target.id,
+                    label: String(raw.label || raw.name || 'Afflicted').slice(0, 60),
+                    rounds: numberOr(raw.rounds, 2, 1, 10),
+                    acBonus: numberOr(raw.acBonus, 0, -10, 10),
+                    attackBonus: numberOr(raw.attackBonus, 0, -10, 10),
+                    damage: String(raw.damage || '').slice(0, 40),
+                });
+            }
+            continue;
+        }
+        if (type === 'terrain') {
+            const cells = Array.isArray(raw.cells) ? raw.cells : Array.isArray(raw.tiles) ? raw.tiles : [];
+            const cleaned = cells.slice(0, 24).filter(cell => {
+                const x = Number(cell?.x);
+                const y = Number(cell?.y);
+                return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < state.grid.cols && y < state.grid.rows;
+            }).map(cell => ({
+                x: Number(cell.x),
+                y: Number(cell.y),
+                terrain: String(cell.terrain || raw.terrain || '').toLowerCase(),
+            })).filter(cell => Boolean(TC_TERRAIN[cell.terrain]));
+            if (!cleaned.length) { rejected.push('Terrain effect had no valid cells/terrain.'); continue; }
+            effects.push({ type, terrain: String(raw.terrain || '').toLowerCase(), cells: cleaned });
+            continue;
+        }
+        if (type === 'summon') {
+            const name = String(raw.name || raw.unit?.name || '').trim();
+            if (!name) { rejected.push('Summon effect needs a name.'); continue; }
+            effects.push({
+                type,
+                name: name.slice(0, 60),
+                maxHp: numberOr(raw.maxHp ?? raw.hp, 12, 1, 300),
+                ac: numberOr(raw.ac, 12, 1, 40),
+                attackBonus: numberOr(raw.attackBonus, 3, -5, 30),
+                damage: String(raw.damage || '1d6').slice(0, 40),
+                attackRange: numberOr(raw.attackRange, 1, 1, 24),
+            });
+            continue;
+        }
+        if (type === 'log' || type === 'note') {
+            if (raw.text) effects.push({ type: 'log', text: String(raw.text).slice(0, 400) });
+            continue;
+        }
+        rejected.push(`Unsupported effect type "${type}".`);
+    }
+    return {
+        effects,
+        log: String(value?.log || '').slice(0, 500),
+        rejected,
+    };
+}
+
+/**
+ * Resolve one special ability/item into engine primitives. Called only when a
+ * `kind: 'special'` skill or item is actually used, so ordinary combat spends
+ * no extra tokens.
+ *
+ * @param {object} state
+ * @param {object} caster
+ * @param {{ kind: 'skill'|'item', name: string, description: string }} source
+ * @param {object|null} target
+ * @param {Record<string, any>} settings
+ * @param {{ signal?: AbortSignal }} [options]
+ * @returns {Promise<{ ok: boolean, effects?: object[], log?: string, error?: string }>}
+ */
+export async function resolveSpecialEffectWithAgent(state, caster, source, target, settings, options = {}) {
+    if (!state || !caster || !source) return { ok: false, error: 'Missing special ability context.' };
+    const chatId = getActiveChatId();
+    const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
+    const payload = {
+        ability: {
+            kind: source.kind,
+            name: String(source.name || 'Special ability'),
+            description: String(source.description || '').slice(0, 700),
+        },
+        caster: compactSpecialUnit(caster),
+        target: target ? compactSpecialUnit(target) : null,
+        battlefield: {
+            rows: state.grid.rows,
+            cols: state.grid.cols,
+            terrainLegend: Object.fromEntries(Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [id, TC_TERRAIN[id]?.label || id])),
+            terrain: state.terrain.map(row => row.map(id => terrainChar(id)).join('')),
+            units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
+        },
+        limits: { maxEffects: 6 },
+    };
+    try {
+        const raw = await sendStateRequest(
+            tacticalRequestSettings(settings),
+            String(settings?.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT),
+            `## SPECIAL ABILITY\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nReturn only the JSON object with "log" and "effects".`,
+            options.signal || null,
+            { stream: false, debugSource: 'Tactical Combat Special' },
+        );
+        if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
+        const parsed = parseMapArchitectResponse(raw);
+        if (!parsed.value) return { ok: false, error: parsed.error || 'The resolver returned no JSON.' };
+        const normalized = normalizeSpecialEffects(parsed.value, state);
+        if (!normalized.effects.length) {
+            return { ok: false, error: normalized.rejected.join(' ') || 'The resolver returned no usable effects.' };
+        }
+        return { ok: true, effects: normalized.effects, log: normalized.log };
+    } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+    }
 }
 
 function isAdjacentEnough(state, unit, target) {

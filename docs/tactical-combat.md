@@ -32,7 +32,8 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
 | **Combat agent connection** | Main API, saved connection profile, Ollama, or OpenAI-compatible endpoint + completion preset + max output tokens. |
-| **Prompt Templates** | Editable tactical agent, encounter architect, and outcome-to-narration prompts. Reset restores the shipped template. |
+| **Prompt Templates** | Editable tactical agent, encounter architect, outcome-to-narration, and special-ability resolver prompts. Reset restores the shipped template. |
+| **Special ability resolver prompt** | Used only when a non-standard ability/spell/item is cast. Converts freeform effects (summoning, terrain, control) into engine primitives. |
 | **Action Catalogue & Game State** | JSON editor for the legal action vocabulary. Labels/descriptions can be changed; `"enabled": false` removes an action from the board and the agent contract. Unknown action types are rejected at runtime. |
 | **Terrain Key** | Static reference for every terrain type, colour, glyph, and effect. |
 
@@ -66,6 +67,7 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
 - **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, and bonus-action usage. A class-appropriate fallback skill is granted if nothing parses.
 - **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
+- **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` are parsed independently of `[CHARACTER]`. Both the encounter architect and the combat agent receive the party's abilities, spells, consumables, and full inventory context. Gear in `[INVENTORY]` is passed as context; consumables/scrolls become usable board items.
 - **Defeat**: a unit at 0 HP is defeated and remains on the board as a faded corpse. Victory = every enemy defeated. Defeat = every player unit defeated. Retreat = every player unit fled or the player presses Retreat.
 - **Hazards** damage all units standing on them at the start of each round.
 - **Statuses** tick at the start of each round; damage-over-time effects are applied then. Defend grants +4 AC for the current round.
@@ -79,6 +81,27 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 3. Agent actions are validated and applied; the next round starts with all resources reset.
 
 **Initiative** rolls `1d20 + initiative bonus` for every combatant at encounter start. Units act one at a time. Consecutive agent units are sent to the agent as one batch; after the batch resolves, play returns to the next player unit (or a new round).
+
+### Special / non-standard effects
+
+Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra model call. If an ability, spell, or item cannot be expressed as a simple effect (summoning, terrain reshaping, unusual control, complex multi-effect magic), it is marked `kind: "special"`:
+
+- Click the skill/item, then a target on the board (self is valid for summons/terrain).
+- One compact resolver call sends only the ability, caster, target, and local battlefield state.
+- The resolver returns a small JSON effect list: `damage`, `heal`, `status`, `terrain`, `summon`, or `log`.
+- The engine validates and applies those primitives, consumes the action/uses, and writes the combat log.
+
+This keeps token usage limited to the rare ability that actually needs adjudication; ordinary rounds never call the resolver.
+
+### Narrator tool
+
+The main narrator can call the registered `StartTacticalCombat` function tool when a fight becomes a set-piece battle. Optional arguments: `title`, `location`, `description`, `reason`. The tool:
+
+1. Starts the encounter through the same path as the settings button.
+2. Opens/focuses the tactical board.
+3. Returns a short status string to the model.
+
+If an encounter is already active, it simply reopens the board. If Tactical Combat is disabled, it returns a message asking the player to enable it. The narrator is told not to resolve the fight itself.
 
 ---
 
@@ -175,13 +198,15 @@ The Combat Agent is only the decision layer. The extension's action interpreter 
 
 ## Prompt customization
 
-Three prompts are editable:
+Four prompts are editable:
 
 1. **Tactical agent system prompt** — the action JSON contract, ownership rules, tactics guidance, and output size limit.
-2. **Encounter architect system prompt** — how to build a fair encounter from party, existing `[COMBAT]`, location, and scene. It can also return a terrain map using the legend characters.
+2. **Encounter architect system prompt** — how to build a fair encounter from party, existing `[COMBAT]`, location, and scene. It can also return a terrain map using the legend characters. The party payload includes the full ability/spell/item/inventory loadout.
 3. **Outcome-to-narration template** — the authoritative aftermath block injected into the next narrator generation. Supported placeholders:
 
    `{{title}}`, `{{location}}`, `{{outcome}}`, `{{rounds}}`, `{{survivors}}`, `{{fallen}}`, `{{fled}}`, `{{defeated}}`, `{{details}}`, `{{summary}}`.
+
+4. **Special ability resolver prompt** — used only for `kind: "special"` abilities/items. It converts summoning, terrain reshaping, and other complex effects into the engine's primitive effect list.
 
 Each has a reset button. Prompts are sent verbatim with the JSON state appended.
 

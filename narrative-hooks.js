@@ -615,6 +615,55 @@ export function syncLocationMappingRuntime() {
     }
 }
 
+/**
+ * Narrator-callable tool: open the tactical board and begin an encounter for
+ * the current scene. The board itself is the focus; the tool returns a short
+ * status string to the model.
+ */
+export function registerTacticalCombatTool() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const { registerFunctionTool, unregisterFunctionTool } = ctx;
+        if (!registerFunctionTool || !unregisterFunctionTool) return;
+        unregisterFunctionTool('StartTacticalCombat');
+        registerFunctionTool({
+            name: 'StartTacticalCombat',
+            displayName: 'Tactical Combat',
+            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this when a fight becomes a set-piece battle the player should resolve on the board. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. Optional title/location/description override the generated encounter framing. After calling, continue the narration briefly but do not resolve the fight yourself.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    title: { type: 'string', description: 'Optional short encounter title, e.g. "Ambush at the Gatehouse".' },
+                    location: { type: 'string', description: 'Optional exact current location, if the footer/memo is ambiguous.' },
+                    description: { type: 'string', description: 'Optional 1–3 sentence setup for the encounter brief.' },
+                    reason: { type: 'string', description: 'Optional short reason the fight started, used as extra context for the encounter architect.' },
+                },
+                required: [],
+            },
+            action: async args => {
+                try {
+                    const { startTacticalCombatFromNarrator } = await import('./src/features/tactical-combat/tactical-combat-ui.js');
+                    const result = await startTacticalCombatFromNarrator(args || {});
+                    return result.message;
+                } catch (error) {
+                    return `Tactical Combat could not start: ${error?.message || error}`;
+                }
+            },
+            formatMessage: () => '',
+        });
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not register Tactical Combat tool:', error);
+    }
+}
+
+export function unregisterTacticalCombatTool() {
+    try {
+        SillyTavern.getContext().unregisterFunctionTool?.('StartTacticalCombat');
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not unregister Tactical Combat tool:', error);
+    }
+}
+
 export function registerDiceFunctionTool() {
     try {
         const ctx = SillyTavern.getContext();

@@ -22,6 +22,7 @@ import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
+    DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from '../features/tactical-combat/tactical-combat-prompts.js';
 import { DEFAULT_TACTICAL_ACTION_CATALOG_JSON } from '../features/tactical-combat/tactical-combat-constants.js';
 import {
@@ -207,6 +208,7 @@ export function buildDefaultSettings() {
         tacticalCombatAgentPrompt: DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
         tacticalCombatEncounterPrompt: DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
         tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT,
+        tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
         tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
         tacticalCombatByChat: {},
         tacticalCombatReturn: null,

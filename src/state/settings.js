@@ -1626,6 +1626,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'tacticalCombatAgentPrompt',
     'tacticalCombatEncounterPrompt',
     'tacticalCombatOutcomePrompt',
+    'tacticalCombatSpecialPrompt',
     'tacticalCombatActionCatalogJson',
     'tacticalCombatByChat',
     'tacticalCombatReturn',

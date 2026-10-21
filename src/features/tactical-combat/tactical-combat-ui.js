@@ -9,6 +9,7 @@
 import { getActiveChatId, getSettings } from '../../../state-manager.js';
 import {
     applyAction,
+    applySpecialEffects,
     completeAgentTurn,
     computeReachableCells,
     createStateRng,
@@ -23,9 +24,11 @@ import { buildTacticalCombatMarkup } from './tactical-combat-markup.js';
 import {
     buildEncounterFromContext,
     collectEncounterContext,
+    inferTerrainTheme,
 } from './tactical-combat-context.js';
 import {
     generateEncounterWithAgent,
+    resolveSpecialEffectWithAgent,
     runAgentTurn,
 } from './tactical-combat-agent.js';
 import {
@@ -117,9 +120,10 @@ function skillResourceUsed(unit, skill) {
 function itemTargetCells(state, unit, item) {
     const cells = new Set();
     if (!unit || !item) return cells;
+    const special = item.kind === 'special';
     for (const target of state.units) {
         if (target.defeated || target.fled) continue;
-        if (!['player', 'ally'].includes(target.side) || !['player', 'ally'].includes(unit.side)) continue;
+        if (!special && (!['player', 'ally'].includes(target.side) || !['player', 'ally'].includes(unit.side))) continue;
         const distance = target.id === unit.id ? 0 : Math.max(Math.abs(target.x - unit.x), Math.abs(target.y - unit.y));
         if (distance <= (Number(item.range) || 0)) cells.add(`${target.x},${target.y}`);
     }
@@ -189,10 +193,18 @@ export function buildTacticalView(state) {
         } else if (view.mode === 'skill') {
             const skill = (selected.skills || []).find(entry => entry.id === view.selectedSkillId);
             if (skill && skill.uses > 0 && !skillResourceUsed(selected, skill)) {
-                const options = describeUnitOptions(state, selected);
-                for (const id of options.skillTargets?.[skill.id] || []) {
-                    const target = state.units.find(unit => unit.id === id);
-                    if (target) targets.add(`${target.x},${target.y}`);
+                if (skill.kind === 'special') {
+                    for (const target of state.units) {
+                        if (target.defeated || target.fled) continue;
+                        const distance = target.id === selected.id ? 0 : Math.max(Math.abs(target.x - selected.x), Math.abs(target.y - selected.y));
+                        if (distance <= (Number(skill.range) || 6)) targets.add(`${target.x},${target.y}`);
+                    }
+                } else {
+                    const options = describeUnitOptions(state, selected);
+                    for (const id of options.skillTargets?.[skill.id] || []) {
+                        const target = state.units.find(unit => unit.id === id);
+                        if (target) targets.add(`${target.x},${target.y}`);
+                    }
                 }
             }
         } else if (view.mode === 'item') {
@@ -402,6 +414,12 @@ function handleSkill(targetId) {
         toast('info', 'Choose a skill first.');
         return false;
     }
+    const unit = playerUnitById(state, view.selectedUnitId);
+    const skill = (unit?.skills || []).find(entry => entry.id === view.selectedSkillId);
+    if (skill?.kind === 'special') {
+        void resolveSpecialPlayerAction('skill', skill, targetId || view.selectedUnitId);
+        return true;
+    }
     const ok = applyPlayerAction({
         type: 'skill',
         unitId: view.selectedUnitId,
@@ -417,10 +435,17 @@ function handleSkill(targetId) {
 }
 
 function handleItem(targetId) {
-    const view = buildTacticalView(getState());
+    const state = getState();
+    const view = buildTacticalView(state);
     if (!view.selectedUnitId || !view.selectedItemId) {
         toast('info', 'Choose an item first.');
         return false;
+    }
+    const unit = playerUnitById(state, view.selectedUnitId);
+    const item = (unit?.items || []).find(entry => entry.id === view.selectedItemId);
+    if (item?.kind === 'special') {
+        void resolveSpecialPlayerAction('item', item, targetId || view.selectedUnitId);
+        return true;
     }
     const ok = applyPlayerAction({
         type: 'item',
@@ -434,6 +459,86 @@ function handleItem(targetId) {
         render();
     }
     return ok;
+}
+
+/**
+ * Resolve a freeform ability/item through one compact agent call, then let the
+ * pure engine apply the returned primitives. Ordinary abilities never take this
+ * path, so token usage stays limited to genuinely unusual effects.
+ */
+async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
+    if (ui.view.busy) return;
+    const state = getState();
+    const settings = getSettings();
+    if (!state) return;
+    const view = buildTacticalView(state);
+    const caster = playerUnitById(state, view.selectedUnitId);
+    if (!caster) return;
+    if (sourceKind === 'skill' && skillResourceUsed(caster, source)) {
+        toast('warning', source.bonusAction ? 'The bonus action is already spent.' : 'The action is already spent.');
+        return;
+    }
+    if (sourceKind === 'item' && caster.actionUsed) {
+        toast('warning', 'The main action is already spent.');
+        return;
+    }
+    if (source.uses <= 0) {
+        toast('warning', `${source.name} has no uses left.`);
+        return;
+    }
+    const target = state.units.find(unit => unit.id === (targetId || caster.id)) || caster;
+    const chatId = getActiveChatId();
+    const controller = new AbortController();
+    ui.abortController = controller;
+    setBusy(true, `Resolving ${source.name}…`, true);
+    render();
+    try {
+        const resolved = await resolveSpecialEffectWithAgent(
+            state,
+            caster,
+            {
+                kind: sourceKind,
+                name: source.name,
+                description: source.description || source.amount || '',
+            },
+            target,
+            settings,
+            { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        if (getActiveChatId() !== chatId || getState() !== state) return;
+        if (!resolved.ok) {
+            toast('error', resolved.error || `Could not resolve ${source.name}.`);
+            return;
+        }
+        const applied = applySpecialEffects(state, resolved.effects, {
+            casterId: caster.id,
+            skillId: sourceKind === 'skill' ? source.id : undefined,
+            itemId: sourceKind === 'item' ? source.id : undefined,
+            label: source.name,
+            narrative: resolved.log || '',
+            rng: createStateRng(state),
+        });
+        if (!applied.ok) {
+            toast('error', applied.error || `${source.name} had no legal effect.`);
+            return;
+        }
+        ui.view.selectedSkillId = '';
+        ui.view.selectedItemId = '';
+        ui.view.mode = 'move';
+        persist(state);
+        render();
+        if (applied.ended) finalizeIfEnded(state, settings);
+    } catch (error) {
+        if (getActiveChatId() === chatId) {
+            console.warn('[RPG Tracker] Special ability resolution failed:', error);
+            toast('error', `Could not resolve ${source.name}: ${error?.message || error}`);
+        }
+    } finally {
+        if (ui.abortController === controller) ui.abortController = null;
+        setBusy(false);
+        render();
+    }
 }
 
 function handleCellClick(x, y) {
@@ -711,24 +816,24 @@ async function copyText(text) {
     return false;
 }
 
-async function startEncounterFlow() {
+async function startEncounterFlow(options = {}) {
     const settings = getSettings();
     if (!settings.tacticalCombatEnabled) {
         toast('warning', 'Enable Tactical Combat in Settings → Tactical Combat first.');
         openSettingsTab();
-        return;
+        return { ok: false, error: 'Tactical Combat is disabled.' };
     }
     const existing = getState();
     if (existing?.status === 'active') {
         openBoard();
         toast('info', 'That encounter is already in progress.');
-        return;
+        return { ok: true, alreadyActive: true, state: existing };
     }
-    if (existing && typeof globalThis.confirm === 'function'
+    if (existing && !options.silentNew && typeof globalThis.confirm === 'function'
         && !globalThis.confirm('Start a new encounter? The previous result has already been queued for the narrator.')) {
-        return;
+        return { ok: false, cancelled: true };
     }
-    if (ui.starting) return;
+    if (ui.starting) return { ok: false, error: 'An encounter is already being prepared.' };
     ensureOverlay();
     openBoard();
     ui.starting = true;
@@ -751,16 +856,21 @@ async function startEncounterFlow() {
         ui.view.error = `Could not read the current scene: ${error?.message || error}`;
         render();
         toast('error', ui.view.error);
-        return;
+        return { ok: false, error: ui.view.error };
     }
     context.chatId = getActiveChatId() || context.chatId;
+    if (options.location) {
+        context.location = String(options.location).slice(0, 200);
+        context.theme = inferTerrainTheme(context.location, context.sceneExcerpt);
+    }
+    if (options.reason) context.sceneExcerpt = `${context.sceneExcerpt || ''}\nNarrator trigger: ${String(options.reason).slice(0, 300)}`.trim();
     if (!context.chatId) {
         if (ui.abortController === controller) ui.abortController = null;
         ui.starting = false;
         setBusy(false);
         ui.view.error = 'Open a chat before starting a tactical encounter.';
         render();
-        return;
+        return { ok: false, error: ui.view.error };
     }
 
     let agentEncounter = null;
@@ -775,7 +885,7 @@ async function startEncounterFlow() {
             ui.starting = false;
             setBusy(false);
             render();
-            return;
+            return { ok: false, cancelled: true };
         }
         if (generated.ok) agentEncounter = generated.encounter;
         else if (generated.error) warnings.push(generated.error);
@@ -789,7 +899,7 @@ async function startEncounterFlow() {
         ui.view.error = 'No active [COMBAT] enemies were found. Switch Encounter source to Auto or Agent to generate opposition.';
         render();
         toast('error', ui.view.error);
-        return;
+        return { ok: false, error: ui.view.error };
     }
 
     const catalogResult = getActionCatalog(settings);
@@ -806,6 +916,12 @@ async function startEncounterFlow() {
         });
         warnings = [...warnings, ...(built.warnings || [])];
         const state = built.state;
+        if (options.title) state.title = String(options.title).slice(0, 140);
+        if (options.location) state.location = String(options.location).slice(0, 200);
+        if (options.description) state.description = String(options.description).slice(0, 4000);
+        if (options.reason && !options.description) {
+            state.description = `${state.description || ''}\n\nTrigger: ${String(options.reason).slice(0, 300)}`.trim();
+        }
         persist(state);
         ui.starting = false;
         setBusy(false);
@@ -818,6 +934,7 @@ async function startEncounterFlow() {
         } else if (state.phase === 'enemy' && getPendingAgentUnitIds(state).length) {
             void runEnemyTurnForState(state, settings);
         }
+        return { ok: true, state, warnings };
     } catch (error) {
         if (ui.abortController === controller) ui.abortController = null;
         ui.starting = false;
@@ -825,6 +942,7 @@ async function startEncounterFlow() {
         ui.view.error = String(error?.message || error);
         render();
         toast('error', ui.view.error);
+        return { ok: false, error: ui.view.error };
     }
 }
 
@@ -991,9 +1109,48 @@ export function openTacticalCombatBoard() {
 
 /**
  * Settings-tab "Start encounter" entry point.
+ * @param {{ title?: string, location?: string, description?: string, reason?: string, silentNew?: boolean }} [options]
  */
-export function startTacticalCombatFlow() {
-    void startEncounterFlow();
+export function startTacticalCombatFlow(options = {}) {
+    return startEncounterFlow(options);
+}
+
+/**
+ * Narrator function-tool entry point. Opens/focuses the board, starts or resumes
+ * the encounter, and returns a short status message for the model.
+ * @param {{ title?: string, location?: string, description?: string, reason?: string }} [args]
+ * @returns {Promise<{ ok: boolean, message: string }>}
+ */
+export async function startTacticalCombatFromNarrator(args = {}) {
+    const settings = getSettings();
+    if (!settings.tacticalCombatEnabled) {
+        return {
+            ok: false,
+            message: 'Tactical Combat is disabled. Ask the player to enable it in Settings → Tactical Combat.',
+        };
+    }
+    const result = await startEncounterFlow({
+        title: args.title,
+        location: args.location,
+        description: args.description,
+        reason: args.reason,
+        silentNew: true,
+    });
+    if (!result.ok) {
+        return {
+            ok: false,
+            message: result.error || (result.cancelled ? 'Encounter start was cancelled.' : 'Could not start the tactical encounter.'),
+        };
+    }
+    openBoard();
+    const state = result.state || getState();
+    if (result.alreadyActive) {
+        return { ok: true, message: `A tactical encounter is already active (${state?.title || 'encounter'}); the board is open.` };
+    }
+    return {
+        ok: true,
+        message: `Tactical encounter ${state?.status === 'active' ? 'started' : (state?.outcome?.label || 'prepared')}: ${state?.title || 'encounter'}. The board is open; resolve the fight on the grid and the result will return to narration when it ends.`,
+    };
 }
 
 /**
