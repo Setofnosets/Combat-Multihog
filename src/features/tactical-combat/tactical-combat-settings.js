@@ -10,6 +10,10 @@
 import { getActiveChatId } from '../../../state-manager.js';
 import { parseActionCatalog } from './tactical-combat-actions.js';
 import {
+    DEFAULT_LOADOUT_CLASSIFIER_JSON,
+    normalizeClassifierConfig,
+} from './tactical-combat-classifiers.js';
+import {
     DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
     TC_GRID_PRESETS,
 } from './tactical-combat-constants.js';
@@ -83,6 +87,21 @@ function catalogStatus(settings) {
     }
 }
 
+function classifierStatus(settings) {
+    const node = el('rpg_tactical_combat_classifier_status');
+    if (!node) return;
+    const parsed = normalizeClassifierConfig(settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
+    if (parsed.ok) {
+        const ruleCount = parsed.config.skillRules.length;
+        const buff = parsed.config.buff;
+        node.textContent = `Valid classifier · ${ruleCount} skill rule${ruleCount === 1 ? '' : 's'} · buffs: +${buff.acBonus} AC / +${buff.attackBonus} ATK for ${buff.rounds} round${buff.rounds === 1 ? '' : 's'}.`;
+        node.className = 'rt-tc-setting-status rt-tc-ok';
+    } else {
+        node.textContent = `Invalid classifier: ${parsed.error} The shipped rules are used until this is fixed.`;
+        node.className = 'rt-tc-setting-status rt-tc-error';
+    }
+}
+
 function syncStatus(settings = depsRef?.settings) {
     const status = el('rpg_tactical_combat_status');
     if (!status || !settings) return;
@@ -135,8 +154,10 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_outcome_prompt'), settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT);
     setValue(el('rpg_tactical_combat_special_prompt'), settings.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT);
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
+    setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
     syncGridControls(settings);
     catalogStatus(settings);
+    classifierStatus(settings);
     syncStatus(settings);
 }
 
@@ -300,6 +321,25 @@ export function bindTacticalCombatSettings(deps) {
         }
     }
 
+    const classifier = el('rpg_tactical_combat_classifier');
+    if (classifier) {
+        classifier.addEventListener('input', () => {
+            settings.tacticalCombatClassifierJson = String(classifier.value || '');
+            save();
+            classifierStatus(settings);
+        });
+        const reset = el('rpg_tactical_combat_classifier_reset');
+        if (reset) {
+            reset.addEventListener('click', (event) => {
+                event.preventDefault();
+                settings.tacticalCombatClassifierJson = DEFAULT_LOADOUT_CLASSIFIER_JSON;
+                classifier.value = DEFAULT_LOADOUT_CLASSIFIER_JSON;
+                save();
+                classifierStatus(settings);
+            });
+        }
+    }
+
     const openBtn = el('rpg_tactical_combat_open');
     if (openBtn) {
         openBtn.addEventListener('click', (event) => {
@@ -344,6 +384,9 @@ export function bindTacticalCombatSettings(deps) {
         document.addEventListener('rt_tactical_combat_changed', () => syncStatus(depsRef?.settings));
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) catalogStatus(depsRef.settings);
+        });
+        document.addEventListener('rt_tactical_combat_changed', () => {
+            if (depsRef?.settings) classifierStatus(depsRef.settings);
         });
     }
     syncControls(settings);

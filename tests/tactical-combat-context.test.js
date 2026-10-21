@@ -259,6 +259,50 @@ Other Items:
         expect(payload.party[0].inventory[0].name).toBe('Yato');
     });
 
+    it('applies user-edited classifier rules and buff defaults to the loadout', () => {
+        const memo = `[CHARACTER]
+Corrin (Manakete): 68/68 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Dragon Breath (Exhale a cone of draconic energy; 1/1 per rest)
+[/ABILITIES]
+
+[INVENTORY]
+Other Items:
+- Relic of Tides (Unleash a wave; 1/1)
+[/INVENTORY]`;
+        const classifier = {
+            skillRules: [{ kind: 'buff', keywords: ['dragon breath'] }],
+            buff: { acBonus: 5, attackBonus: 3, rounds: 4, acKeywords: ['dragon'], attackKeywords: ['dragon'] },
+            items: {
+                usableKeywords: ['relic'],
+                healingKeywords: [],
+                specialItemKeywords: ['relic'],
+            },
+        };
+        const context = collectEncounterContext({
+            ...BASE_SETTINGS,
+            currentMemo: memo,
+            tacticalCombatClassifierJson: JSON.stringify(classifier),
+        }, { name1: 'Corrin', chatId: 'classifier', chat: [] });
+        const skill = context.playerUnits[0].skills.find(entry => entry.name === 'Dragon Breath');
+        expect(skill).toMatchObject({ kind: 'buff', acBonus: 5, attackBonus: 3, rounds: 4 });
+        const item = context.playerUnits[0].items.find(entry => entry.name === 'Relic of Tides');
+        expect(item).toMatchObject({ kind: 'special' });
+    });
+
+    it('falls back to the shipped classifier when the setting is invalid', () => {
+        const memo = `[CHARACTER]\nCorrin (Manakete): 10/10 HP\n[/CHARACTER]\n[ABILITIES]\n- Cure Wounds (Restore 1d8 HP; 1/1)\n[/ABILITIES]`;
+        const context = collectEncounterContext({
+            ...BASE_SETTINGS,
+            currentMemo: memo,
+            tacticalCombatClassifierJson: '{"skillRules": broken}',
+        }, { name1: 'Corrin', chatId: 'bad-classifier', chat: [] });
+        expect(context.playerUnits[0].skills.find(entry => entry.name === 'Cure Wounds').kind).toBe('heal');
+    });
+
     it('fails clearly when existing-only mode has no active [COMBAT] block', () => {
         const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: '' }, { name1: 'Rook', chatId: 'empty', chat: [] });
         expect(() => buildEncounterFromContext(context, {

@@ -25,6 +25,7 @@ import {
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from '../features/tactical-combat/tactical-combat-prompts.js';
 import { DEFAULT_TACTICAL_ACTION_CATALOG_JSON } from '../features/tactical-combat/tactical-combat-constants.js';
+import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tactical-combat-classifiers.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
     DEFAULT_ROUTER_COMBAT_PROFILE_GUIDANCE_AGENT,
@@ -210,6 +211,7 @@ export function buildDefaultSettings() {
         tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT,
         tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
         tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
+        tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON,
         tacticalCombatByChat: {},
         tacticalCombatReturn: null,
 

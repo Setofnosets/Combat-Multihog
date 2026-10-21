@@ -2524,6 +2524,26 @@
 
                     <div class="inline-drawer">
                         <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-tags" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Loadout Classifiers</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-settings-note">Controls how parsed abilities, spells, and items are classified before an encounter. <code>skillRules</code> are checked in order; the first keyword match wins, and unmatched skills become attacks. <code>buff</code> sets the default AC/attack bonuses and duration. <code>items</code> controls which inventory lines become usable consumables. Invalid JSON falls back to the shipped rules.</div>
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_classifier">Loadout classifier rules (JSON)</label>
+                                <textarea id="rpg_tactical_combat_classifier" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
+                                <div id="rpg_tactical_combat_classifier_status" class="rt-tc-setting-status"></div>
+                                <div class="rt-tc-settings-actions">
+                                    <button type="button" id="rpg_tactical_combat_classifier_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset classifier rules</button>
+                                </div>
+                            </div>
+                            <div class="rt-tc-settings-note">Changes apply to the next encounter. Already-created encounters keep the skills/items they were built with.</div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
                             <i class="fa-solid fa-key" style="margin-right: 6px; opacity: 0.65;"></i>
                             <b>Terrain Key</b>
                             <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>

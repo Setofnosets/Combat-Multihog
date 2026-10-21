@@ -35,6 +35,7 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 | **Prompt Templates** | Editable tactical agent, encounter architect, outcome-to-narration, and special-ability resolver prompts. Reset restores the shipped template. |
 | **Special ability resolver prompt** | Used only when a non-standard ability/spell/item is cast. Converts freeform effects (summoning, terrain, control) into engine primitives. |
 | **Action Catalogue & Game State** | JSON editor for the legal action vocabulary. Labels/descriptions can be changed; `"enabled": false` removes an action from the board and the agent contract. Unknown action types are rejected at runtime. |
+| **Loadout Classifiers** | JSON editor for ability/spell classification rules, buff AC/attack/duration defaults, ranged/bonus-action keywords, and inventory consumable/healing/special keywords. |
 | **Terrain Key** | Static reference for every terrain type, colour, glyph, and effect. |
 
 All tactical settings are global. Each chat gets its own board, stored in `extension_settings.rpg_tracker.tacticalCombatByChat[chatId]`.
@@ -92,6 +93,36 @@ Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra
 - The engine validates and applies those primitives, consumes the action/uses, and writes the combat log.
 
 This keeps token usage limited to the rare ability that actually needs adjudication; ordinary rounds never call the resolver.
+
+### Loadout classifiers
+
+**Settings → Tactical Combat → Loadout Classifiers** exposes the JSON used by the memo parser:
+
+```json
+{
+  "skillRules": [
+    { "kind": "heal", "keywords": ["heal", "cure", "restore"] },
+    { "kind": "special", "keywords": ["summon", "terrain", "transform"] },
+    { "kind": "buff", "keywords": ["bless", "shield", "haste"] }
+  ],
+  "buff": {
+    "acBonus": 2,
+    "attackBonus": 1,
+    "rounds": 2,
+    "acKeywords": ["shield", "ward", "armor"],
+    "attackKeywords": ["bless", "inspire", "haste"]
+  },
+  "rangedKeywords": ["ranged", "bolt", "arrow", "ray"],
+  "bonusActionKeyword": "bonus action",
+  "items": {
+    "usableKeywords": ["potion", "scroll", "bomb"],
+    "healingKeywords": ["potion", "heal", "cure"],
+    "specialItemKeywords": ["scroll", "bomb", "poison"]
+  }
+}
+```
+
+`skillRules` are evaluated in order; the first keyword match decides `heal`, `buff`, or `special`, and unmatched abilities become `attack`. The `buff` block sets the actual AC bonus, attack bonus, and duration applied by parsed buffs. Inventory keywords decide which lines become usable healing items versus special items. Invalid JSON falls back to the shipped rules and shows an error in the settings tab. Changes apply to the next encounter.
 
 ### Narrator tool
 

@@ -39,6 +39,9 @@ describe('Tactical Combat settings tab contract', () => {
             'rpg_tactical_combat_action_catalog',
             'rpg_tactical_combat_action_catalog_reset',
             'rpg_tactical_combat_catalog_status',
+            'rpg_tactical_combat_classifier',
+            'rpg_tactical_combat_classifier_reset',
+            'rpg_tactical_combat_classifier_status',
             'rpg_tactical_combat_status',
             'rpg_tactical_combat_open',
             'rpg_tactical_combat_start',
@@ -105,6 +108,7 @@ describe('Tactical Combat settings tab contract', () => {
             'tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT',
             'tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT',
             'tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON',
+            'tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON',
             'tacticalCombatByChat: {}',
             'tacticalCombatReturn: null',
         ]) {

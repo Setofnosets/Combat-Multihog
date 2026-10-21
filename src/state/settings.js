@@ -1628,6 +1628,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'tacticalCombatOutcomePrompt',
     'tacticalCombatSpecialPrompt',
     'tacticalCombatActionCatalogJson',
+    'tacticalCombatClassifierJson',
     'tacticalCombatByChat',
     'tacticalCombatReturn',
     // Tick targeting is operational campaign state: mapped roots differ by chat.

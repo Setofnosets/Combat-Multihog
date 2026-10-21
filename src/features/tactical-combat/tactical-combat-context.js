@@ -9,6 +9,15 @@
 import { parseCombatants, isResolvedCombatantStatusLine } from '../../state/combat-persistence.js';
 import { createEncounterState } from './tactical-combat-engine.js';
 import {
+    DEFAULT_LOADOUT_CLASSIFIER_CONFIG,
+    buffModifiers,
+    classifyAbility,
+    getLoadoutClassifier,
+    isBonusAction,
+    isRangedAbility,
+    matchesAny,
+} from './tactical-combat-classifiers.js';
+import {
     TC_DYNAMIC_MAX,
     TC_DYNAMIC_MIN,
     TC_TERRAIN_THEME_CONFIG,
@@ -82,14 +91,6 @@ function parseAttributes(lines) {
     };
 }
 
-function classifySkillKind(name, description) {
-    const text = `${name} ${description}`.toLowerCase();
-    if (/\b(heal|cure|restore|mend|regenerat|reviv|recover|second wind|potion)\b/.test(text)) return 'heal';
-    if (/\b(summon|conjure|terrain|vein|shapechange|teleport|banish|create|wall of|pillar|hydrokinesis|illusion|charm|dominate|stun|paralyze|petrify|fear|prestidigitation|thaumaturgy|druidcraft|minor illusion|mage hand|message|light|transform|transformation|polymorph)\b/.test(text)) return 'special';
-    if (/\b(bless|shield|ward|guard|haste|inspire|rage|protect|sanctuary|invisib|mirror image|resist|aura)\b/.test(text)) return 'buff';
-    return 'attack';
-}
-
 function parseUses(text, fallback = 1) {
     const source = String(text || '');
     const slash = source.match(/(\d+)\s*\/\s*(\d+)/);
@@ -108,14 +109,12 @@ function buildSkillFromName(name, description, options = {}) {
     const cleanedName = cleanText(name).slice(0, 80);
     if (!cleanedName || cleanedName.length < 2) return null;
     if (/^(level|cantrips?|spells?|abilities)$/i.test(cleanedName)) return null;
-    const kind = options.kind || classifySkillKind(cleanedName, description);
-    const combined = `${cleanedName} ${description}`;
-    const ranged = /(ranged|range|ranged attack|at range|bolt|arrow|missile|blast|ray|cone|line|ft\.?)/i.test(combined)
-        || options.ranged === true;
+    const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
+    const kind = options.kind || classifyAbility(cleanedName, description, classifier);
+    const ranged = isRangedAbility(cleanedName, description, classifier) || options.ranged === true;
     const damage = kind === 'attack' ? (parseDice(description) || options.defaultDamage || '1d8') : '';
     const heal = kind === 'heal' ? (parseDice(description) || '1d8+2') : '';
-    const acBonus = kind === 'buff' && /(shield|ward|guard|protect|armor|barrier|sanctuary)/i.test(combined) ? 2 : 0;
-    const attackBonus = kind === 'buff' && /(bless|inspire|haste|rage)/i.test(combined) ? 1 : 0;
+    const buff = kind === 'buff' ? buffModifiers(cleanedName, description, classifier) : { acBonus: 0, attackBonus: 0, rounds: 2 };
     return {
         id: `skill-${cleanedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`,
         name: cleanedName,
@@ -125,16 +124,16 @@ function buildSkillFromName(name, description, options = {}) {
         range: kind === 'attack' ? (ranged ? 6 : 1) : kind === 'special' ? (options.range == null ? 6 : clampInt(options.range, 1, 24)) : (ranged ? 6 : 0),
         damage,
         heal,
-        acBonus,
-        attackBonus,
-        bonusAction: /bonus action/i.test(description),
-        rounds: 2,
+        acBonus: buff.acBonus,
+        attackBonus: buff.attackBonus,
+        bonusAction: isBonusAction(description, classifier),
+        rounds: buff.rounds,
         maxUses: parseUses(description, options.defaultUses || 1),
         uses: parseUses(description, options.defaultUses || 1),
     };
 }
 
-function parseAbilities(lines, existingNames = new Set()) {
+function parseAbilities(lines, existingNames = new Set(), classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const line = findLine(lines, /^Abilities:/i);
     if (!line) return [];
     const source = line.replace(/^Abilities:\s*/i, '');
@@ -142,7 +141,7 @@ function parseAbilities(lines, existingNames = new Set()) {
     let match;
     ABILITY_RX.lastIndex = 0;
     while ((match = ABILITY_RX.exec(source))) {
-        const skill = buildSkillFromName(match[1], match[2], { defaultUses: 1 });
+        const skill = buildSkillFromName(match[1], match[2], { defaultUses: 1, classifier });
         if (skill && !existingNames.has(skill.name.toLowerCase())) {
             skills.push(skill);
             existingNames.add(skill.name.toLowerCase());
@@ -152,7 +151,7 @@ function parseAbilities(lines, existingNames = new Set()) {
     if (!skills.length) {
         // Fallback for comma-separated abilities without parenthetical descriptions.
         for (const part of source.split(/[|;]/).map(cleanText).filter(Boolean).slice(0, 4)) {
-            const skill = buildSkillFromName(part, '', { defaultUses: 1 });
+            const skill = buildSkillFromName(part, '', { defaultUses: 1, classifier });
             if (skill && !existingNames.has(skill.name.toLowerCase())) {
                 skills.push(skill);
                 existingNames.add(skill.name.toLowerCase());
@@ -162,7 +161,7 @@ function parseAbilities(lines, existingNames = new Set()) {
     return skills;
 }
 
-function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6) {
+function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6, classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const skills = [];
     for (const rawLine of lines || []) {
         let line = String(rawLine || '').trim();
@@ -182,6 +181,7 @@ function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6) {
                 range: 6,
                 defaultUses: isCantrip ? 9 : parseUses(usage, 2),
                 defaultDamage: isCantrip ? '1d10' : '2d6',
+                classifier,
             });
             if (skill && !existingNames.has(skill.name.toLowerCase())) {
                 skills.push(skill);
@@ -194,11 +194,11 @@ function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6) {
     return skills;
 }
 
-function parseSpells(lines, existingNames = new Set()) {
-    return parseSpellLines(lines, existingNames, 6);
+function parseSpells(lines, existingNames = new Set(), classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
+    return parseSpellLines(lines, existingNames, 6, classifier);
 }
 
-function parseStandaloneAbilities(memo, existingNames = new Set()) {
+function parseStandaloneAbilities(memo, existingNames = new Set(), classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const content = parseMemoBlock(memo, 'ABILITIES');
     if (!content) return [];
     const skills = [];
@@ -208,7 +208,7 @@ function parseStandaloneAbilities(memo, existingNames = new Set()) {
         const match = line.match(/^(.+?)\s*\((.*)\)\s*$/);
         const name = match ? match[1] : line;
         const description = match ? match[2] : '';
-        const skill = buildSkillFromName(name, description, { defaultUses: 1, range: 6 });
+        const skill = buildSkillFromName(name, description, { defaultUses: 1, range: 6, classifier });
         if (skill && !existingNames.has(skill.name.toLowerCase())) {
             skills.push(skill);
             existingNames.add(skill.name.toLowerCase());
@@ -218,10 +218,10 @@ function parseStandaloneAbilities(memo, existingNames = new Set()) {
     return skills;
 }
 
-function parseStandaloneSpells(memo, existingNames = new Set()) {
+function parseStandaloneSpells(memo, existingNames = new Set(), classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const content = parseMemoBlock(memo, 'SPELLS');
     if (!content) return [];
-    return parseSpellLines(content.split(/\r?\n/), existingNames, 8);
+    return parseSpellLines(content.split(/\r?\n/), existingNames, 8, classifier);
 }
 
 function parseGear(lines) {
@@ -298,6 +298,7 @@ function inferLevel(lines, maxHp) {
  * @returns {object|null}
  */
 export function parseStatSheet(name, classLabel, lines, side, options = {}) {
+    const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const sourceLines = (lines || []).map(line => String(line || '').trim()).filter(Boolean);
     if (!sourceLines.length) return null;
     const joined = sourceLines.join('\n');
@@ -332,8 +333,8 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
 
     const skillNames = new Set();
     const skills = [
-        ...parseAbilities(sourceLines, skillNames),
-        ...parseSpells(sourceLines, skillNames),
+        ...parseAbilities(sourceLines, skillNames, classifier),
+        ...parseSpells(sourceLines, skillNames, classifier),
     ].slice(0, 8);
 
     const traits = findLine(sourceLines, /^Traits:/i);
@@ -389,7 +390,8 @@ function splitPartyEntries(content) {
  * @param {{ name1?: string, chat?: object[] }} [ctx]
  * @returns {object[]}
  */
-export function parsePlayerUnits(memo, ctx = {}) {
+export function parsePlayerUnits(memo, ctx = {}, options = {}) {
+    const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const units = [];
     const characterContent = parseMemoBlock(memo, 'CHARACTER');
     if (characterContent) {
@@ -399,7 +401,7 @@ export function parsePlayerUnits(memo, ctx = {}) {
             const parsed = parseNameClass(header);
             const fallbackName = ctx.name1 || 'Player';
             const rawName = String(parsed.name || fallbackName).replace(/\{\{user\}\}/gi, fallbackName);
-            const unit = parseStatSheet(rawName || fallbackName, parsed.classLabel, entry.lines, 'player');
+            const unit = parseStatSheet(rawName || fallbackName, parsed.classLabel, entry.lines, 'player', { classifier });
             if (unit && unit.hp > 0 && !unit._defeated) units.push(unit);
         }
     }
@@ -409,7 +411,7 @@ export function parsePlayerUnits(memo, ctx = {}) {
         for (const entry of splitPartyEntries(partyContent)) {
             const parsed = parseNameClass(entry.lines[0] || '');
             if (!parsed.name) continue;
-            const unit = parseStatSheet(parsed.name, parsed.classLabel, entry.lines, 'player');
+            const unit = parseStatSheet(parsed.name, parsed.classLabel, entry.lines, 'player', { classifier });
             if (unit && unit.hp > 0 && !unit._defeated) units.push(unit);
         }
     }
@@ -428,7 +430,8 @@ export function parsePlayerUnits(memo, ctx = {}) {
  * @param {string} memo
  * @returns {{ enemies: object[], allies: object[] }}
  */
-export function parseCombatUnits(memo) {
+export function parseCombatUnits(memo, options = {}) {
+    const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const content = parseMemoBlock(memo, 'COMBAT');
     if (!content || /^END_COMBAT$/i.test(content.trim())) return { enemies: [], allies: [] };
     const entities = parseCombatants(content);
@@ -440,7 +443,7 @@ export function parseCombatUnits(memo) {
         const parsedHeader = header.match(HP_HEADER_RX);
         const rawName = parsedHeader ? parsedHeader[1].trim() : entity.name;
         const parsed = parseNameClass(rawName);
-        const unit = parseStatSheet(parsed.name, parsed.classLabel, entity.lines, side);
+        const unit = parseStatSheet(parsed.name, parsed.classLabel, entity.lines, side, { classifier });
         if (!unit) continue;
         if (unit.hp <= 0 || unit._defeated) continue;
         (side === 'ally' ? allies : enemies).push(unit);
@@ -455,11 +458,12 @@ export function parseCombatUnits(memo) {
  * @param {string} memo
  * @returns {{ items: object[], inventory: object[] }}
  */
-export function parseInventoryLoadout(memo) {
+export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const content = parseMemoBlock(memo, 'INVENTORY');
     const items = [];
     const inventory = [];
     if (!content) return { items, inventory };
+    const itemRules = classifier?.items || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.items;
     let section = 'other';
     const seen = new Set();
     for (const rawLine of content.split(/\r?\n/)) {
@@ -490,10 +494,10 @@ export function parseInventoryLoadout(memo) {
             seen.add(key);
             inventory.push({ name, description, section, equipped, rarity, quantity });
         }
-        const usable = /\b(potion|elixir|tonic|salve|remedy|antidote|scroll|bomb|flask|powder|poison|poultice|ration|food)\b/i.test(name);
+        const usable = matchesAny(name, itemRules.usableKeywords);
         if (!usable) continue;
-        const healing = /\b(potion|elixir|tonic|salve|remedy|antidote|heal|cure|restore|poultice|ration|food)\b/i.test(`${name} ${description}`);
-        if (!healing && !/\b(scroll|bomb|flask|powder|poison)\b/i.test(name)) continue;
+        const healing = matchesAny(`${name} ${description}`, itemRules.healingKeywords);
+        if (!healing && !matchesAny(name, itemRules.specialItemKeywords)) continue;
         const id = `item-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
         if (items.some(item => item.id === id)) continue;
         items.push(healing ? {
@@ -525,8 +529,8 @@ export function parseInventoryLoadout(memo) {
  * @param {string} memo
  * @returns {object[]}
  */
-export function parseInventoryItems(memo) {
-    return parseInventoryLoadout(memo).items;
+export function parseInventoryItems(memo, classifier = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
+    return parseInventoryLoadout(memo, classifier).items;
 }
 
 function fallbackSkills(side, classLabel = '') {
@@ -661,13 +665,14 @@ export function resolveTerrainTheme(settings, context) {
 export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : {})) {
     const memo = String(settings?.currentMemo || '');
     const movement = clampIntOr(settings?.tacticalCombatMovement, 6, 1, 24);
-    const characterUnits = parsePlayerUnits(memo, ctx);
-    const { enemies, allies } = parseCombatUnits(memo);
-    const { items: inventoryItems, inventory } = parseInventoryLoadout(memo);
+    const classifier = getLoadoutClassifier(settings).config;
+    const characterUnits = parsePlayerUnits(memo, ctx, { classifier });
+    const { enemies, allies } = parseCombatUnits(memo, { classifier });
+    const { items: inventoryItems, inventory } = parseInventoryLoadout(memo, classifier);
     const standaloneNames = new Set();
     const standaloneSkills = [
-        ...parseStandaloneAbilities(memo, standaloneNames),
-        ...parseStandaloneSpells(memo, standaloneNames),
+        ...parseStandaloneAbilities(memo, standaloneNames, classifier),
+        ...parseStandaloneSpells(memo, standaloneNames, classifier),
     ];
     const playerUnits = characterUnits.length ? characterUnits : [buildFallbackPlayer(ctx, movement)];
 
