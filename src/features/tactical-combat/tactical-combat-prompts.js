@@ -99,6 +99,7 @@ Allowed effects (use at most 6 total):
 - {"type":"damage","targetId":"enemy-1","amount":"2d6"}
 - {"type":"heal","targetId":"pc-1","amount":"2d8"}
 - {"type":"status","targetId":"enemy-1","label":"Restrained","rounds":2,"acBonus":0,"attackBonus":0,"damage":"1d4"}
+- {"type":"cure","targetId":"pc-1"}
 - {"type":"terrain","terrain":"water","cells":[{"x":4,"y":5},{x:5,"y":5}]}
 - {"type":"summon","name":"Water Pillar","maxHp":12,"ac":13,"attackBonus":4,"damage":"1d8","attackRange":6}
 - {"type":"log","text":"Optional extra sentence."}
@@ -108,7 +109,7 @@ Allowed effects (use at most 6 total):
 2. Only target ids present in the supplied units. Only use terrain ids from the supplied legend. Cells must be inside the grid.
 3. Summons join the caster's side and act from the next round. Give them concrete HP, AC, attack bonus, damage, and range. Do not summon more than one unit per resolution.
 4. Terrain changes are permanent for the encounter. Use them for walls, water, high ground, hazards, cover, or rubble when the ability explicitly reshapes the battlefield.
-5. If the ability is defensive or utility, prefer heal/status/terrain/log over damage. If no mechanical effect is appropriate, return one log effect and no damage.
+5. Use cure to remove statuses/curses/maladies from a target. If the ability is defensive or utility, prefer heal/status/terrain/cure/log over damage. If no mechanical effect is appropriate, return one log effect and no damage.
 6. Never invent player actions, narrative consequences outside the fight, or extra turns. The engine validates everything and may reject effects.`;
 
 /**

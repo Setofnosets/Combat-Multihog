@@ -70,6 +70,8 @@ describe('Tactical Combat narrator function tool', () => {
         expect(hooksSource).toContain('stealth: true');
         expect(hooksSource).toContain("source: 'existing'");
         expect(hooksSource).toContain('export function syncTacticalCombatToolRegistration');
+        expect(hooksSource).toContain('buildTacticalCombatRuntimeOverride');
+        expect(hooksSource).toContain('[TACTICAL_COMBAT_OVERRIDE]');
         expect(indexSource).toContain('MESSAGE_SENT, () => syncTacticalCombatToolRegistration()');
         expect(uiSource).toContain('if (!options.fromNarrator) void runEnemyTurnForState');
 

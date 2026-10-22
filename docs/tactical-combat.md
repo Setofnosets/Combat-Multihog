@@ -68,7 +68,7 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
 - **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, and bonus-action usage. A class-appropriate fallback skill is granted if nothing parses.
 - **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
-- **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` are parsed independently of `[CHARACTER]`. Both the encounter architect and the combat agent receive the party's abilities, spells, consumables, and full inventory context. Gear in `[INVENTORY]` is passed as context; consumables/scrolls become usable board items.
+- **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` are parsed independently of `[CHARACTER]`. Both the encounter architect and the combat agent receive the party's abilities, spells, consumables, and full inventory context. Gear and other inventory entries are passed as context and shown in the board's Inventory panel; consumables/scrolls/vials become usable board items. Items such as a Restoration Vial use the special resolver with `cure` effects.
 - **Defeat**: a unit at 0 HP is defeated and remains on the board as a faded corpse. Victory = every enemy defeated. Defeat = every player unit defeated. Retreat = every player unit fled or the player presses Retreat.
 - **Hazards** damage all units standing on them at the start of each round.
 - **Statuses** tick at the start of each round; damage-over-time effects are applied then. Defend grants +4 AC for the current round.
@@ -93,6 +93,15 @@ Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra
 - The engine validates and applies those primitives, consumes the action/uses, and writes the combat log.
 
 This keeps token usage limited to the rare ability that actually needs adjudication; ordinary rounds never call the resolver.
+
+### Combat override
+
+While Tactical Combat is enabled, ordinary narrative combat is disabled:
+
+- The normal `<combat>` system-prompt section is replaced by a **TACTICAL COMBAT OVERRIDE** that forbids narrating attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+- If a fight begins before `[COMBAT]` exists, the narrator may describe only the **opening preamble** and must stop before resolving any combat action. The State Tracker then writes `[COMBAT]`.
+- On the next response, the narrator is instructed to call `StartTacticalCombat` once (or, if the component/tool is disabled, to ask the player to open the board).
+- A runtime `[TACTICAL_COMBAT_OVERRIDE]` block is injected on every prompt while `[COMBAT]` is active and no board encounter is running, so this also holds for custom sysprompts.
 
 ### Loadout classifiers
 

@@ -16,7 +16,7 @@ function makeState() {
         turnStyle: 'phase',
         movement: 6,
         units: [
-            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 22, ac: 15, attackBonus: 5, damage: '1d8+3', initiativeBonus: 3, items: [{ id: 'potion', name: 'Potion', kind: 'heal', amount: '2d4+2', uses: 2, maxUses: 2, range: 0 }], skills: [{ id: 'firebolt', name: 'Firebolt', kind: 'attack', range: 6, damage: '1d10', uses: 3, maxUses: 3 }] },
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 22, ac: 15, attackBonus: 5, damage: '1d8+3', initiativeBonus: 3, items: [{ id: 'potion', name: 'Potion', kind: 'heal', amount: '2d4+2', uses: 2, maxUses: 2, range: 0 }], skills: [{ id: 'firebolt', name: 'Firebolt', kind: 'attack', range: 6, damage: '1d10', uses: 3, maxUses: 3 }], inventory: [{ name: 'Yato +1', description: '1d8+1 Slashing', equipped: true, rarity: 'Legendary' }, { name: 'Restoration Vial', description: 'Clears curses and maladies', equipped: false, rarity: 'Uncommon' }] },
             { id: 'pc-2', name: 'Borin', side: 'player', maxHp: 40, hp: 40, ac: 17, attackBonus: 4, damage: '1d10+2', initiativeBonus: 1 },
             { id: 'enemy-3', name: 'Goblin Archer', side: 'enemy', maxHp: 12, hp: 12, ac: 13, attackBonus: 5, damage: '1d6+2', attackRange: 6 },
         ],
@@ -78,6 +78,9 @@ describe('tactical combat markup', () => {
         expect(html).toContain('data-tc-action="flee"');
         expect(html).toContain('Firebolt');
         expect(html).toContain('Potion');
+        expect(html).toContain('rt-tc-inventory');
+        expect(html).toContain('Yato +1');
+        expect(html).toContain('Restoration Vial');
         expect(html).toContain('End player phase');
         expect(html).toContain('Retreat');
         expect(html).toContain('Combat log');

@@ -43,9 +43,9 @@ export const DEFAULT_LOADOUT_CLASSIFIER_CONFIG = {
     rangedKeywords: ['ranged', 'range', 'ranged attack', 'at range', 'bolt', 'arrow', 'missile', 'blast', 'ray', 'cone', 'line', 'ft'],
     bonusActionKeyword: 'bonus action',
     items: {
-        usableKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'scroll', 'bomb', 'flask', 'powder', 'poison', 'poultice', 'ration', 'food'],
+        usableKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'scroll', 'bomb', 'flask', 'powder', 'poison', 'poultice', 'ration', 'food', 'vial', 'restoration', 'curative', 'draught'],
         healingKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'heal', 'cure', 'restore', 'poultice', 'ration', 'food'],
-        specialItemKeywords: ['scroll', 'bomb', 'flask', 'powder', 'poison'],
+        specialItemKeywords: ['scroll', 'bomb', 'flask', 'powder', 'poison', 'vial', 'restoration', 'curative', 'draught', 'curse', 'malady', 'condition'],
     },
 };
 
@@ -119,9 +119,9 @@ export function normalizeClassifierConfig(raw) {
         rangedKeywords: keywordList(value.rangedKeywords, defaults.rangedKeywords),
         bonusActionKeyword: String(value.bonusActionKeyword || defaults.bonusActionKeyword).trim().toLowerCase() || defaults.bonusActionKeyword,
         items: {
-            usableKeywords: keywordList(items.usableKeywords, defaults.items.usableKeywords),
-            healingKeywords: keywordList(items.healingKeywords, defaults.items.healingKeywords),
-            specialItemKeywords: keywordList(items.specialItemKeywords, defaults.items.specialItemKeywords),
+            usableKeywords: [...new Set([...keywordList(items.usableKeywords, defaults.items.usableKeywords), ...defaults.items.usableKeywords])],
+            healingKeywords: [...new Set([...keywordList(items.healingKeywords, defaults.items.healingKeywords), ...defaults.items.healingKeywords])],
+            specialItemKeywords: [...new Set([...keywordList(items.specialItemKeywords, defaults.items.specialItemKeywords), ...defaults.items.specialItemKeywords])],
         },
     };
     return { ok: true, config, error: '', usingDefault: false };
@@ -139,6 +139,24 @@ export function getLoadoutClassifier(settings) {
 export function matchesAny(text, keywords) {
     const source = String(text || '').toLowerCase();
     return (keywords || []).some(keyword => keyword && source.includes(keyword));
+}
+
+/**
+ * Word-aware match for short inventory keywords. Allows common suffixes
+ * (heal/healing, cure/cures, ration/rations) without matching a keyword inside
+ * an unrelated word (ration inside Restoration).
+ * @param {string} text
+ * @param {string[]} keywords
+ * @returns {boolean}
+ */
+export function matchesAnyWord(text, keywords) {
+    const source = String(text || '').toLowerCase();
+    return (keywords || []).some(keyword => {
+        const clean = String(keyword || '').trim().toLowerCase();
+        if (!clean) return false;
+        const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`\\b${escaped}[a-z]{0,5}\\b`, 'i').test(source);
+    });
 }
 
 /**

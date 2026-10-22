@@ -76,8 +76,10 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 </combat>
 
 <tactical_combat>
-TACTICAL COMBAT TOOL
-When the story reaches an active combat encounter that should be played on the tactical board, call the StartTacticalCombat tool exactly once. Use it when a fight begins or when the current [COMBAT] encounter is clearly a set-piece battle; do not call it for ordinary exchanges, every round, or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief. After the tool opens the board, continue the narration briefly and let the player resolve the fight on the grid. Never resolve the battle or invent its outcome yourself.
+TACTICAL COMBAT OVERRIDE
+While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT].
+Once [COMBAT] is present, call the StartTacticalCombat tool exactly once, then wait for the player to resolve the fight on the grid. Do not call it every turn or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief.
 </tactical_combat>
 
 <end_of_output_footer>

@@ -219,11 +219,15 @@ Level 1 (2/2): Cure Wounds, Shield of Faith
 
 [INVENTORY]
 Gear:
-- ⚔️ [Epic] [E] Yato (1d8+3 Slashing, +2 to hit) (~5,000 GP)
-- 🐉 [Rare] [E] Dragonstone (Transformation focus; enables dragon form) (~2,500 GP)
-- 🛡️ [Uncommon] [E] Scale Armor (AC +3) (~150 GP)
+- 🗡️ [Legendary] [E] Yato +1 (1d8+1 Slashing, +1 to hit; the blade evolves and grows in power with its wielder) (~5,000 GP)
+- 🛡️ [Rare] [E] Vallite Scale Plate (AC +5, segmented scale-like plate with angular pauldrons) (~750 GP)
+- 💠 [Rare] [E] Dragonstone (Focus crystal required to trigger draconic transformation) (~2,000 GP)
 Other Items:
-- 💰 45 GP
+- 🧪 [Uncommon] Restoration Vial (Clears all curses and maladies when drunk; inky green-and-yellow swirling liquid) (~150 GP)
+- 🧣 [Common] Dark Blue Cape, lighter blue lining (~5 GP)
+- 🎵 [Common] Lute (~35 GP)
+- 📓 [Common] Sketchbook and charcoal sticks (~5 GP)
+- 💰 55 GP
 - 🧪 Healing Potion x2 [Common]
 [/INVENTORY]`;
         const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Corrin', chatId: 'loadout', chat: [] });
@@ -236,9 +240,13 @@ Other Items:
         expect(skills['Cure Wounds']).toMatchObject({ kind: 'heal' });
         expect(skills['Shield of Faith']).toMatchObject({ kind: 'buff' });
         expect(skills.Prestidigitation).toMatchObject({ kind: 'special' });
-        expect(corrin.inventory.map(entry => entry.name)).toEqual(expect.arrayContaining(['Yato', 'Dragonstone', 'Scale Armor']));
-        expect(corrin.inventory.map(entry => entry.name)).not.toContain('45 GP');
+        expect(corrin.inventory.map(entry => entry.name)).toEqual(expect.arrayContaining([
+            'Yato +1', 'Vallite Scale Plate', 'Dragonstone', 'Restoration Vial', 'Dark Blue Cape', 'Lute', 'Sketchbook and charcoal sticks',
+        ]));
+        expect(corrin.inventory.map(entry => entry.name)).not.toContain('55 GP');
+        expect(corrin.inventory.find(entry => entry.name === 'Dark Blue Cape')?.description).toBe('lighter blue lining');
         expect(corrin.items.map(item => item.name)).toContain('Healing Potion');
+        expect(corrin.items.find(item => item.name === 'Restoration Vial')).toMatchObject({ kind: 'special' });
     });
 
     it('passes abilities, spells, items, and inventory to the encounter architect payload', () => {

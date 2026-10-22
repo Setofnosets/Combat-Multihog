@@ -252,6 +252,16 @@ function renderUnitCard(state, view) {
             </button>`).join('')}</div>
     </div>` : '';
 
+    const inventory = unit.inventory || [];
+    const inventoryList = inventory.length ? `<details class="rt-tc-inventory">
+        <summary>Inventory <span>${inventory.length} item${inventory.length === 1 ? '' : 's'}</span></summary>
+        <div class="rt-tc-inventory-list">${inventory.map(entry => `
+            <div class="rt-tc-inventory-entry">
+                <div class="rt-tc-inventory-name">${escapeHtml(entry.name)}${entry.equipped ? ' <span class="rt-tc-inventory-equipped">E</span>' : ''}${entry.rarity ? ` <span class="rt-tc-inventory-rarity">${escapeHtml(entry.rarity)}</span>` : ''}</div>
+                ${entry.description ? `<div class="rt-tc-inventory-desc">${escapeHtml(entry.description)}</div>` : ''}
+            </div>`).join('')}</div>
+    </details>` : '';
+
     const sideBadge = `<span class="rt-tc-side-badge rt-tc-side-${unit.side}">${escapeHtml(TC_SIDE_LABELS[unit.side] || unit.side)}</span>`;
     const dead = unit.defeated ? '<span class="rt-tc-chip rt-tc-chip-danger">Defeated</span>' : unit.fled ? '<span class="rt-tc-chip">Fled</span>' : '';
     const canEndUnit = state.status === 'active' && state.turnStyle === 'initiative' && state.phase === 'player' && view.activeUnitId === unit.id && isPlayer;
@@ -288,6 +298,7 @@ function renderUnitCard(state, view) {
         ${view.mode === 'move' ? '<div class="rt-tc-hint">Choose a highlighted cell to move.</div>' : ''}
         ${skillList}
         ${itemList}
+        ${inventoryList}
         ${endUnit}
     </div>`;
 }

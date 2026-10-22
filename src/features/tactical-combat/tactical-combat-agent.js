@@ -508,7 +508,7 @@ export function normalizeSpecialEffects(value, state) {
     for (const raw of list) {
         if (!raw || typeof raw !== 'object') continue;
         const type = String(raw.type || '').toLowerCase();
-        if (type === 'damage' || type === 'heal' || type === 'status') {
+        if (type === 'damage' || type === 'heal' || type === 'status' || type === 'cure') {
             const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
@@ -522,6 +522,8 @@ export function normalizeSpecialEffects(value, state) {
                 const amount = String(raw.amount ?? raw.heal ?? '1d8+2').slice(0, 40);
                 if (!/\d/.test(amount)) { rejected.push('Heal effect needs a dice amount.'); continue; }
                 effects.push({ type, targetId: target.id, amount });
+            } else if (type === 'cure') {
+                effects.push({ type, targetId: target.id });
             } else {
                 effects.push({
                     type,

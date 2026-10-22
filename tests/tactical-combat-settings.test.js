@@ -137,9 +137,12 @@ describe('Tactical Combat settings tab contract', () => {
         expect(indexSource).toContain('syncTacticalCombatToolRegistration');
         expect(syspromptSource).toContain('<tactical_combat>');
         expect(syspromptSource).toContain('StartTacticalCombat');
+        expect(syspromptSource).toContain('TACTICAL COMBAT OVERRIDE');
         expect(settingsHtml).toContain('id="rpg_sysprompt_mod_tactical_combat"');
         expect(gameSystemsSource).toContain("tactical_combat: 'rpg_sysprompt_mod_tactical_combat'");
         expect(gameSystemsSource).toContain("tag === 'tactical_combat' && !settings.tacticalCombatEnabled");
+        expect(gameSystemsSource).toContain('TACTICAL_COMBAT_COMBAT_OVERRIDE');
+        expect(indexSource).toContain("row.tag === 'combat' && s.tacticalCombatEnabled");
         expect(defaultsSource).toContain('tactical_combat: true');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");

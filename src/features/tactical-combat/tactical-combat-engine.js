@@ -1139,7 +1139,7 @@ export function applySpecialEffects(state, effects, options = {}) {
             continue;
         }
         const type = String(effect.type || '').toLowerCase();
-        if (type === 'damage' || type === 'heal' || type === 'status') {
+        if (type === 'damage' || type === 'heal' || type === 'status' || type === 'cure') {
             const target = getUnitById(state, effect.targetId);
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${effect.targetId}".`);
@@ -1152,6 +1152,10 @@ export function applySpecialEffects(state, effects, options = {}) {
             } else if (type === 'heal') {
                 const healed = healUnit(state, target, rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total, label);
                 applied.push({ type, targetId: target.id, amount: healed });
+            } else if (type === 'cure') {
+                const removed = (target.statuses || []).map(status => status.label);
+                target.statuses = [];
+                applied.push({ type, targetId: target.id, removed });
             } else {
                 addStatus(target, {
                     id: String(effect.id || effect.label || label).slice(0, 40),
@@ -1683,6 +1687,11 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
                 maxHp: unit.maxHp,
                 ac: getEffectiveAc(state, unit),
                 statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds })),
+                inventory: (unit.inventory || []).slice(0, 20).map(entry => ({
+                    name: entry.name,
+                    equipped: !!entry.equipped,
+                    section: entry.section || '',
+                })),
                 defeated: unit.defeated,
                 fled: unit.fled,
             };

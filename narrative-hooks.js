@@ -630,6 +630,23 @@ function bindTacticalCombatToolSync() {
     document.addEventListener('rt_tactical_combat_changed', () => syncTacticalCombatToolRegistration());
 }
 
+/** Runtime prompt override: once [COMBAT] exists, regular combat narration is prohibited. */
+function buildTacticalCombatRuntimeOverride(settings) {
+    try {
+        if (!settings?.tacticalCombatEnabled) return '';
+        if (!isCombatActive(settings.currentMemo)) return '';
+        const chatId = getActiveChatId();
+        if (settings.tacticalCombatByChat?.[chatId]?.status === 'active') return '';
+        const hasTool = isEffectiveSectionEnabled('tactical_combat', settings);
+        const instruction = hasTool
+            ? 'Call the StartTacticalCombat function tool exactly once now. Do not narrate attacks, damage, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
+            : 'Do not narrate attacks, damage, initiative, saves, enemy turns, or any combat resolution. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns this fight.';
+        return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is enabled and [COMBAT] is active. ${instruction}\nNever continue a combat scene narratively while this override is present.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
+    } catch (_) {
+        return '';
+    }
+}
+
 function tacticalCombatToolConfigured() {
     try {
         const s = getSettings();
@@ -653,9 +670,10 @@ function tacticalCombatToolAvailable() {
 }
 
 /**
- * Keep the narrator tool registered only while a [COMBAT] block is active and
- * no tactical board encounter is running. This prevents providers that do not
- * honor shouldRegister from receiving the tool on ordinary chat turns.
+ * Keep the tool in the host registry whenever Tactical Combat and its narrator
+ * component are enabled. shouldRegister() limits actual exposure to active
+ * [COMBAT] turns; this sync removes it while a board encounter is running or
+ * during a failure cooldown.
  */
 export function syncTacticalCombatToolRegistration() {
     bindTacticalCombatToolSync();
@@ -1526,6 +1544,11 @@ export function installInterceptor() {
         // CYOA / pacing follow the State Tracker master toggle (same as Persistent Maps).
         if (!skipInjection && (settings.enabled || cyoaActive || pacingInject)) {
             if (settings.enabled) {
+                // Hard override: while [COMBAT] exists and the board is not open,
+                // the narrator must not resolve the fight itself.
+                const tacticalOverride = buildTacticalCombatRuntimeOverride(settings);
+                if (tacticalOverride) injections += tacticalOverride;
+
                 // [TACTICAL COMBAT RESULT] — authoritative aftermath from the board.
                 // It is one-shot: onGenerationEnded clears it after this generation.
                 const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());

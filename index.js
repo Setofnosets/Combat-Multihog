@@ -28,7 +28,7 @@ import { bindQuickStartEvents } from './quickstart.js';
 import { bindAdventureCompanion, bindAdventureCompanionSettingsDrawer, openAdventureCompanion, closeAdventureCompanion } from './adventure-companion.js';
 import { openDisplayGroupsManager } from './display-groups.js';
 import { handleCategorySettings, openCustomFieldEditor, openPromptEditor, refreshOrderList, exportModules, importModulesFromJson, openNpcSectionEditor, openPcSectionEditor } from './ui-editors.js';
-import { openGameSystemWizard, openManageGameSystems, openSystemPromptControlRoom, syncAllNarratorTogglesForUnlockState, extractTopLevelSections, normalizeSectionOrder, getSectionRowDescriptor, transformBaseSectionContent, isBlankSectionContent, isSectionUnlocked, isEffectiveSectionEnabled } from './game-systems.js';
+import { openGameSystemWizard, openManageGameSystems, openSystemPromptControlRoom, syncAllNarratorTogglesForUnlockState, extractTopLevelSections, normalizeSectionOrder, getSectionRowDescriptor, transformBaseSectionContent, isBlankSectionContent, isSectionUnlocked, isEffectiveSectionEnabled, TACTICAL_COMBAT_COMBAT_OVERRIDE, TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL } from './game-systems.js';
 import { isCyoaEnabled, isLorebookAgentRuntimeActive, setLocationMappingEnabled, LOCATION_MAPPING_SECTION_TAG } from './src/state/section-enabled.js';
 import {
     AGENT_CONNECTION_SETUPS,
@@ -5978,6 +5978,11 @@ export function buildSysprompt(rawText) {
         // CYOA is injected above the RNG queue by the generate interceptor — never into Main.
         if (row.tag === 'CYOA_mode') return '';
         if (row.tag === 'tactical_combat' && !s.tacticalCombatEnabled) return '';
+        if (row.tag === 'combat' && s.tacticalCombatEnabled) {
+            return isEffectiveSectionEnabled('tactical_combat', s)
+                ? TACTICAL_COMBAT_COMBAT_OVERRIDE
+                : TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL;
+        }
         if (row.kind === 'base') {
             return transformBaseSectionContent(row.tag, row.content, s);
         }

@@ -15,7 +15,7 @@ import {
     getLoadoutClassifier,
     isBonusAction,
     isRangedAbility,
-    matchesAny,
+    matchesAnyWord,
 } from './tactical-combat-classifiers.js';
 import {
     TC_DYNAMIC_MAX,
@@ -477,15 +477,20 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
         }
         const equipped = /\[E\]/i.test(line);
         const rarity = line.match(/\[(Common|Uncommon|Rare|Epic|Legendary|Artifact)\]/i)?.[1] || '';
-        const description = cleanText(line.match(/\(([^)]*)\)/)?.[1] || '');
-        const name = cleanText(
+        const parentheticals = [...line.matchAll(/\(([^)]*)\)/g)]
+            .map(match => cleanText(match[1]))
+            .filter(text => text && !/^~?\s*[\d,]+\s*GP$/i.test(text));
+        const cleanedNamePart = cleanText(
             line
                 .replace(/\[[^\]]*\]/g, '')
                 .replace(/\([^)]*\)/g, '')
                 .replace(/^[^A-Za-z0-9]+/, '')
                 .replace(/\s+(?:x|×)\s*\d+.*$/i, '')
                 .replace(/\s*[~–—-]\s*$/, ''),
-        ).slice(0, 80);
+        );
+        const [baseName, ...commaRest] = cleanedNamePart.split(',');
+        const name = cleanText(baseName).slice(0, 80);
+        const description = cleanText(parentheticals.join('; ') || commaRest.join(', '));
         if (!name || /^\d+\s*(?:gp|sp|cp|pp|gold|credits?)\b/i.test(name)) continue;
         const qtyMatch = line.match(/\b(?:x|×)\s*(\d+)\b/i) || line.match(/\((\d+)\)/);
         const quantity = qtyMatch ? clampInt(qtyMatch[1], 1, 20) : 1;
@@ -494,10 +499,10 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
             seen.add(key);
             inventory.push({ name, description, section, equipped, rarity, quantity });
         }
-        const usable = matchesAny(name, itemRules.usableKeywords);
+        const usable = matchesAnyWord(name, itemRules.usableKeywords);
         if (!usable) continue;
-        const healing = matchesAny(`${name} ${description}`, itemRules.healingKeywords);
-        if (!healing && !matchesAny(name, itemRules.specialItemKeywords)) continue;
+        const healing = matchesAnyWord(`${name} ${description}`, itemRules.healingKeywords);
+        if (!healing && !matchesAnyWord(name, itemRules.specialItemKeywords)) continue;
         const id = `item-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
         if (items.some(item => item.id === id)) continue;
         items.push(healing ? {

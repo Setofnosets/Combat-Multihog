@@ -306,9 +306,28 @@ export function extractTopLevelSections(rawText) {
     return sections;
 }
 
+/**
+ * When Tactical Combat is enabled, this replaces the ordinary narrative
+ * <combat> section so the narrator cannot run combat itself. The State Tracker
+ * still produces [COMBAT]; the tactical board owns the fight.
+ */
+export const TACTICAL_COMBAT_COMBAT_OVERRIDE = `<combat>
+TACTICAL COMBAT OVERRIDE
+All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT]. On the next response, call StartTacticalCombat exactly once and wait for the player to resolve the fight.
+If [COMBAT] is already present, call StartTacticalCombat immediately (once) and do not continue combat narration.
+</combat>`;
+
+export const TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL = `<combat>
+TACTICAL COMBAT OVERRIDE
+All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble and stop before resolving any combat action. The State Tracker will add [COMBAT].
+Once [COMBAT] is present, do not continue combat narration. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns the fight.
+</combat>`;
+
 // ─────────────────────────────────────────────────────────────────────────
 // System Prompt Control Room — ordering + row-resolution helpers.
-//
+// ─────────────────────────────────────────────────────────────────────────
 // Every top-level sysprompt section (built-in or custom) is addressed by a
 // stable string key: "base:<tag>" for one of the fixed sysprompt.txt tags,
 // or "lib:<id>" for a customSyspromptLibrary entry. settings.syspromptSectionOrder

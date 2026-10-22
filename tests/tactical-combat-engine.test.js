@@ -305,6 +305,22 @@ describe('tactical combat movement & actions', () => {
         expect(caster.actionUsed).toBe(false);
     });
 
+    it('cures statuses with a resolved special item effect', () => {
+        const state = makeState();
+        const caster = getUnitById(state, 'pc-1');
+        caster.statuses = [{ id: 'cursed', label: 'Cursed', rounds: 3, acBonus: -1, attackBonus: -1, damage: '' }];
+        caster.items.push({ id: 'restoration-vial', name: 'Restoration Vial', kind: 'special', maxUses: 1, uses: 1, range: 6 });
+        const result = applySpecialEffects(state, [{ type: 'cure', targetId: 'pc-1' }], {
+            casterId: 'pc-1',
+            itemId: 'restoration-vial',
+            label: 'Restoration Vial',
+        });
+        expect(result.ok).toBe(true);
+        expect(caster.statuses).toHaveLength(0);
+        expect(caster.items.find(item => item.id === 'restoration-vial').uses).toBe(0);
+        expect(caster.actionUsed).toBe(true);
+    });
+
     it('interprets an action list, stops on end, and rejects units outside the allow-list', () => {
         const state = makeState();
         state.units[2].hp = 1;
