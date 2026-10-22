@@ -10,6 +10,7 @@ import { registerTacticalCombatTool } from '../narrative-hooks.js';
 
 const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.url), 'utf8');
+const uiSource = readFileSync(new URL('../src/features/tactical-combat/tactical-combat-ui.js', import.meta.url), 'utf8');
 
 describe('Tactical Combat narrator function tool', () => {
     beforeEach(() => {
@@ -63,14 +64,17 @@ describe('Tactical Combat narrator function tool', () => {
         expect(hooksSource).toContain('isCombatActive(s.currentMemo)');
         expect(hooksSource).toContain('stealth: true');
         expect(hooksSource).toContain("source: 'existing'");
+        expect(hooksSource).toContain('export function syncTacticalCombatToolRegistration');
+        expect(indexSource).toContain('MESSAGE_SENT, () => syncTacticalCombatToolRegistration()');
+        expect(uiSource).toContain('if (!options.fromNarrator) void runEnemyTurnForState');
 
-        const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*registerTacticalCombatTool\(\);\s*syncLocationMappingRuntime\(\);/);
+        const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*syncTacticalCombatToolRegistration\(\);\s*syncLocationMappingRuntime\(\);/);
         expect(toolBlock).not.toBeNull();
 
         const settingsStart = indexSource.indexOf('initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });');
         const settingsEnd = indexSource.indexOf('organizeConnectionSettingsUI();', settingsStart);
         expect(settingsStart).toBeGreaterThan(-1);
         expect(settingsEnd).toBeGreaterThan(settingsStart);
-        expect(indexSource.slice(settingsStart, settingsEnd)).not.toContain('registerTacticalCombatTool');
+        expect(indexSource.slice(settingsStart, settingsEnd)).not.toContain('syncTacticalCombatToolRegistration');
     });
 });

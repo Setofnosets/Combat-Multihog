@@ -131,7 +131,7 @@ describe('Tactical Combat settings tab contract', () => {
 
     it('wires the tab, board install, connection binder, and chat-change reset in index.js', () => {
         expect(indexSource).toContain('installTacticalCombatUi');
-        expect(indexSource).toContain('registerTacticalCombatTool');
+        expect(indexSource).toContain('syncTacticalCombatToolRegistration');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");
         expect(indexSource).toContain("keyPrefix: 'tacticalCombat'");

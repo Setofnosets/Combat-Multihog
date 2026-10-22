@@ -621,6 +621,43 @@ export function syncLocationMappingRuntime() {
  * status string to the model.
  */
 let _tacticalCombatToolAttemptedAt = 0;
+let _tacticalCombatToolSyncBound = false;
+let _tacticalCombatToolRegistered = false;
+
+function bindTacticalCombatToolSync() {
+    if (_tacticalCombatToolSyncBound || typeof document === 'undefined') return;
+    _tacticalCombatToolSyncBound = true;
+    document.addEventListener('rt_tactical_combat_changed', () => syncTacticalCombatToolRegistration());
+}
+
+function tacticalCombatToolAvailable() {
+    try {
+        if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
+        const s = getSettings();
+        if (!s?.tacticalCombatEnabled) return false;
+        const chatId = getActiveChatId();
+        if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
+        return isCombatActive(s.currentMemo);
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * Keep the narrator tool registered only while a [COMBAT] block is active and
+ * no tactical board encounter is running. This prevents providers that do not
+ * honor shouldRegister from receiving the tool on ordinary chat turns.
+ */
+export function syncTacticalCombatToolRegistration() {
+    bindTacticalCombatToolSync();
+    try {
+        const available = tacticalCombatToolAvailable();
+        if (available && !_tacticalCombatToolRegistered) registerTacticalCombatTool();
+        else if (!available) unregisterTacticalCombatTool();
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not sync Tactical Combat tool registration:', error);
+    }
+}
 
 export function registerTacticalCombatTool() {
     try {
@@ -643,20 +680,10 @@ export function registerTacticalCombatTool() {
                 },
                 required: [],
             },
-            shouldRegister: () => {
-                try {
-                    if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
-                    const s = getSettings();
-                    if (!s?.tacticalCombatEnabled) return false;
-                    const chatId = getActiveChatId();
-                    if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
-                    return isCombatActive(s.currentMemo);
-                } catch (_) {
-                    return false;
-                }
-            },
+            shouldRegister: tacticalCombatToolAvailable,
             stealth: true,
             action: async args => {
+                unregisterTacticalCombatTool();
                 try {
                     const { startTacticalCombatFromNarrator } = await import('./src/features/tactical-combat/tactical-combat-ui.js');
                     const result = await startTacticalCombatFromNarrator(args || {}, { source: 'existing' });
@@ -669,6 +696,7 @@ export function registerTacticalCombatTool() {
             },
             formatMessage: () => '',
         });
+        _tacticalCombatToolRegistered = true;
     } catch (error) {
         console.warn('[RPG Tracker] Could not register Tactical Combat tool:', error);
     }
@@ -680,6 +708,7 @@ export function unregisterTacticalCombatTool() {
     } catch (error) {
         console.warn('[RPG Tracker] Could not unregister Tactical Combat tool:', error);
     }
+    _tacticalCombatToolRegistered = false;
 }
 
 export function registerDiceFunctionTool() {
@@ -2948,6 +2977,7 @@ export function isLatestAssistantFromActiveChar(chat, ctx) {
  * @param {boolean} [dryRun]
  */
 export function onGenerationStarted(type, _options, dryRun) {
+    syncTacticalCombatToolRegistration();
     if (dryRun === true) {
         recordSchedulerEvent('generation_started_dry_run', { generationType: type ?? null });
         return;
@@ -3056,6 +3086,7 @@ export function resetRouterAutoTick(reason = 'manual') {
  * a hard circular dep — it will be a direct import once memo-processor.js exists.
  */
 export async function onGenerationEnded() {
+    syncTacticalCombatToolRegistration();
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId);
     try {
         _rpgIsGenerating = false;

@@ -620,11 +620,11 @@ function handleSelectItem(itemId) {
     render();
 }
 
-function finishEncounter(state, settings) {
-    return finalizeIfEnded(state, settings);
+function finishEncounter(state, settings, options = {}) {
+    return finalizeIfEnded(state, settings, options);
 }
 
-function finalizeIfEnded(state, settings = getSettings()) {
+function finalizeIfEnded(state, settings = getSettings(), options = {}) {
     if (!state || state.status === 'active') return false;
     const chatId = getActiveChatId();
     if (!chatId) return true;
@@ -632,7 +632,7 @@ function finalizeIfEnded(state, settings = getSettings()) {
         queueCombatOutcome(state, settings, { persist: false, refresh: true });
         setEncounterForChat(chatId, state, settings);
         notifySettings();
-        if (settings.tacticalCombatAutoNarrate && !state.finalization.autoNarrateStarted) {
+        if (settings.tacticalCombatAutoNarrate && options.autoNarrate !== false && !state.finalization.autoNarrateStarted) {
             state.finalization.autoNarrateStarted = true;
             setEncounterForChat(chatId, state, settings);
             notifySettings();
@@ -930,9 +930,13 @@ async function startEncounterFlow(options = {}) {
         render();
         toast('success', warnings.length ? `Encounter ready. ${warnings[0]}` : 'Encounter ready.');
         if (state.status !== 'active') {
-            finishEncounter(state, settings);
+            finishEncounter(state, settings, { autoNarrate: !options.fromNarrator });
         } else if (state.phase === 'enemy' && getPendingAgentUnitIds(state).length) {
-            void runEnemyTurnForState(state, settings);
+            // Never call the combat agent from inside the narrator's tool call:
+            // it would make a nested provider request while the main generation is
+            // still running (a common source of 503s). The board's "Resolve enemy
+            // turn" button handles it once the narration finishes.
+            if (!options.fromNarrator) void runEnemyTurnForState(state, settings);
         }
         return { ok: true, state, warnings };
     } catch (error) {
@@ -1136,6 +1140,7 @@ export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
         reason: args.reason,
         silentNew: true,
         source: options.source || 'existing',
+        fromNarrator: true,
     });
     if (!result.ok) {
         return {
