@@ -101,6 +101,7 @@ describe('tactical action response parsing', () => {
         expect(parseActionsResponse('[{"type":"wait","unitId":"enemy-2"}]').actions).toHaveLength(1);
         expect(parseActionsResponse('```json\n{"actions":[{"type":"wait","unitId":"enemy-2"}]}\n```').actions).toHaveLength(1);
         expect(parseActionsResponse('Sure! {"actions":[{"type":"wait","unitId":"enemy-2"}]} done').actions).toHaveLength(1);
+        expect(parseActionsResponse('Reasoning: {"note":"not actions"} then {"actions":[{"type":"wait","unitId":"enemy-2"}]}').actions).toHaveLength(1);
     });
 
     it('reports empty and malformed responses instead of throwing', () => {

@@ -140,7 +140,7 @@ describe('Tactical Combat settings tab contract', () => {
         expect(settingsHtml).toContain('id="rpg_sysprompt_mod_tactical_combat"');
         expect(gameSystemsSource).toContain("tactical_combat: 'rpg_sysprompt_mod_tactical_combat'");
         expect(gameSystemsSource).toContain("tag === 'tactical_combat' && !settings.tacticalCombatEnabled");
-        expect(defaultsSource).toContain('tactical_combat: false');
+        expect(defaultsSource).toContain('tactical_combat: true');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");
         expect(indexSource).toContain("keyPrefix: 'tacticalCombat'");

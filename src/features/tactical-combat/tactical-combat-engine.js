@@ -1667,9 +1667,27 @@ export function describeUnitOptions(state, unit) {
  * @param {object[]} [catalog]
  * @returns {object}
  */
-export function buildAgentGameState(state, unitIds, catalog = state.actionCatalog) {
+export function buildAgentGameState(state, unitIds, catalog = state.actionCatalog, options = {}) {
     const ids = Array.isArray(unitIds) ? unitIds : [];
-    const units = state.units.map(unit => ({
+    const compact = options.compact === true;
+    const units = state.units.map(unit => {
+        if (compact && unit.side === 'player') {
+            return {
+                id: unit.id,
+                name: unit.name,
+                side: unit.side,
+                classLabel: unit.classLabel,
+                x: unit.x,
+                y: unit.y,
+                hp: unit.hp,
+                maxHp: unit.maxHp,
+                ac: getEffectiveAc(state, unit),
+                statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds })),
+                defeated: unit.defeated,
+                fled: unit.fled,
+            };
+        }
+        return {
         id: unit.id,
         name: unit.name,
         side: unit.side,
@@ -1716,16 +1734,19 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             description: item.description,
             usable: item.kind !== 'special',
         })),
-        inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
-            name: entry.name,
-            description: entry.description,
-            equipped: !!entry.equipped,
-            section: entry.section,
-            rarity: entry.rarity,
-            quantity: entry.quantity,
-        })),
+        ...(compact ? {} : {
+            inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
+                name: entry.name,
+                description: entry.description,
+                equipped: !!entry.equipped,
+                section: entry.section,
+                rarity: entry.rarity,
+                quantity: entry.quantity,
+            })),
+        }),
         notes: unit.notes,
-    }));
+        };
+    });
 
     const unitsToMove = ids.map(id => {
         const unit = getUnitById(state, id);
@@ -1770,7 +1791,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         units,
         unitsToMove,
         activationOrder: ids,
-        recentLog: (state.log || []).slice(-12).map(entry => `R${entry.round} ${entry.type}: ${entry.text}`),
+        recentLog: (state.log || []).slice(compact ? -8 : -12).map(entry => `R${entry.round} ${entry.type}: ${entry.text}`),
     };
 }
 

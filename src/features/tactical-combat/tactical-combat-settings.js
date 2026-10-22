@@ -178,6 +178,7 @@ export function bindTacticalCombatSettings(deps) {
     const changed = () => {
         syncStatus(settings);
         refreshTacticalCombatUi();
+        try { document.dispatchEvent(new CustomEvent('rt_tactical_combat_changed')); } catch (_) { /* no-op */ }
     };
 
     const enabled = el('rpg_tactical_combat_enabled');

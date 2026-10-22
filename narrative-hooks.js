@@ -630,12 +630,20 @@ function bindTacticalCombatToolSync() {
     document.addEventListener('rt_tactical_combat_changed', () => syncTacticalCombatToolRegistration());
 }
 
+function tacticalCombatToolConfigured() {
+    try {
+        const s = getSettings();
+        return !!s?.tacticalCombatEnabled && isEffectiveSectionEnabled('tactical_combat', s);
+    } catch (_) {
+        return false;
+    }
+}
+
 function tacticalCombatToolAvailable() {
     try {
+        if (!tacticalCombatToolConfigured()) return false;
         if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
         const s = getSettings();
-        if (!s?.tacticalCombatEnabled) return false;
-        if (!isEffectiveSectionEnabled('tactical_combat', s)) return false;
         const chatId = getActiveChatId();
         if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
         return isCombatActive(s.currentMemo);
@@ -652,9 +660,12 @@ function tacticalCombatToolAvailable() {
 export function syncTacticalCombatToolRegistration() {
     bindTacticalCombatToolSync();
     try {
-        const available = tacticalCombatToolAvailable();
-        if (available && !_tacticalCombatToolRegistered) registerTacticalCombatTool();
-        else if (!available) unregisterTacticalCombatTool();
+        const s = getSettings();
+        const boardActive = s.tacticalCombatByChat?.[getActiveChatId()]?.status === 'active';
+        const coolingDown = Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000;
+        const shouldExist = tacticalCombatToolConfigured() && !boardActive && !coolingDown;
+        if (shouldExist && !_tacticalCombatToolRegistered) registerTacticalCombatTool();
+        else if (!shouldExist) unregisterTacticalCombatTool();
     } catch (error) {
         console.warn('[RPG Tracker] Could not sync Tactical Combat tool registration:', error);
     }

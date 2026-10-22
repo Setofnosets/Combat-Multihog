@@ -332,7 +332,7 @@ const KNOWN_TOGGLE_DEFAULTS = {
     party_bench: true,
     quests: true,
     CYOA_mode: false,
-    tactical_combat: false,
+    tactical_combat: true,
     dungeon_reality_and_hidden_mapping: true,
 };
 

@@ -21,6 +21,7 @@ import {
     terrainChar,
 } from './tactical-combat-constants.js';
 import {
+    extractJsonObjects,
     getActionCatalog,
     parseActionsResponse,
     sanitizeActionsPayload,
@@ -41,6 +42,23 @@ import {
 } from './tactical-combat-engine.js';
 
 const MAX_CORRECTION_ATTEMPTS = 2;
+
+/**
+ * Reasoning models often emit prose/thinking before the JSON payload. Prefer the
+ * first parsed object containing the expected key, then fall back to the normal
+ * first-object parser.
+ * @param {string} text
+ * @param {string} key
+ * @returns {{ value: any, error: string|null }}
+ */
+function parseTacticalResponse(text, key) {
+    const first = parseMapArchitectResponse(text);
+    if (first.value && (Array.isArray(first.value) || first.value[key])) return first;
+    for (const value of extractJsonObjects(text)) {
+        if (value && value[key]) return { value, error: null };
+    }
+    return first;
+}
 
 function numberOr(value, fallback, min, max) {
     if (value == null || value === '') return fallback;
@@ -347,7 +365,7 @@ export async function generateEncounterWithAgent(context, settings, options = {}
         attempts = attempt + 1;
         try {
             const raw = await sendStateRequest(
-                request,
+                attempt === 0 ? request : { ...request, maxTokens: Math.max(8000, Number(request.maxTokens) || 0) },
                 system,
                 attempt === 0
                     ? userPrompt
@@ -356,7 +374,7 @@ export async function generateEncounterWithAgent(context, settings, options = {}
                 { stream: false, debugSource: 'Tactical Combat Encounter', jsonSchema: ENCOUNTER_JSON_SCHEMA },
             );
             if (!ownsChat()) return { ok: false, error: 'The active chat changed before the encounter was ready.', attempts };
-            const parsed = parseMapArchitectResponse(raw);
+            const parsed = parseTacticalResponse(raw, 'enemies');
             if (!parsed.value) {
                 lastError = parsed.error || 'No JSON object was found.';
                 continue;
@@ -384,7 +402,9 @@ export async function generateEncounterWithAgent(context, settings, options = {}
  * @returns {{ system: string, user: string, payload: object }}
  */
 export function buildAgentPrompts(state, unitIds, settings, catalog) {
-    const payload = buildAgentGameState(state, unitIds, catalog);
+    // Compact player summaries keep the prompt small enough for reasoning models
+    // (DeepSeek etc.) without losing any unit the agent is allowed to control.
+    const payload = buildAgentGameState(state, unitIds, catalog, { compact: true });
     const system = String(settings?.tacticalCombatAgentPrompt || DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT);
     const user = `## GAME STATE\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nAct for these units in this order: ${unitIds.join(', ')}.\nReturn exactly one JSON object of the form {"actions":[...]} and nothing else.`;
     return { system, user, payload };
@@ -425,7 +445,7 @@ export async function requestAgentActions(state, unitIds, settings, options = {}
         attempts = attempt + 1;
         try {
             const raw = await sendStateRequest(
-                request,
+                attempt === 0 ? request : { ...request, maxTokens: Math.max(8000, Number(request.maxTokens) || 0) },
                 prompts.system,
                 attempt === 0
                     ? prompts.user
@@ -600,7 +620,7 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             { stream: false, debugSource: 'Tactical Combat Special' },
         );
         if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
-        const parsed = parseMapArchitectResponse(raw);
+        const parsed = parseTacticalResponse(raw, 'effects');
         if (!parsed.value) return { ok: false, error: parsed.error || 'The resolver returned no JSON.' };
         const normalized = normalizeSpecialEffects(parsed.value, state);
         if (!normalized.effects.length) {

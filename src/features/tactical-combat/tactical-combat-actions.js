@@ -236,6 +236,10 @@ export function parseActionsResponse(text) {
             parseError = `Invalid JSON: ${error.message}`;
         }
     }
+    for (const payload of extractJsonObjects(body)) {
+        if (Array.isArray(payload.actions)) return { actions: payload.actions, payload, error: '' };
+        if (Array.isArray(payload.action)) return { actions: payload.action, payload, error: '' };
+    }
     return { actions: [], payload: null, error: parseError || 'No JSON action list was found.' };
 }
 
@@ -259,6 +263,37 @@ function extractBalanced(source, start, open, close) {
         }
     }
     return '';
+}
+
+/**
+ * Pull every parseable top-level JSON object out of a model response. This is
+ * deliberately tolerant of reasoning prose/thinking tags before or between
+ * objects, which is common with reasoning models.
+ * @param {string} text
+ * @returns {object[]}
+ */
+export function extractJsonObjects(text) {
+    const source = String(text || '');
+    const objects = [];
+    let index = 0;
+    for (let guard = 0; guard < 100; guard += 1) {
+        const start = source.indexOf('{', index);
+        if (start < 0) break;
+        const candidate = extractBalanced(source, start, '{', '}');
+        if (candidate) {
+            for (const attempt of [candidate, candidate.replace(/,\s*([}\]])/g, '$1')]) {
+                try {
+                    const value = JSON.parse(attempt);
+                    if (value && typeof value === 'object' && !Array.isArray(value)) objects.push(value);
+                    break;
+                } catch (_) { /* try repaired */ }
+            }
+            index = start + candidate.length;
+        } else {
+            index = start + 1;
+        }
+    }
+    return objects;
 }
 
 /**

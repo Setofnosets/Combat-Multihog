@@ -690,7 +690,7 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
             CYOA_mode: true,
 
-            tactical_combat: false,
+            tactical_combat: true,
 
             dungeon_reality_and_hidden_mapping: true,
 
