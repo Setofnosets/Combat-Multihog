@@ -631,6 +631,7 @@ export function registerTacticalCombatTool() {
             displayName: 'Tactical Combat',
             description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this when a fight becomes a set-piece battle the player should resolve on the board. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. Optional title/location/description override the generated encounter framing. After calling, continue the narration briefly but do not resolve the fight yourself.',
             parameters: {
+                $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
                 properties: {
                     title: { type: 'string', description: 'Optional short encounter title, e.g. "Ambush at the Gatehouse".' },
@@ -640,6 +641,7 @@ export function registerTacticalCombatTool() {
                 },
                 required: [],
             },
+            shouldRegister: () => !!getSettings().tacticalCombatEnabled,
             action: async args => {
                 try {
                     const { startTacticalCombatFromNarrator } = await import('./src/features/tactical-combat/tactical-combat-ui.js');

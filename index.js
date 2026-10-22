@@ -6469,7 +6469,6 @@ function organizeConnectionSettingsUI() {
         // Inject settings into the overlay BEFORE ID-based jQuery bindings below.
         initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });
         installTacticalCombatUi();
-        registerTacticalCombatTool();
         document.addEventListener('rt_open_settings_overlay', (event) => {
             openSettingsOverlay(event?.detail?.tab || 'tactical');
         });
@@ -8401,6 +8400,7 @@ function organizeConnectionSettingsUI() {
         }
 
         registerDiceFunctionTool();
+        registerTacticalCombatTool();
         syncLocationMappingRuntime();
         registerDiceSlashCommand();
 
