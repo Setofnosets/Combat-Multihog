@@ -17,6 +17,7 @@ describe('Tactical Combat narrator function tool', () => {
         for (const key of Object.keys(testExtensionSettings)) delete testExtensionSettings[key];
         testExtensionSettings.rpg_tracker = {
             tacticalCombatEnabled: true,
+            syspromptModules: { tactical_combat: true },
             currentMemo: '[COMBAT]\nGoblin: 10/10 HP\n[/COMBAT]',
         };
     });
@@ -56,12 +57,16 @@ describe('Tactical Combat narrator function tool', () => {
         testExtensionSettings.rpg_tracker.tacticalCombatEnabled = true;
         testExtensionSettings.rpg_tracker.tacticalCombatByChat = { 'vitest-chat': { status: 'active' } };
         expect(tool.shouldRegister()).toBe(false);
+        delete testExtensionSettings.rpg_tracker.tacticalCombatByChat;
+        testExtensionSettings.rpg_tracker.syspromptModules = { tactical_combat: false };
+        expect(tool.shouldRegister()).toBe(false);
     });
 
     it('registers during init next to the dice tools, not inside the settings UI setup', () => {
         expect(hooksSource).toContain('registerFunctionTool({');
         expect(hooksSource).toContain("name: 'StartTacticalCombat'");
         expect(hooksSource).toContain('isCombatActive(s.currentMemo)');
+        expect(hooksSource).toContain("isEffectiveSectionEnabled('tactical_combat'");
         expect(hooksSource).toContain('stealth: true');
         expect(hooksSource).toContain("source: 'existing'");
         expect(hooksSource).toContain('export function syncTacticalCombatToolRegistration');

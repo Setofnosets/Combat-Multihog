@@ -423,6 +423,11 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 </ruleset_note>
 </combat>
 
+<tactical_combat>
+TACTICAL COMBAT TOOL
+When the story reaches an active combat encounter that should be played on the tactical board, call the StartTacticalCombat tool exactly once. Use it when a fight begins or when the current [COMBAT] encounter is clearly a set-piece battle; do not call it for ordinary exchanges, every round, or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief. After the tool opens the board, continue the narration briefly and let the player resolve the fight on the grid. Never resolve the battle or invent its outcome yourself.
+</tactical_combat>
+
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:
 *(Status: [HP]) | (XP: [current]/[next level]) | (Location: [Main, Sub, Sub-sub, etc])*
@@ -798,6 +803,11 @@ Returning named NPC with an existing lorebook combat profile → reuse verbatim,
 Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB as in Pathfinder/3.5, Fort/Ref/Will saves). NOT full 5e — always resolve attacks/saves/NPC stats with THIS document's formulas, never 5e proficiency-bonus math, even if sheets reference 5e spell lists/XP.
 </ruleset_note>
 </combat>
+
+<tactical_combat>
+TACTICAL COMBAT TOOL
+When the story reaches an active combat encounter that should be played on the tactical board, call the StartTacticalCombat tool exactly once. Use it when a fight begins or when the current [COMBAT] encounter is clearly a set-piece battle; do not call it for ordinary exchanges, every round, or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief. After the tool opens the board, continue the narration briefly and let the player resolve the fight on the grid. Never resolve the battle or invent its outcome yourself.
+</tactical_combat>
 
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:

@@ -30,7 +30,7 @@ import { runtimeState } from './src/app/runtime-state.js';
 import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.js';
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration } from './src/features/tactical-combat/tactical-combat-outcome.js';
-import { isCyoaEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
+import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
 import {
     buildDungeonRealityInjection,
@@ -635,6 +635,7 @@ function tacticalCombatToolAvailable() {
         if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
         const s = getSettings();
         if (!s?.tacticalCombatEnabled) return false;
+        if (!isEffectiveSectionEnabled('tactical_combat', s)) return false;
         const chatId = getActiveChatId();
         if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
         return isCombatActive(s.currentMemo);

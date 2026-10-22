@@ -11,6 +11,8 @@ const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8'
 const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.url), 'utf8');
 const panelMarkup = readFileSync(new URL('../src/ui/panel/panel-markup.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+const syspromptSource = readFileSync(new URL('../sysprompt.txt', import.meta.url), 'utf8');
+const gameSystemsSource = readFileSync(new URL('../game-systems.js', import.meta.url), 'utf8');
 
 describe('Tactical Combat settings tab contract', () => {
     it('ships a primary Tactical Combat drawer with the expected controls', () => {
@@ -47,6 +49,7 @@ describe('Tactical Combat settings tab contract', () => {
             'rpg_tactical_combat_start',
             'rpg_tactical_combat_stop',
             'rpg_tactical_combat_reset',
+            'rpg_sysprompt_mod_tactical_combat',
         ]) {
             expect(settingsHtml).toContain(`id="${id}"`);
         }
@@ -132,6 +135,12 @@ describe('Tactical Combat settings tab contract', () => {
     it('wires the tab, board install, connection binder, and chat-change reset in index.js', () => {
         expect(indexSource).toContain('installTacticalCombatUi');
         expect(indexSource).toContain('syncTacticalCombatToolRegistration');
+        expect(syspromptSource).toContain('<tactical_combat>');
+        expect(syspromptSource).toContain('StartTacticalCombat');
+        expect(settingsHtml).toContain('id="rpg_sysprompt_mod_tactical_combat"');
+        expect(gameSystemsSource).toContain("tactical_combat: 'rpg_sysprompt_mod_tactical_combat'");
+        expect(gameSystemsSource).toContain("tag === 'tactical_combat' && !settings.tacticalCombatEnabled");
+        expect(defaultsSource).toContain('tactical_combat: false');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");
         expect(indexSource).toContain("keyPrefix: 'tacticalCombat'");

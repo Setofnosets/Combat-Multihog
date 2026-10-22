@@ -126,6 +126,8 @@ This keeps token usage limited to the rare ability that actually needs adjudicat
 
 ### Narrator tool
 
+The narrator tool is opt-in. Enable **Game Systems → Components → Tactical Combat (StartTacticalCombat tool)** (or enable the `<tactical_combat>` section in the System Prompt Control Room). This adds the predefined `<tactical_combat>` instruction to the system prompt and makes the function tool available while a `[COMBAT]` block is active. It is off by default.
+
 The main narrator can call the registered `StartTacticalCombat` function tool when a fight becomes a set-piece battle. Optional arguments: `title`, `location`, `description`, `reason`. The tool:
 
 1. Starts the encounter through the same path as the settings button.

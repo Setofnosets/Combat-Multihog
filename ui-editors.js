@@ -1231,6 +1231,7 @@ export function syncSettingsAndUI(updateFn) {
         resting: '#rpg_sysprompt_mod_resting',
         party_bench: '#rpg_sysprompt_mod_party_bench',
         dungeon_reality_and_hidden_mapping: '#rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping',
+        tactical_combat: '#rpg_sysprompt_mod_tactical_combat',
         CYOA_mode: '#rpg_sysprompt_mod_cyoa_mode',
     };
     for (const [key, id] of Object.entries(mods)) {
@@ -1238,7 +1239,9 @@ export function syncSettingsAndUI(updateFn) {
         if (cb) {
             cb.checked = key === 'CYOA_mode'
                 ? fresh.syspromptModules?.CYOA_mode === true
-                : (fresh.syspromptModules?.[key] ?? true);
+                : key === 'tactical_combat'
+                    ? fresh.syspromptModules?.tactical_combat === true
+                    : (fresh.syspromptModules?.[key] ?? true);
         }
     }
     applyMapArchitectOpenerToUi(fresh.mapArchitectOpener);

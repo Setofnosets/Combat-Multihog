@@ -5977,6 +5977,7 @@ export function buildSysprompt(rawText) {
         if (!row || !row.enabled) return '';
         // CYOA is injected above the RNG queue by the generate interceptor — never into Main.
         if (row.tag === 'CYOA_mode') return '';
+        if (row.tag === 'tactical_combat' && !s.tacticalCombatEnabled) return '';
         if (row.kind === 'base') {
             return transformBaseSectionContent(row.tag, row.content, s);
         }
@@ -11066,13 +11067,16 @@ RULES:
             { key: 'party_bench', id: 'rpg_sysprompt_mod_party_bench' },
             { key: 'dungeon_reality_and_hidden_mapping', id: 'rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping' },
             { key: 'CYOA_mode', id: 'rpg_sysprompt_mod_cyoa_mode' },
+            { key: 'tactical_combat', id: 'rpg_sysprompt_mod_tactical_combat' },
             { key: 'quests', id: 'rpg_sysprompt_mod_quests' },
         ];
         _syspromptModDefs.forEach(({ key, id }) => {
             const s = getSettings();
             const val = key === 'CYOA_mode'
                 ? (s.syspromptModules?.CYOA_mode === true)
-                : (s.syspromptModules?.[key] ?? true);
+                : key === 'tactical_combat'
+                    ? (s.syspromptModules?.tactical_combat === true)
+                    : (s.syspromptModules?.[key] ?? true);
             $(`#${id}`).prop('checked', val).on('change', function () {
                 const fresh = getSettings();
                 const checked = !!$(this).prop('checked');
@@ -11095,6 +11099,9 @@ RULES:
                     fresh.modules['benched party'] = checked;
                     if (checked) fresh.modules.party = true;
                     refreshOrderList();
+                }
+                if (key === 'tactical_combat') {
+                    syncTacticalCombatToolRegistration();
                 }
 
                 saveSettings();

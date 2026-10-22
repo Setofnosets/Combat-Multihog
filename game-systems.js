@@ -332,6 +332,7 @@ const KNOWN_TOGGLE_DEFAULTS = {
     party_bench: true,
     quests: true,
     CYOA_mode: false,
+    tactical_combat: false,
     dungeon_reality_and_hidden_mapping: true,
 };
 
@@ -344,6 +345,7 @@ const NARRATOR_TOGGLE_IDS = {
     quests: 'rpg_sysprompt_mod_quests',
     CYOA_mode: 'rpg_sysprompt_mod_cyoa_mode',
     relationship_tracking: 'rpg_sysprompt_mod_npc_rel_bars',
+    tactical_combat: 'rpg_sysprompt_mod_tactical_combat',
     dungeon_reality_and_hidden_mapping: 'rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping',
 };
 
@@ -410,6 +412,11 @@ export function transformBaseSectionContent(tag, innerContent, settings) {
 
     if (tag === 'CYOA_mode') {
         // CYOA is injected by rpgTrackerInterceptor above the RNG queue (not Main).
+        return '';
+    }
+
+    if (tag === 'tactical_combat' && !settings.tacticalCombatEnabled) {
+        // Do not tell the narrator to call a tool that is unavailable.
         return '';
     }
 
@@ -641,7 +648,9 @@ export function getSectionRowDescriptor(key, settings, baseSectionMap) {
             libId: null,
             gameSystemId: null,
             label: `<${tag}>`,
-            description: '',
+            description: tag === 'tactical_combat'
+                ? 'Narrator instruction: call the StartTacticalCombat function tool once when a set-piece fight begins. Does not run a battle by itself.'
+                : '',
             enabled: isBaseSectionEnabled(tag, settings),
             content: baseSectionMap.get(tag) ?? '',
         };
