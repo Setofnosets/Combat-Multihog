@@ -843,7 +843,7 @@ async function startEncounterFlow(options = {}) {
     const controller = new AbortController();
     ui.abortController = controller;
 
-    const source = String(settings.tacticalCombatEncounterSource || 'auto');
+    const source = String(options.source || settings.tacticalCombatEncounterSource || 'auto');
     let context;
     try {
         context = collectEncounterContext(settings, (() => {
@@ -1121,7 +1121,7 @@ export function startTacticalCombatFlow(options = {}) {
  * @param {{ title?: string, location?: string, description?: string, reason?: string }} [args]
  * @returns {Promise<{ ok: boolean, message: string }>}
  */
-export async function startTacticalCombatFromNarrator(args = {}) {
+export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
     const settings = getSettings();
     if (!settings.tacticalCombatEnabled) {
         return {
@@ -1135,6 +1135,7 @@ export async function startTacticalCombatFromNarrator(args = {}) {
         description: args.description,
         reason: args.reason,
         silentNew: true,
+        source: options.source || 'existing',
     });
     if (!result.ok) {
         return {

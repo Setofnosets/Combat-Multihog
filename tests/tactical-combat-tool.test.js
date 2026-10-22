@@ -14,7 +14,10 @@ const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.ur
 describe('Tactical Combat narrator function tool', () => {
     beforeEach(() => {
         for (const key of Object.keys(testExtensionSettings)) delete testExtensionSettings[key];
-        testExtensionSettings.rpg_tracker = { tacticalCombatEnabled: true };
+        testExtensionSettings.rpg_tracker = {
+            tacticalCombatEnabled: true,
+            currentMemo: '[COMBAT]\nGoblin: 10/10 HP\n[/COMBAT]',
+        };
     });
 
     afterEach(() => {
@@ -45,15 +48,21 @@ describe('Tactical Combat narrator function tool', () => {
         expect(Object.keys(tool.parameters.properties).sort()).toEqual(['description', 'location', 'reason', 'title']);
         expect(typeof tool.action).toBe('function');
         expect(tool.formatMessage()).toBe('');
+        expect(tool.stealth).toBe(true);
         expect(tool.shouldRegister()).toBe(true);
         testExtensionSettings.rpg_tracker.tacticalCombatEnabled = false;
+        expect(tool.shouldRegister()).toBe(false);
+        testExtensionSettings.rpg_tracker.tacticalCombatEnabled = true;
+        testExtensionSettings.rpg_tracker.tacticalCombatByChat = { 'vitest-chat': { status: 'active' } };
         expect(tool.shouldRegister()).toBe(false);
     });
 
     it('registers during init next to the dice tools, not inside the settings UI setup', () => {
         expect(hooksSource).toContain('registerFunctionTool({');
         expect(hooksSource).toContain("name: 'StartTacticalCombat'");
-        expect(hooksSource).toContain("shouldRegister: () => !!getSettings().tacticalCombatEnabled");
+        expect(hooksSource).toContain('isCombatActive(s.currentMemo)');
+        expect(hooksSource).toContain('stealth: true');
+        expect(hooksSource).toContain("source: 'existing'");
 
         const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*registerTacticalCombatTool\(\);\s*syncLocationMappingRuntime\(\);/);
         expect(toolBlock).not.toBeNull();

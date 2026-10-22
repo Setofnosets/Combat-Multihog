@@ -620,6 +620,8 @@ export function syncLocationMappingRuntime() {
  * the current scene. The board itself is the focus; the tool returns a short
  * status string to the model.
  */
+let _tacticalCombatToolAttemptedAt = 0;
+
 export function registerTacticalCombatTool() {
     try {
         const ctx = SillyTavern.getContext();
@@ -641,13 +643,27 @@ export function registerTacticalCombatTool() {
                 },
                 required: [],
             },
-            shouldRegister: () => !!getSettings().tacticalCombatEnabled,
+            shouldRegister: () => {
+                try {
+                    if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
+                    const s = getSettings();
+                    if (!s?.tacticalCombatEnabled) return false;
+                    const chatId = getActiveChatId();
+                    if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
+                    return isCombatActive(s.currentMemo);
+                } catch (_) {
+                    return false;
+                }
+            },
+            stealth: true,
             action: async args => {
                 try {
                     const { startTacticalCombatFromNarrator } = await import('./src/features/tactical-combat/tactical-combat-ui.js');
-                    const result = await startTacticalCombatFromNarrator(args || {});
+                    const result = await startTacticalCombatFromNarrator(args || {}, { source: 'existing' });
+                    if (!result?.ok) _tacticalCombatToolAttemptedAt = Date.now();
                     return result.message;
                 } catch (error) {
+                    _tacticalCombatToolAttemptedAt = Date.now();
                     return `Tactical Combat could not start: ${error?.message || error}`;
                 }
             },
