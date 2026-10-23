@@ -6,7 +6,7 @@ vi.mock('../../../../script.js', () => ({
     getRequestHeaders: () => ({}),
 }));
 
-import { registerTacticalCombatTool } from '../narrative-hooks.js';
+import { isLatestAssistantFromActiveChar, registerTacticalCombatTool } from '../narrative-hooks.js';
 
 const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.url), 'utf8');
@@ -43,14 +43,19 @@ describe('Tactical Combat narrator function tool', () => {
         const tool = registerFunctionTool.mock.calls[0][0];
         expect(tool.name).toBe('StartTacticalCombat');
         expect(tool.displayName).toBe('Tactical Combat');
-        expect(tool.description).toMatch(/set-piece battle/i);
+        expect(tool.description).toMatch(/real fight begins/i);
         expect(tool.parameters.$schema).toBe('http://json-schema.org/draft-04/schema#');
         expect(tool.parameters.type).toBe('object');
         expect(tool.parameters.required).toEqual([]);
-        expect(Object.keys(tool.parameters.properties).sort()).toEqual(['description', 'location', 'reason', 'title']);
+        expect(Object.keys(tool.parameters.properties).sort()).toEqual([
+            'description', 'location', 'openingAction', 'openingSkill', 'openingTarget', 'reason', 'surprise', 'title',
+        ]);
         expect(typeof tool.action).toBe('function');
-        expect(tool.formatMessage()).toBe('');
-        expect(tool.stealth).toBe(true);
+        expect(tool.formatMessage()).toMatch(/board is open/i);
+        expect(tool.stealth).toBe(false);
+        expect(tool.shouldRegister()).toBe(true);
+        // The tool is available before [COMBAT] exists; the board seeds the memo.
+        testExtensionSettings.rpg_tracker.currentMemo = '';
         expect(tool.shouldRegister()).toBe(true);
         testExtensionSettings.rpg_tracker.tacticalCombatEnabled = false;
         expect(tool.shouldRegister()).toBe(false);
@@ -58,6 +63,9 @@ describe('Tactical Combat narrator function tool', () => {
         testExtensionSettings.rpg_tracker.tacticalCombatByChat = { 'vitest-chat': { status: 'active' } };
         expect(tool.shouldRegister()).toBe(false);
         delete testExtensionSettings.rpg_tracker.tacticalCombatByChat;
+        testExtensionSettings.rpg_tracker.tacticalCombatReturn = { chatId: 'vitest-chat', stateId: 'tc-test' };
+        expect(tool.shouldRegister()).toBe(false);
+        delete testExtensionSettings.rpg_tracker.tacticalCombatReturn;
         testExtensionSettings.rpg_tracker.syspromptModules = { tactical_combat: false };
         expect(tool.shouldRegister()).toBe(false);
     });
@@ -65,10 +73,11 @@ describe('Tactical Combat narrator function tool', () => {
     it('registers during init next to the dice tools, not inside the settings UI setup', () => {
         expect(hooksSource).toContain('registerFunctionTool({');
         expect(hooksSource).toContain("name: 'StartTacticalCombat'");
-        expect(hooksSource).toContain('isCombatActive(s.currentMemo)');
+        expect(hooksSource).toContain('tacticalCombatReturn');
         expect(hooksSource).toContain("isEffectiveSectionEnabled('tactical_combat'");
-        expect(hooksSource).toContain('stealth: true');
-        expect(hooksSource).toContain("source: 'existing'");
+        expect(hooksSource).toContain('stealth: false');
+        expect(hooksSource).toContain("tacticalCombatEncounterSource || 'auto'");
+        expect(hooksSource).toContain('openingAction');
         expect(hooksSource).toContain('export function syncTacticalCombatToolRegistration');
         expect(hooksSource).toContain('buildTacticalCombatRuntimeOverride');
         expect(hooksSource).toContain('[TACTICAL_COMBAT_OVERRIDE]');
@@ -83,5 +92,21 @@ describe('Tactical Combat narrator function tool', () => {
         expect(settingsStart).toBeGreaterThan(-1);
         expect(settingsEnd).toBeGreaterThan(settingsStart);
         expect(indexSource.slice(settingsStart, settingsEnd)).not.toContain('syncTacticalCombatToolRegistration');
+    });
+
+    it('find the narrator row through non-stealth tool/system rows', () => {
+        const chat = [
+            { is_user: true, mes: 'I draw my blade.' },
+            { name: 'Aria', mes: 'The gatehouse answers with steel.' },
+            { is_system: true, name: 'Tactical Combat', mes: '{"name":"StartTacticalCombat","result":"ok"}' },
+        ];
+        expect(isLatestAssistantFromActiveChar(chat, { name2: 'Aria' })).toBe(true);
+        const stopped = [
+            { is_user: true, mes: 'I draw my blade.' },
+            { name: 'Aria', mes: 'The gatehouse answers with steel.' },
+            { is_user: true, mes: 'Again.' },
+            { is_system: true, name: 'Tactical Combat', mes: 'tool row' },
+        ];
+        expect(isLatestAssistantFromActiveChar(stopped, { name2: 'Aria' })).toBe(false);
     });
 });

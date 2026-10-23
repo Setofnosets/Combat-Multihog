@@ -374,6 +374,9 @@ function renderPending(state, view) {
 function renderOutcome(state) {
     if (state.status === 'active' || !state.outcome) return '';
     const outcome = state.outcome;
+    const finalizingSince = Number(state.finalization?.finalizingStartedAt) || 0;
+    const finalizing = !!state.finalization?.finalizing
+        && (!finalizingSince || Date.now() - finalizingSince < 90000);
     const details = (outcome.details || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
     return `<div class="rt-tc-result-wrap" role="alertdialog" aria-modal="true" aria-label="${escapeHtml(outcome.label)}">
         <div class="rt-tc-result rt-tc-outcome-${escapeHtml(state.status)}">
@@ -382,11 +385,11 @@ function renderOutcome(state) {
             <p class="rt-tc-result-summary">${escapeHtml(outcome.summary)}</p>
             <ul class="rt-tc-result-details">${details}</ul>
             <div class="rt-tc-result-actions">
-                <button type="button" class="rt-tc-primary" data-tc-action="continue-narration">Return to narration</button>
+                <button type="button" class="rt-tc-primary" data-tc-action="continue-narration" ${finalizing ? 'disabled' : ''}>${finalizing ? 'Updating tracker…' : 'Return to narration'}</button>
                 <button type="button" class="rt-tc-ghost" data-tc-action="new-encounter">New encounter</button>
                 <button type="button" class="rt-tc-ghost" data-tc-action="dismiss-result">Review board</button>
             </div>
-            <div class="rt-tc-result-note">The result is queued for the main narrator. It will not be repeated after the next scene.</div>
+            <div class="rt-tc-result-note">${finalizing ? 'Writing final HP and closing [COMBAT] before the narrator reads the result.' : 'The result and final state are queued for the main narrator. The outcome is one-shot and will not be repeated after the next scene.'}</div>
         </div>
     </div>`;
 }

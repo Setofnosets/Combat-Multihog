@@ -14,7 +14,7 @@
 
 import { getSettings, hydrateWorldProgressionFromChatState, persistWorldProgressionTimer, persistRouterLastRunWatermark, persistMapUpdaterLastRunTimestamp, persistMapUpdaterLastRunWatermark, persistMapUpdaterState, getNpcRelationshipMax, clampRelationshipValue, relationshipBarPct, getFriendshipTier, getAffectionTier, applyRelTierBadgeElement, showRelationshipFloatFeedback, saveChatState, getActiveChatId, getRelationshipUpdateMode, RELATIONSHIP_UPDATE_MODES, shouldProcessRegexRelationshipUpdates, stripCoreMarkersForNarrator } from './state-manager.js';
 import { syncCombatProfile, isCombatActive } from './llm-client.js';
-import { parseQuestsFromMemo, extractCurrentTimeStr, cleanMessageContent, formatInWorldTime, memoForGmContext, stripPromptInjectionsFromUserText, stripCyoaAndPacingInjections, mergeMemo, applyQuestSyncAndStripMemo, computeDelta } from './memo-processor.js';
+import { parseQuestsFromMemo, extractCurrentTimeStr, cleanMessageContent, cleanToolCallMessage, formatInWorldTime, memoForGmContext, stripPromptInjectionsFromUserText, stripCyoaAndPacingInjections, mergeMemo, applyQuestSyncAndStripMemo, computeDelta } from './memo-processor.js';
 import { parseMemoBlocks } from './renderer.js';
 import { runRouterPass, saveSceneToLorebook, scanAssistantOutputForKeywords, parseInWorldMinutes, runWorldProgressionPass, updateLorebookEntry, getLorebookManifest, rollbackRouterPass, isRouterRunning, syncDungeonMapsToLocationLorebook, captureActiveDungeonMapHistory } from './router.js';
 import { getActiveMapUpdaterSiteRoot, maybeRollbackMapUpdaterForSwipe, runMapUpdaterPass, shouldForceBuildingPopulationPass, stopMapUpdaterPass } from './map-updater.js';
@@ -29,7 +29,7 @@ import { saveSettings } from './src/app/runtime-bridge.js';
 import { runtimeState } from './src/app/runtime-state.js';
 import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.js';
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
-import { buildNarrationBlock, clearNarrationAfterGeneration } from './src/features/tactical-combat/tactical-combat-outcome.js';
+import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
 import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
 import {
@@ -620,7 +620,8 @@ export function syncLocationMappingRuntime() {
  * the current scene. The board itself is the focus; the tool returns a short
  * status string to the model.
  */
-let _tacticalCombatToolAttemptedAt = 0;
+const TACTICAL_COMBAT_FAILURE_COOLDOWN_MS = 30 * 1000;
+const _tacticalCombatToolFailureUntil = new Map();
 let _tacticalCombatToolSyncBound = false;
 let _tacticalCombatToolRegistered = false;
 
@@ -634,9 +635,15 @@ function bindTacticalCombatToolSync() {
 function buildTacticalCombatRuntimeOverride(settings) {
     try {
         if (!settings?.tacticalCombatEnabled) return '';
-        if (!isCombatActive(settings.currentMemo)) return '';
         const chatId = getActiveChatId();
-        if (settings.tacticalCombatByChat?.[chatId]?.status === 'active') return '';
+        const board = settings.tacticalCombatByChat?.[chatId];
+        if (board?.status === 'active') {
+            return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is currently being resolved on the board. Do not narrate attacks, damage, initiative, saves, enemy turns, or the outcome. Do not call StartTacticalCombat again. If the player writes in chat, acknowledge that the fight is paused on the tactical board and wait for its result.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
+        }
+        if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
+            return '';
+        }
+        if (!isCombatActive(settings.currentMemo)) return '';
         const hasTool = isEffectiveSectionEnabled('tactical_combat', settings);
         const instruction = hasTool
             ? 'Call the StartTacticalCombat function tool exactly once now. Do not narrate attacks, damage, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
@@ -656,14 +663,22 @@ function tacticalCombatToolConfigured() {
     }
 }
 
+function tacticalCombatToolCoolingDown(chatId) {
+    const until = Number(_tacticalCombatToolFailureUntil.get(String(chatId || '')) || 0);
+    return Date.now() < until;
+}
+
 function tacticalCombatToolAvailable() {
     try {
         if (!tacticalCombatToolConfigured()) return false;
-        if (Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000) return false;
         const s = getSettings();
         const chatId = getActiveChatId();
-        if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
-        return isCombatActive(s.currentMemo);
+        if (!chatId) return false;
+        const board = s.tacticalCombatByChat?.[chatId];
+        if (board?.status === 'active' || board?.finalization?.finalizing) return false;
+        if (s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId)) return false;
+        if (s.tacticalCombatEncounterSource === 'existing' && !isCombatActive(s.currentMemo)) return false;
+        return !tacticalCombatToolCoolingDown(chatId);
     } catch (_) {
         return false;
     }
@@ -679,9 +694,18 @@ export function syncTacticalCombatToolRegistration() {
     bindTacticalCombatToolSync();
     try {
         const s = getSettings();
-        const boardActive = s.tacticalCombatByChat?.[getActiveChatId()]?.status === 'active';
-        const coolingDown = Date.now() - _tacticalCombatToolAttemptedAt < 5 * 60 * 1000;
-        const shouldExist = tacticalCombatToolConfigured() && !boardActive && !coolingDown;
+        const chatId = getActiveChatId();
+        const board = s.tacticalCombatByChat?.[chatId];
+        const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
+        const pendingResult = s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId);
+        const waitingForExistingRoster = s.tacticalCombatEncounterSource === 'existing'
+            && !isCombatActive(s.currentMemo);
+        const coolingDown = tacticalCombatToolCoolingDown(chatId);
+        const shouldExist = tacticalCombatToolConfigured()
+            && !boardActive
+            && !pendingResult
+            && !waitingForExistingRoster
+            && !coolingDown;
         if (shouldExist && !_tacticalCombatToolRegistered) registerTacticalCombatTool();
         else if (!shouldExist) unregisterTacticalCombatTool();
     } catch (error) {
@@ -698,7 +722,7 @@ export function registerTacticalCombatTool() {
         registerFunctionTool({
             name: 'StartTacticalCombat',
             displayName: 'Tactical Combat',
-            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this when a fight becomes a set-piece battle the player should resolve on the board. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. Optional title/location/description override the generated encounter framing. After calling, continue the narration briefly but do not resolve the fight yourself.',
+            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this as soon as a real fight begins, even if the State Memo does not contain a [COMBAT] block yet; the tool builds opposition from the scene when needed. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -707,24 +731,33 @@ export function registerTacticalCombatTool() {
                     location: { type: 'string', description: 'Optional exact current location, if the footer/memo is ambiguous.' },
                     description: { type: 'string', description: 'Optional 1–3 sentence setup for the encounter brief.' },
                     reason: { type: 'string', description: 'Optional short reason the fight started, used as extra context for the encounter architect.' },
+                    openingAction: { type: 'string', description: 'If the player’s immediately preceding message declared a concrete opening action, copy it verbatim here. The board resolves it before normal turns. Do not resolve it yourself.' },
+                    openingTarget: { type: 'string', description: 'Optional exact target name or id for the opening action.' },
+                    openingSkill: { type: 'string', description: 'Optional exact spell, skill, or item name used in the opening action.' },
+                    surprise: { type: 'boolean', description: 'True when the player’s opening action catches the enemy off guard (ambush, sneak attack, sudden assault). The enemy loses its first activation.' },
                 },
                 required: [],
             },
             shouldRegister: tacticalCombatToolAvailable,
-            stealth: true,
+            stealth: false,
             action: async args => {
+                const chatId = getActiveChatId();
                 unregisterTacticalCombatTool();
                 try {
                     const { startTacticalCombatFromNarrator } = await import('./src/features/tactical-combat/tactical-combat-ui.js');
-                    const result = await startTacticalCombatFromNarrator(args || {}, { source: 'existing' });
-                    if (!result?.ok) _tacticalCombatToolAttemptedAt = Date.now();
+                    const result = await startTacticalCombatFromNarrator(args || {}, { source: getSettings().tacticalCombatEncounterSource || 'auto' });
+                    if (!result?.ok) {
+                        _tacticalCombatToolFailureUntil.set(String(chatId || ''), Date.now() + TACTICAL_COMBAT_FAILURE_COOLDOWN_MS);
+                    } else {
+                        _tacticalCombatToolFailureUntil.delete(String(chatId || ''));
+                    }
                     return result.message;
                 } catch (error) {
-                    _tacticalCombatToolAttemptedAt = Date.now();
+                    _tacticalCombatToolFailureUntil.set(String(chatId || ''), Date.now() + TACTICAL_COMBAT_FAILURE_COOLDOWN_MS);
                     return `Tactical Combat could not start: ${error?.message || error}`;
                 }
             },
-            formatMessage: () => '',
+            formatMessage: () => 'Tactical Combat: the board is open. Resolve the encounter on the grid; the result will return to the narrator when combat ends.',
         });
         _tacticalCombatToolRegistered = true;
     } catch (error) {
@@ -1531,6 +1564,7 @@ export function installInterceptor() {
         let injections = "";     // core: pacing + CYOA + RNG + State Memo + Quests → user msg
         let loreInjections = ""; // lore: keyword/agent entries (configurable depth)
         let wpInjections = "";   // world progression reports (configurable depth)
+        let tacticalNarrationBlock = '';
         const dungeonInjections = dungeonInjection;
         
         if (settings.debugMode) {
@@ -1542,18 +1576,24 @@ export function installInterceptor() {
 
         // Core user-message injection every turn: PC / relations / pacing / CYOA / RNG / memo / quests.
         // CYOA / pacing follow the State Tracker master toggle (same as Persistent Maps).
-        if (!skipInjection && (settings.enabled || cyoaActive || pacingInject)) {
+        const hasTacticalWork = !!settings.tacticalCombatEnabled || !!settings.tacticalCombatReturn;
+        if (!skipInjection && (settings.enabled || cyoaActive || pacingInject || hasTacticalWork)) {
+            // Hard override: while a board fight is active, or while [COMBAT]
+            // exists and no board is running, the narrator must not resolve the
+            // fight itself.
+            const tacticalOverride = buildTacticalCombatRuntimeOverride(settings);
+            if (tacticalOverride) injections += tacticalOverride;
+
+            // [TACTICAL COMBAT RESULT] — authoritative aftermath from the board.
+            // Injected as a dedicated system/narrator message below, not as part
+            // of the player's own message. One-shot: onGenerationEnded clears it.
+            const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
+            if (tacticalBlock) {
+                tacticalNarrationBlock = tacticalBlock;
+                injections += `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
+            }
+
             if (settings.enabled) {
-                // Hard override: while [COMBAT] exists and the board is not open,
-                // the narrator must not resolve the fight itself.
-                const tacticalOverride = buildTacticalCombatRuntimeOverride(settings);
-                if (tacticalOverride) injections += tacticalOverride;
-
-                // [TACTICAL COMBAT RESULT] — authoritative aftermath from the board.
-                // It is one-shot: onGenerationEnded clears it after this generation.
-                const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
-                if (tacticalBlock) injections += tacticalBlock;
-
                 // [PLAYER_CHARACTER] — always injected at the top of the core block
                 const curChatId = SillyTavern.getContext().chatId || globalThis._rpgCurrentChatId?.();
                 if (curChatId && settings.chatStates?.[curChatId]?.playerCharacter) {
@@ -1900,6 +1940,29 @@ export function installInterceptor() {
                 console.log(`[Multihog Framework] World Progression depth injection: spliced at index ${insertIdx} (depth ${wpDepth}), chat now ${chat.length} messages.`);
                 const roleName = wpRoleVal === 1 ? 'user' : wpRoleVal === 2 ? 'assistant' : 'system';
                 logTransaction('World Progression (Depth Splice)', [{ role: roleName, content: wpInjections }]);
+            }
+        }
+
+        // ── 4. Tactical Combat result → dedicated system/narrator message ───────
+        // The result is never part of the player's message. It is appended at the
+        // end of the prompt so the narrator sees the aftermath as authoritative
+        // context immediately before generating.
+        if (tacticalNarrationBlock) {
+            const pending = settings.tacticalCombatReturn;
+            const resultId = String(pending?.stateId || '');
+            const alreadyInjected = chat.some(message => message?.extra?.tcResultId
+                && String(message.extra.tcResultId) === resultId);
+            markNarrationInjected(settings, getActiveChatId());
+            if (!alreadyInjected) {
+                chat.push({
+                    name: 'Tactical Combat',
+                    mes: tacticalNarrationBlock,
+                    is_user: false,
+                    extra: { type: 'narrator', tcResultId: resultId, tcResultAt: Date.now() },
+                });
+                if (settings.debugMode) {
+                    console.log('[Multihog Framework] Tactical Combat result injected as a narrator message.');
+                }
             }
         }
     };
@@ -2764,6 +2827,14 @@ export function getNarrativeBlocks(chat, limit = -1, includeHidden = false) {
     return narrativeBlocks.join('\n\n');
 }
 
+/** Remove the temporary one-shot combat-result narrator messages from the live chat array. */
+function removeTacticalResultInjections(chat) {
+    if (!Array.isArray(chat)) return;
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+        if (chat[index]?.extra?.tcResultId) chat.splice(index, 1);
+    }
+}
+
 // ── Generation-ended handler ───────────────────────────────────────────────────
 
 /** Tracks the type of the last started generation. */
@@ -2966,6 +3037,34 @@ function getLatestAssistantCandidate(chat) {
 }
 
 /**
+ * Latest real narrator/character row, ignoring tool-call payloads, system rows,
+ * and synthetic narrator notices. This keeps non-stealth function tools and
+ * temporary context injections from making a valid generation look like it was
+ * authored by someone else.
+ * @param {any[]} chat
+ * @returns {any|null}
+ */
+function getLatestNarrativeAssistantCandidate(chat) {
+    if (!Array.isArray(chat)) return null;
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const message = chat[i];
+        if (!message) continue;
+        if (message.is_user) break;
+        if (message.is_system) continue;
+        if (message.extra?.tcResultId) continue;
+        const extraType = String(message.extra?.type || '').toLowerCase();
+        if (extraType === 'narrator' || extraType === 'tool' || extraType === 'tool_call' || extraType === 'function') continue;
+        if (message.extra?.tool_call || message.extra?.isTool) continue;
+        if (String(message.name || '').trim().toLowerCase() === 'tactical combat') continue;
+        const text = String(message.mes || message.content || '').trim();
+        if (!text) continue;
+        if (cleanToolCallMessage(text) === null) continue;
+        return message;
+    }
+    return null;
+}
+
+/**
  * True when the latest assistant-side message is from the active {{char}}.
  * Used to skip auto State Tracker / Lorebook Agent runs for other speakers
  * (e.g. /sendas "System Notifications" announcements that somehow end a generation).
@@ -2985,11 +3084,8 @@ export function isLatestAssistantFromActiveChar(chat, ctx) {
     // No resolvable {{char}} — do not block (fail open).
     if (!activeName && !activeAvatar) return true;
 
-    const msg = getLatestAssistantCandidate(chat);
+    const msg = getLatestNarrativeAssistantCandidate(chat);
     if (!msg) return false;
-
-    const extraType = String(msg.extra?.type || '').toLowerCase();
-    if (msg.is_system || extraType === 'narrator') return false;
 
     const msgName = String(msg.name || '').trim();
     if (activeName && msgName) {
@@ -3019,6 +3115,7 @@ export function onGenerationStarted(type, _options, dryRun) {
     }
     _lastGenerationType = type;
     _rpgIsGenerating = true;
+    globalThis._rpgGenerationBusy = true;
     recordSchedulerEvent('generation_started', { generationType: type ?? null });
 }
 
@@ -3125,6 +3222,7 @@ export async function onGenerationEnded() {
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId);
     try {
         _rpgIsGenerating = false;
+        globalThis._rpgGenerationBusy = false;
         // CYOA decoration is independent of tracker state. Finalize it before this
         // handler awaits scanning or a State Tracker model pass.
         try {
@@ -3135,14 +3233,20 @@ export async function onGenerationEnded() {
         }
         const settings = getSettings();
         const currentType = _lastGenerationType;
+        const typeLower = String(currentType || '').toLowerCase();
         const ctx = SillyTavern.getContext();
         const { chat } = ctx;
+        const generationDelivered = isLatestAssistantFromActiveChar(chat, ctx);
 
-        // Tactical Combat outcome blocks are one-shot. Consume them after a real
-        // narrator generation, but never after quiet/impersonate passes.
-        if (currentType !== 'quiet' && currentType !== 'impersonate') {
+        // Tactical Combat outcome blocks are one-shot. Consume them only after a
+        // real narrator message actually carried the result. Quiet/impersonate,
+        // swipes/regenerates, and stopped generations keep the pending payload so
+        // a transient failure cannot silently eat the fight's aftermath.
+        if (generationDelivered
+            && !['quiet', 'impersonate', 'swipe', 'regenerate'].includes(typeLower)) {
             clearNarrationAfterGeneration(settings, getActiveChatId(), { save: true });
         }
+        removeTacticalResultInjections(chat);
 
         // Fence handshake beats ST/LA, including while a previous tracker pass is still running
         // and even when the latest row is a tool-call system message.

@@ -16,6 +16,7 @@ import { mergeMemo } from '../../../memo-processor.js';
 import { refreshRenderedView, saveSettings, syncMemoView } from '../../app/runtime-bridge.js';
 import { DEFAULT_TACTICAL_OUTCOME_PROMPT, renderTacticalTemplate } from './tactical-combat-prompts.js';
 import { buildOutcomeSummary } from './tactical-combat-engine.js';
+import { syncCombatResultToMemo } from './tactical-combat-memo.js';
 import { clearPendingNarration, getPendingNarration, setPendingNarration } from './tactical-combat-store.js';
 
 function defaultPersist() {
@@ -62,7 +63,11 @@ export function buildOutcomePayload(state, options = {}) {
         title: state.title,
         location: state.location,
         outcome,
+        trigger: state.opening?.text || '',
+        finalState: outcome.finalUnits || [],
         createdAt: Date.now(),
+        injectedAt: 0,
+        injectedFor: '',
     };
 }
 
@@ -79,13 +84,12 @@ export function queueCombatOutcome(state, settings, options = {}) {
     const payload = buildOutcomePayload(state);
     if (state.finalization?.narrationQueued) return state.finalization.payload || payload;
 
-    const memo = String(settings?.currentMemo || '');
-    const nextMemo = closeCombatBlockInMemo(memo, { merge: options.merge });
-    if (nextMemo !== memo) {
-        settings.currentMemo = nextMemo;
-    }
+    // Board state wins over prose. This is the machinery that updates the
+    // tracker state before the narrator ever sees the result block.
+    syncCombatResultToMemo(state, settings);
 
     state.finalization = {
+        ...(state.finalization || {}),
         narrationQueued: true,
         queuedAt: Date.now(),
         payload,
@@ -110,6 +114,26 @@ export function queueCombatOutcome(state, settings, options = {}) {
  * @param {string} [chatId]
  * @returns {string}
  */
+function describeUnitList(units, empty = 'None') {
+    const list = Array.isArray(units) ? units : [];
+    if (!list.length) return empty;
+    return list.map(unit => `${unit.name}${unit.hp != null ? ` (${unit.hp}/${unit.maxHp} HP)` : ''}`).join(', ');
+}
+
+function describeHighlights(outcome) {
+    const list = Array.isArray(outcome.highlights) ? outcome.highlights : [];
+    return list.length ? list.map(item => `- ${item}`).join('\n') : '- No decisive highlight was recorded.';
+}
+
+function describeFinalUnits(outcome) {
+    const list = Array.isArray(outcome.finalUnits) ? outcome.finalUnits : [];
+    if (!list.length) return 'None recorded.';
+    return list.map(unit => {
+        const flags = [unit.defeated ? 'defeated' : '', unit.fled ? 'fled' : ''].filter(Boolean).join(', ');
+        return `- ${unit.name} [${unit.side}]: ${unit.hp}/${unit.maxHp} HP${flags ? ` (${flags})` : ''}`;
+    }).join('\n');
+}
+
 export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     if (!settings) return '';
     const pending = getPendingNarration(settings);
@@ -120,10 +144,18 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     const details = Array.isArray(outcome.details) && outcome.details.length
         ? `Details:\n${outcome.details.map(item => `- ${item}`).join('\n')}`
         : '';
-    const survivors = (outcome.survivors || []).map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ') || 'None';
+    const survivors = describeUnitList(outcome.survivors);
     const fallen = (outcome.fallen || []).map(unit => unit.name).join(', ');
     const fled = (outcome.fled || []).map(unit => unit.name).join(', ');
     const defeated = (outcome.defeatedEnemies || []).map(unit => unit.name).join(', ');
+    const enemiesRemaining = describeUnitList(outcome.enemySurvivors);
+    const partyState = describeUnitList(outcome.survivors);
+    const allyState = [
+        describeUnitList(outcome.allySurvivors, ''),
+        (outcome.allyFallen || []).length ? `Fallen: ${(outcome.allyFallen || []).map(unit => unit.name).join(', ')}` : '',
+        (outcome.allyFled || []).length ? `Withdrawn: ${(outcome.allyFled || []).map(unit => unit.name).join(', ')}` : '',
+    ].filter(Boolean).join('; ') || 'None';
+    const trigger = pending.trigger || outcome.opening?.text || 'The player triggered the encounter.';
     const rendered = renderTacticalTemplate(template, {
         title: pending.title || outcome.title || 'Tactical encounter',
         location: pending.location || outcome.location || 'the battlefield',
@@ -133,10 +165,31 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         fallen: fallen || 'None',
         fled: fled || 'None',
         defeated: defeated || 'None',
+        enemies_remaining: enemiesRemaining,
+        enemiesRemaining,
+        partyState,
+        allyState,
+        trigger,
+        highlights: describeHighlights(outcome),
+        finalState: describeFinalUnits(outcome),
         details,
         summary: outcome.summary || '',
     }).trim();
-    return rendered ? `${rendered}\n\n` : '';
+    if (!rendered) return '';
+    const bridge = `[TACTICAL_COMBAT_CONTEXT]\nA tactical encounter triggered by the player's previous message has just been resolved on the board. That previous message is not a new action and must not be replayed. Treat the result below as authoritative over stale State Memo or chat-history assumptions. The fight is over unless the result explicitly leaves enemies standing.\n[/TACTICAL_COMBAT_CONTEXT]\n\n`;
+    return `${bridge}${rendered}\n\n`;
+}
+
+/**
+ * Mark that the pending result was actually placed in this generation's prompt.
+ * @param {Record<string, any>} settings
+ * @param {string} [chatId]
+ */
+export function markNarrationInjected(settings, chatId = getActiveChatId()) {
+    const pending = getPendingNarration(settings);
+    if (!pending) return;
+    pending.injectedAt = Date.now();
+    pending.injectedFor = String(chatId || pending.chatId || '');
 }
 
 /**
@@ -147,7 +200,10 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
  * @param {{ save?: boolean }} [options]
  */
 export function clearNarrationAfterGeneration(settings, chatId = getActiveChatId(), options = {}) {
-    if (!settings?.tacticalCombatReturn) return;
+    const pending = getPendingNarration(settings);
+    if (!pending) return;
+    if (!options.force && !pending.injectedAt) return;
+    if (!options.force && pending.injectedFor && chatId && String(pending.injectedFor) !== String(chatId)) return;
     clearPendingNarration(settings, { chatId, persist: options.save === true });
 }
 

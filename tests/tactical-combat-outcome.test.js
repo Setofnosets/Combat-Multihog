@@ -98,6 +98,32 @@ describe('tactical combat outcome handoff', () => {
         expect(buildNarrationBlock(settings, 'chat-B')).toBe('');
     });
 
+    it('reports surviving enemies, the trigger, highlights, and the final state', () => {
+        const state = makeState();
+        state.opening = { text: 'Aria fires an arrow at the Goblin', resolved: true };
+        state.outcome.enemySurvivors = [{ id: 'enemy-3', name: 'Goblin Archer', hp: 7, maxHp: 12 }];
+        state.outcome.highlights = ['Aria critically hits the Goblin.'];
+        state.outcome.finalUnits = [
+            { name: 'Aria', side: 'player', hp: 14, maxHp: 20, defeated: false, fled: false },
+            { name: 'Goblin Archer', side: 'enemy', hp: 7, maxHp: 12, defeated: false, fled: false },
+        ];
+        const settings = { tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT };
+        settings.tacticalCombatReturn = {
+            chatId: 'chat-A',
+            title: 'The Sunken Keep',
+            location: 'Gatehouse',
+            trigger: state.opening.text,
+            outcome: state.outcome,
+        };
+        const block = buildNarrationBlock(settings, 'chat-A');
+        expect(block).toContain('TACTICAL_COMBAT_CONTEXT');
+        expect(block).toContain('not a new action');
+        expect(block).toContain('Remaining enemies: Goblin Archer (7/12 HP)');
+        expect(block).toContain('Aria fires an arrow');
+        expect(block).toContain('Aria critically hits the Goblin.');
+        expect(block).toContain('Goblin Archer [enemy]: 7/12 HP');
+    });
+
     it('supports a user-authored outcome template and leaves unknown placeholders intact', () => {
         const state = makeState();
         const settings = { tacticalCombatOutcomePrompt: 'RESULT={{outcome}} {{unknown}}' };
@@ -106,12 +132,25 @@ describe('tactical combat outcome handoff', () => {
         expect(block).toContain('RESULT=Victory {{unknown}}');
     });
 
-    it('clears the queued block only for the matching chat', () => {
-        const settings = { tacticalCombatReturn: { chatId: 'chat-A', outcome: { label: 'Victory' } } };
+    it('clears the queued block only after injection and only for the matching chat', () => {
+        const settings = {
+            tacticalCombatReturn: {
+                chatId: 'chat-A',
+                outcome: { label: 'Victory' },
+                injectedAt: Date.now(),
+                injectedFor: 'chat-A',
+            },
+        };
         clearNarrationAfterGeneration(settings, 'chat-B', { save: false });
         expect(settings.tacticalCombatReturn).not.toBeNull();
         clearNarrationAfterGeneration(settings, 'chat-A', { save: false });
         expect(settings.tacticalCombatReturn).toBeNull();
+    });
+
+    it('keeps a queued result that was never injected into a prompt', () => {
+        const settings = { tacticalCombatReturn: { chatId: 'chat-A', outcome: { label: 'Victory' }, injectedAt: 0 } };
+        clearNarrationAfterGeneration(settings, 'chat-A', { save: false });
+        expect(settings.tacticalCombatReturn).not.toBeNull();
     });
 });
 

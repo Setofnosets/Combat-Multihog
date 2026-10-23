@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest';
+import {
+    buildCombatMemoBlock,
+    buildCombatTrackerReport,
+    patchPartyMemoFromBoard,
+    seedCombatMemo,
+    syncCombatResultToMemo,
+} from '../src/features/tactical-combat/tactical-combat-memo.js';
+import { createEncounterState } from '../src/features/tactical-combat/tactical-combat-engine.js';
+import { parseCombatUnits } from '../src/features/tactical-combat/tactical-combat-context.js';
+
+function makeState() {
+    return createEncounterState({
+        chatId: 'chat-A',
+        seed: 9,
+        grid: { rows: 6, cols: 6 },
+        terrainRows: Array.from({ length: 6 }, () => '......'),
+        units: [
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 20, hp: 14, ac: 13, attackBonus: 5, damage: '1d8+2' },
+            { id: 'pc-2', name: 'Mira', side: 'player', maxHp: 18, hp: 18, ac: 12, attackBonus: 4, damage: '1d10' },
+            { id: 'enemy-3', name: 'Goblin Archer', side: 'enemy', maxHp: 12, hp: 7, ac: 13, attackBonus: 5, damage: '1d6+2', attackRange: 6 },
+        ],
+    });
+}
+
+describe('tactical combat memo synchronization', () => {
+    it('seeds a missing COMBAT block from the board roster', () => {
+        const state = makeState();
+        const settings = { currentMemo: '[CHARACTER]\nAria: 14/20 HP\n[/CHARACTER]' };
+        const memo = seedCombatMemo(state, settings);
+        expect(memo).toContain('[COMBAT]');
+        expect(memo).toContain('ENEMIES:');
+        expect(memo).toContain('Goblin Archer: 7/12 HP');
+        expect(memo).toContain('Aria: 14/20 HP');
+        expect(buildCombatMemoBlock(state)).toContain('COMBAT ROUND 1');
+    });
+
+    it('produces a COMBAT block that the memo parser can read back', () => {
+        const state = makeState();
+        const { enemies } = parseCombatUnits(buildCombatMemoBlock(state));
+        expect(enemies.map(unit => unit.name)).toEqual(['Goblin Archer']);
+        expect(enemies[0].hp).toBe(7);
+        expect(enemies[0].maxHp).toBe(12);
+        expect(enemies[0].attackBonus).toBe(5);
+        expect(enemies[0].damage).toBe('1d6+2');
+    });
+
+    it('patches party HP by name and {{user}} fallback without touching other sections', () => {
+        const state = makeState();
+        const memo = `[CHARACTER]
+{{user}} (Fighter): 20/20 HP
+Status: Healthy
+[/CHARACTER]
+
+[PARTY]
+Mira (Wizard): 18/18 HP
+Status: Healthy
+[/PARTY]
+
+[EVENT]
+Unchanged | keep me
+[/EVENT]`;
+        const patched = patchPartyMemoFromBoard(memo, state);
+        expect(patched).toContain('{{user}} (Fighter): 14/20 HP');
+        expect(patched).toContain('Mira (Wizard): 18/18 HP');
+        expect(patched).toContain('Unchanged | keep me');
+    });
+
+    it('closes combat and patches final HP before narration', () => {
+        const state = makeState();
+        state.units.find(unit => unit.id === 'enemy-3').defeated = true;
+        state.units.find(unit => unit.id === 'enemy-3').hp = 0;
+        const settings = {
+            currentMemo: '[CHARACTER]\nAria: 20/20 HP\n[/CHARACTER]\n[COMBAT]\nGoblin Archer: 12/12 HP\n[/COMBAT]',
+            combatDefeatedUi: [{ name: 'old' }],
+        };
+        const result = syncCombatResultToMemo(state, settings);
+        expect(result.changed).toBe(true);
+        expect(settings.currentMemo).toContain('[COMBAT]END_COMBAT[/COMBAT]');
+        expect(settings.currentMemo).toContain('Aria: 14/20 HP');
+        expect(settings.currentMemo).not.toContain('Goblin Archer: 12/12 HP');
+        expect(state.finalization.memoSynced).toBe(true);
+        expect(settings.combatDefeatedUi).toEqual([]);
+    });
+
+    it('builds a compact tracker final-state report with all sides and resources', () => {
+        const state = makeState();
+        state.status = 'victory';
+        state.outcome = {
+            label: 'Victory',
+            highlights: ['Goblin Archer is defeated.'],
+        };
+        state.opening = { text: 'Aria fires an arrow', resolved: true };
+        const report = buildCombatTrackerReport(state);
+        expect(report).toContain('TACTICAL COMBAT FINAL STATE');
+        expect(report).toContain('[Player] Aria: 14/20 HP');
+        expect(report).toContain('[Enemy] Goblin Archer: 7/12 HP');
+        expect(report).toContain('Opening action: Aria fires an arrow');
+        expect(report).toContain('Do not re-adjudicate');
+    });
+});

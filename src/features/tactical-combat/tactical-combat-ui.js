@@ -8,8 +8,12 @@
 
 import { getActiveChatId, getSettings } from '../../../state-manager.js';
 import {
+    addLog,
     applyAction,
+    applyOpeningAction,
     applySpecialEffects,
+    applySurprise,
+    buildOutcomeSummary,
     completeAgentTurn,
     computeReachableCells,
     createStateRng,
@@ -40,6 +44,11 @@ import {
     continueToNarration,
     queueCombatOutcome,
 } from './tactical-combat-outcome.js';
+import {
+    buildCombatTrackerReport,
+    seedCombatMemo,
+    syncCombatResultToMemo,
+} from './tactical-combat-memo.js';
 
 const OVERLAY_ID = 'rt-tactical-combat-overlay';
 const HOST_ID = 'rt-tc-host';
@@ -624,30 +633,123 @@ function finishEncounter(state, settings, options = {}) {
     return finalizeIfEnded(state, settings, options);
 }
 
+function scheduleAutoNarration(state, settings, options = {}) {
+    const chatId = getActiveChatId();
+    if (!chatId || !state || state.finalization?.autoNarrateStarted) return;
+    state.finalization.autoNarrateStarted = true;
+    setEncounterForChat(chatId, state, settings);
+    notifySettings();
+    cancelAutoNarrate();
+    ui.autoNarrateTimer = setTimeout(() => {
+        ui.autoNarrateTimer = null;
+        if (getActiveChatId() !== chatId) return;
+        const latest = getEncounterForChat(chatId, getSettings());
+        if (!latest || latest.id !== state.id || latest.finalization?.finalizing) return;
+        closeBoard();
+        void continueToNarration(getSettings()).then(ok => {
+            if (!ok) toast('info', 'The result is queued. Send your next message to continue the story.');
+        });
+    }, AUTO_NARRATE_DELAY_MS);
+}
+
+async function runCombatFinalization(state, settings, options = {}) {
+    const chatId = getActiveChatId();
+    if (!chatId || !state || state.status === 'active') return true;
+    if (state.finalization?.narrationQueued) return true;
+    if (narratorGenerationBusy()) {
+        if (!state.finalization?.waitingForNarration) {
+            state.finalization = {
+                ...(state.finalization || {}),
+                finalizing: true,
+                waitingForNarration: true,
+                stage: 'waiting-for-narration',
+                finalizingStartedAt: state.finalization?.finalizingStartedAt || Date.now(),
+            };
+            setEncounterForChat(chatId, state, settings);
+            notifySettings();
+            setTimeout(() => {
+                if (getActiveChatId() !== chatId) return;
+                const latest = getEncounterForChat(chatId, getSettings());
+                if (!latest || latest.id !== state.id) return;
+                latest.finalization = { ...(latest.finalization || {}), finalizing: false, waitingForNarration: false };
+                void runCombatFinalization(latest, getSettings(), options);
+            }, 1200);
+        }
+        render();
+        return true;
+    }
+    if (state.finalization?.finalizing) return true;
+
+    state.finalization = {
+        ...(state.finalization || {}),
+        finalizing: true,
+        stage: 'syncing',
+        finalizingStartedAt: Date.now(),
+    };
+    syncCombatResultToMemo(state, settings);
+    setEncounterForChat(chatId, state, settings);
+    notifySettings();
+    render();
+
+    try {
+        const stateTrackerBusy = typeof globalThis._rpgStateModelRunning === 'function'
+            && globalThis._rpgStateModelRunning();
+        const canSync = settings.enabled
+            && !stateTrackerBusy
+            && settings.tacticalCombatSyncTrackerBeforeNarration !== false
+            && typeof globalThis._rpgRunStateModelPass === 'function';
+        if (canSync) {
+            setBusy(true, 'Updating the State Tracker with the final combat state…');
+            render();
+            await globalThis._rpgRunStateModelPass('', false, null, {
+                extraContext: buildCombatTrackerReport(state),
+                extraInstruction: 'The tactical board is authoritative. Apply this final state to the memo, close [COMBAT], and do not re-adjudicate the encounter.',
+                timeoutMs: 30000,
+            });
+        }
+    } catch (error) {
+        console.warn('[RPG Tracker] Tactical Combat tracker finalization failed:', error);
+    } finally {
+        setBusy(false);
+    }
+
+    if (getActiveChatId() !== chatId) return true;
+    const latest = getEncounterForChat(chatId, getSettings());
+    if (!latest || latest.id !== state.id) return true;
+
+    // Re-apply the deterministic end state. A tracker pass may have emitted a
+    // partial [COMBAT] block, but it must never leave dead enemies active.
+    syncCombatResultToMemo(latest, settings);
+    queueCombatOutcome(latest, settings, { persist: false, refresh: true });
+    latest.finalization = {
+        ...(latest.finalization || {}),
+        finalizing: false,
+        stage: 'queued',
+        finalizedAt: Date.now(),
+    };
+    setEncounterForChat(chatId, latest, settings);
+    notifySettings();
+    render();
+
+    if (settings.tacticalCombatAutoNarrate && options.autoNarrate !== false) {
+        scheduleAutoNarration(latest, settings, options);
+    }
+    return true;
+}
+
 function finalizeIfEnded(state, settings = getSettings(), options = {}) {
     if (!state || state.status === 'active') return false;
     const chatId = getActiveChatId();
     if (!chatId) return true;
-    if (!state.finalization?.narrationQueued) {
-        queueCombatOutcome(state, settings, { persist: false, refresh: true });
-        setEncounterForChat(chatId, state, settings);
-        notifySettings();
-        if (settings.tacticalCombatAutoNarrate && options.autoNarrate !== false && !state.finalization.autoNarrateStarted) {
-            state.finalization.autoNarrateStarted = true;
-            setEncounterForChat(chatId, state, settings);
-            notifySettings();
-            cancelAutoNarrate();
-            ui.autoNarrateTimer = setTimeout(() => {
-                ui.autoNarrateTimer = null;
-                if (getActiveChatId() !== chatId) return;
-                const latest = getEncounterForChat(chatId, getSettings());
-                if (!latest || latest.id !== state.id) return;
-                closeBoard();
-                void continueToNarration(getSettings()).then(ok => {
-                    if (!ok) toast('info', 'The result is queued. Send your next message to continue the story.');
-                });
-            }, AUTO_NARRATE_DELAY_MS);
-        }
+    const finalizingStartedAt = Number(state.finalization?.finalizingStartedAt) || 0;
+    const staleFinalization = !!state.finalization?.finalizing
+        && finalizingStartedAt > 0
+        && Date.now() - finalizingStartedAt > 90000;
+    if (staleFinalization) {
+        state.finalization = { ...(state.finalization || {}), finalizing: false, waitingForNarration: false };
+    }
+    if (!state.finalization?.narrationQueued && (!state.finalization?.finalizing || staleFinalization)) {
+        void runCombatFinalization(state, settings, options);
     }
     render();
     return true;
@@ -816,6 +918,127 @@ async function copyText(text) {
     return false;
 }
 
+function narratorGenerationBusy() {
+    if (globalThis._rpgGenerationBusy === true) return true;
+    try {
+        const ctx = SillyTavern.getContext();
+        if (typeof ctx?.isGenerating === 'boolean') return ctx.isGenerating;
+    } catch (_) { /* host not ready */ }
+    return false;
+}
+
+function buildOpeningRequest(options = {}) {
+    const raw = options.openingAction;
+    const fromObject = raw && typeof raw === 'object' ? raw : null;
+    const text = String(fromObject?.text || fromObject?.description || raw || '').trim();
+    if (!text) return null;
+    return {
+        text: text.slice(0, 1200),
+        actorName: String(fromObject?.actorName || options.openingActor || '').trim(),
+        targetName: String(fromObject?.targetName || options.openingTarget || '').trim(),
+        skillName: String(fromObject?.skillName || options.openingSkill || '').trim(),
+        itemName: String(fromObject?.itemName || options.openingItem || options.openingSkill || '').trim(),
+        surprise: fromObject?.surprise === true || options.surprise === true,
+        sourceMessageId: options.sourceMessageId || '',
+    };
+}
+
+function resetOpeningActorResources(state) {
+    const actor = state?.units?.find(unit => unit.id === state.opening?.actorId);
+    if (!actor) return;
+    actor.actionUsed = false;
+    actor.bonusUsed = false;
+    actor.doneForRound = false;
+    actor.movementUsed = 0;
+}
+
+async function resolveSpecialOpeningForState(state, settings, options = {}) {
+    if (!state || state.status !== 'active' || !state.opening?.requiresAgent || state.opening?.resolving) return false;
+    const actor = state.units.find(unit => unit.id === state.opening.actorId);
+    const target = state.units.find(unit => unit.id === state.opening.targetId) || null;
+    if (!actor) {
+        state.opening.error = 'The opening actor is no longer on the board.';
+        state.opening.requiresAgent = false;
+        return false;
+    }
+    const skill = (actor.skills || []).find(entry => entry.id === state.opening.skillId) || null;
+    const item = (actor.items || []).find(entry => entry.id === state.opening.itemId) || null;
+    state.opening.resolving = true;
+    setBusy(true, 'Resolving the opening action…');
+    persist(state);
+    render();
+    try {
+        const source = item
+            ? { kind: 'item', name: item.name, description: item.description || state.opening.text }
+            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text };
+        const resolved = await resolveSpecialEffectWithAgent(state, actor, source, target, settings, {
+            signal: options.signal || null,
+        });
+        if (getActiveChatId() !== state.chatId) return false;
+        if (!resolved.ok) {
+            state.opening.error = resolved.error || 'The opening action could not be resolved.';
+            state.opening.requiresAgent = false;
+            addLog(state, 'opening', `Opening action needs manual resolution: ${state.opening.error}`, actor.id);
+            toast('warning', state.opening.error);
+            return false;
+        }
+        const applied = applySpecialEffects(state, resolved.effects || [], {
+            casterId: actor.id,
+            skillId: skill?.id || '',
+            itemId: item?.id || '',
+            log: resolved.log || state.opening.text,
+            narrative: resolved.log || '',
+        });
+        if (!applied.ok) {
+            state.opening.error = applied.error || 'The opening action had no usable effects.';
+            state.opening.requiresAgent = false;
+            addLog(state, 'opening', `Opening action needs manual resolution: ${state.opening.error}`, actor.id);
+            toast('warning', state.opening.error);
+            return false;
+        }
+        resetOpeningActorResources(state);
+        state.opening.requiresAgent = false;
+        state.opening.resolved = true;
+        state.opening.log = resolved.log || '';
+        state.opening.resolvedAt = Date.now();
+        addLog(state, 'opening', `${actor.name} opens the fight: ${state.opening.text}.`, actor.id);
+        if (state.status !== 'active') state.outcome = buildOutcomeSummary(state);
+        return true;
+    } catch (error) {
+        state.opening.error = String(error?.message || error);
+        state.opening.requiresAgent = false;
+        addLog(state, 'opening', `Opening action could not be resolved: ${state.opening.error}`, actor.id);
+        return false;
+    } finally {
+        state.opening.resolving = false;
+        setBusy(false);
+        render();
+    }
+}
+
+function scheduleOpeningResolution(state, settings, options = {}) {
+    if (!state?.opening?.requiresAgent) return;
+    const chatId = state.chatId || getActiveChatId();
+    const startedAt = Date.now();
+    const attempt = () => {
+        if (getActiveChatId() !== chatId) return;
+        const latest = getEncounterForChat(chatId, getSettings());
+        if (!latest || latest.id !== state.id || latest.status !== 'active') return;
+        if (narratorGenerationBusy() && Date.now() - startedAt < 45000) {
+            setTimeout(attempt, 600);
+            return;
+        }
+        void resolveSpecialOpeningForState(latest, getSettings(), options).then(ok => {
+            if (getActiveChatId() !== chatId) return;
+            persist(latest);
+            render();
+            if (!ok) return;
+            if (latest.status !== 'active') finishEncounter(latest, getSettings(), { autoNarrate: !options.fromNarrator });
+        });
+    };
+    setTimeout(attempt, 800);
+}
+
 async function startEncounterFlow(options = {}) {
     const settings = getSettings();
     if (!settings.tacticalCombatEnabled) {
@@ -876,7 +1099,13 @@ async function startEncounterFlow(options = {}) {
     let agentEncounter = null;
     let warnings = [];
     const needsAgent = source === 'agent' || (source === 'auto' && !context.existingCombat);
-    if (needsAgent) {
+    // Calling the encounter architect from inside the narrator's function-tool
+    // action would create a nested provider request while the main generation is
+    // still running. In that path use the deterministic local roster; the board
+    // still starts immediately and seeds [COMBAT]. Settings/manual starts retain
+    // the full agent-designed encounter.
+    const canCallAgentNow = !options.fromNarrator;
+    if (needsAgent && canCallAgentNow) {
         setBusy(true, 'The combat agent is designing the encounter…', true);
         render();
         const generated = await generateEncounterWithAgent(context, settings, { signal: controller.signal });
@@ -889,6 +1118,8 @@ async function startEncounterFlow(options = {}) {
         }
         if (generated.ok) agentEncounter = generated.encounter;
         else if (generated.error) warnings.push(generated.error);
+    } else if (needsAgent && options.fromNarrator) {
+        warnings.push('The narrator started this fight without an active [COMBAT] roster; a local skirmish was generated from the scene.');
     }
     if (ui.abortController === controller) ui.abortController = null;
 
@@ -922,6 +1153,29 @@ async function startEncounterFlow(options = {}) {
         if (options.reason && !options.description) {
             state.description = `${state.description || ''}\n\nTrigger: ${String(options.reason).slice(0, 300)}`.trim();
         }
+
+        let openingNeedsAgent = false;
+        if (settings.tacticalCombatOpeningActions !== false) {
+            const opening = buildOpeningRequest(options);
+            if (opening) {
+                const openingResult = applyOpeningAction(state, opening, { rng: createStateRng(state) });
+                if (openingResult.requiresAgent) {
+                    openingNeedsAgent = true;
+                } else if (!openingResult.ok && openingResult.error) {
+                    warnings.push(`Opening action was not resolved automatically: ${openingResult.error}`);
+                }
+            } else if (options.surprise === true) {
+                applySurprise(state, 'player');
+            }
+        }
+
+        // The board is authoritative. When the encounter was invented from the
+        // scene, write its roster into the memo before the State Tracker or
+        // narrator can read stale enemies. An existing, detailed [COMBAT] block
+        // is preserved until combat end; the board still owns the mechanics.
+        if (!context.existingCombat || source === 'agent') {
+            seedCombatMemo(state, settings);
+        }
         persist(state);
         ui.starting = false;
         setBusy(false);
@@ -931,12 +1185,15 @@ async function startEncounterFlow(options = {}) {
         toast('success', warnings.length ? `Encounter ready. ${warnings[0]}` : 'Encounter ready.');
         if (state.status !== 'active') {
             finishEncounter(state, settings, { autoNarrate: !options.fromNarrator });
-        } else if (state.phase === 'enemy' && getPendingAgentUnitIds(state).length) {
-            // Never call the combat agent from inside the narrator's tool call:
-            // it would make a nested provider request while the main generation is
-            // still running (a common source of 503s). The board's "Resolve enemy
-            // turn" button handles it once the narration finishes.
-            if (!options.fromNarrator) void runEnemyTurnForState(state, settings);
+        } else {
+            if (openingNeedsAgent) scheduleOpeningResolution(state, settings, options);
+            if (state.phase === 'enemy' && getPendingAgentUnitIds(state).length) {
+                // Never call the combat agent from inside the narrator's tool call:
+                // it would make a nested provider request while the main generation is
+                // still running (a common source of 503s). The board's "Resolve enemy
+                // turn" button handles it once the narration finishes.
+                if (!options.fromNarrator) void runEnemyTurnForState(state, settings);
+            }
         }
         return { ok: true, state, warnings };
     } catch (error) {
@@ -1012,13 +1269,25 @@ function handleOverlayAction(action, element) {
         case 'select-item':
             handleSelectItem(element?.dataset?.tcItemId || '');
             break;
-        case 'continue-narration':
+        case 'continue-narration': {
+            const current = getState();
+            if (current?.finalization?.finalizing) {
+                const since = Number(current.finalization.finalizingStartedAt) || 0;
+                if (!since || Date.now() - since < 90000) {
+                    toast('info', 'Updating the State Tracker with the final combat state…');
+                    break;
+                }
+                current.finalization = { ...(current.finalization || {}), finalizing: false, waitingForNarration: false };
+                finalizeIfEnded(current, getSettings());
+                break;
+            }
             cancelAutoNarrate();
             closeBoard();
             void continueToNarration(getSettings()).then(ok => {
                 if (!ok) toast('info', 'The result is queued. Send your next message to continue the story.');
             });
             break;
+        }
         case 'dismiss-result':
             cancelAutoNarrate();
             ui.view.dismissResult = true;
@@ -1100,6 +1369,10 @@ export function onTacticalCombatChatChanged(chatId = getActiveChatId()) {
     setBusy(false);
     resetViewSelection();
     ui.centerNextRender = true;
+    const arrived = chatId ? getEncounterForChat(chatId, getSettings()) : null;
+    if (arrived && arrived.status !== 'active' && !arrived.finalization?.narrationQueued) {
+        finalizeIfEnded(arrived, getSettings());
+    }
     notifySettings();
     if (ui.overlayOpen) render();
 }
@@ -1138,8 +1411,12 @@ export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
         location: args.location,
         description: args.description,
         reason: args.reason,
+        openingAction: args.openingAction,
+        openingTarget: args.openingTarget,
+        openingSkill: args.openingSkill,
+        surprise: args.surprise,
         silentNew: true,
-        source: options.source || 'existing',
+        source: options.source || settings.tacticalCombatEncounterSource || 'auto',
         fromNarrator: true,
     });
     if (!result.ok) {

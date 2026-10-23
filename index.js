@@ -3205,9 +3205,13 @@ function updatePanelStatus() {
  * @param {string} narrativeOutput The last narrative message to parse.
  * @param {boolean} isFullContext Whether to perform a long-horizon audit of the entire chat.
  */
-async function runStateModelPass(narrativeOutput, isFullContext = false, overrideLookback = null) {
+async function runStateModelPass(narrativeOutput, isFullContext = false, overrideLookback = null, options = {}) {
     const ownsOperation = createChatCommitGuard(runtimeState.currentChatId, () => runtimeState.currentChatId);
     const settings = getSettings();
+    const extraContext = String(options.extraContext || '').trim();
+    const extraInstruction = String(options.extraInstruction || '').trim();
+    const timeoutMs = Math.max(0, Number(options.timeoutMs) || 0);
+    let stateTimeout = null;
     // Capture before any await: after a chat switch the shared settings object
     // belongs to a different partition and must not receive this pass's commit.
     const passChatId = runtimeState.currentChatId;
@@ -3232,6 +3236,11 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
         if (runtimeState.stateController) runtimeState.stateController.abort();
         runtimeState.stateController = new AbortController();
         const signal = runtimeState.stateController.signal;
+        if (timeoutMs > 0) {
+            stateTimeout = setTimeout(() => {
+                try { runtimeState.stateController?.abort(); } catch (_) { /* no-op */ }
+            }, timeoutMs);
+        }
         let abandonedForChatSwitch = false;
 
         const modulesText = buildModulesInstructionText(settings);
@@ -3420,7 +3429,9 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
                     worldLoreSection +
                     `## PRIOR MEMO\n${stripMemoHtml(memoForTrackerContext(settings.currentMemo)) || '(empty)'}\n\n` +
                     `## NARRATIVE HISTORY (Chunk ${i + 1} of ${chunks.length})\n${chatLog}\n\n` +
+                    (extraContext ? `## ADDITIONAL AUTHORITATIVE CONTEXT\n${extraContext}\n\n` : '') +
                     `## TASK\nAnalyze the narrative chunk provided above. Rebuild the State Memo to ensure every detail is perfectly accurate to this point in the story. Correct any errors or omissions found in the Prior Memo.\n\n` +
+                    (extraInstruction ? `${extraInstruction}\n\n` : '') +
                     `## OUTPUT THE COMPLETE VERIFIED STATE MEMO:`;
             } else {
                 const suffix = settings.fullReviewStateMode
@@ -3430,6 +3441,8 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
                     worldLoreSection +
                     priorMemoText +
                     `## NARRATIVE HISTORY (Last ${chunks[i].length} messages)\n${chatLog}\n\n` +
+                    (extraContext ? `## ADDITIONAL AUTHORITATIVE CONTEXT\n${extraContext}\n\n` : '') +
+                    (extraInstruction ? `${extraInstruction}\n\n` : '') +
                     suffix;
             }
 
@@ -3454,6 +3467,16 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
                     cleanedOutput = memoBlocks[memoBlocks.length - 1][1].trim();
                 } else {
                     cleanedOutput = cleanedOutput.replace(/<\/?memo>/gi, '').trim();
+                }
+                // While a tactical board is active, [COMBAT] belongs to the board.
+                // Let the tracker update CHARACTER/PARTY/EVENT and everything else,
+                // but never let stale prose replace the live roster.
+                const activeBoard = settings.tacticalCombatByChat?.[passChatId];
+                if (activeBoard?.status === 'active') {
+                    cleanedOutput = cleanedOutput
+                        .replace(/\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi, '')
+                        .replace(/\n{3,}/g, '\n\n')
+                        .trim();
                 }
 
                 const merged = mergeMemo(memoBeforeThisChunk, cleanedOutput);
@@ -3536,6 +3559,7 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
         console.error("[RPG Tracker] State Model pass failed:", error);
         broadcastStateTrackerStep('error', String(error?.message || error));
     } finally {
+        if (stateTimeout) clearTimeout(stateTimeout);
         runtimeState.stateModelRunning = false;
         runtimeState.stateController = null;
         updateStatusIndicator('active');

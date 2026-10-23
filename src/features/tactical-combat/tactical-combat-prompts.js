@@ -82,12 +82,19 @@ Encounter: {{title}}
 Location: {{location}}
 Outcome: {{outcome}}
 Rounds: {{rounds}}
-Survivors: {{survivors}}
-Defeated: {{defeated}}
+Triggered by: {{trigger}}
+Party survivors: {{survivors}}
+Remaining enemies: {{enemiesRemaining}}
+Allies: {{allyState}}
+Defeated enemies: {{defeated}}
 Fallen: {{fallen}}
 Escaped: {{fled}}
+Highlights:
+{{highlights}}
 {{details}}
-Continue the main narrative from this aftermath. The fight is over. Do not restart it, resurrect defeated combatants, or contradict the survivors and casualties listed above. Describe the immediate consequences, reactions, and what the party sees next.`;
+Final state:
+{{finalState}}
+Continue the main narrative from this aftermath. The fight is over unless remaining enemies are listed above. Do not restart it, resurrect defeated combatants, or contradict the survivors, enemies, and casualties listed. Describe the immediate consequences, reactions, and what the party sees next.`;
 
 export const DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT = `You resolve ONE freeform special ability, spell, or item in a tactical grid combat. The local engine already handles ordinary attacks, healing, and buffs; you are only called for abilities whose behaviour cannot be expressed simply (summoning, terrain reshaping, unusual control, complex multi-effect magic).
 
