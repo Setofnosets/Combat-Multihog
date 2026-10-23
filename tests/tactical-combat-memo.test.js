@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     buildCombatMemoBlock,
     buildCombatTrackerReport,
+    clearStaleCombatMemo,
     patchPartyMemoFromBoard,
     seedCombatMemo,
     syncCombatResultToMemo,
@@ -81,6 +82,25 @@ Unchanged | keep me
         expect(settings.currentMemo).not.toContain('Goblin Archer: 12/12 HP');
         expect(state.finalization.memoSynced).toBe(true);
         expect(settings.combatDefeatedUi).toEqual([]);
+    });
+
+    it('clears archived or matching stale COMBAT blocks before a new encounter', () => {
+        const oldState = makeState();
+        const settings = {
+            currentMemo: '[CHARACTER]\nAria: 20/20 HP\n[/CHARACTER]\n[COMBAT]\nGoblin Archer: 12/12 HP\n[/COMBAT]',
+        };
+        expect(clearStaleCombatMemo(oldState, settings).removed).toBe(true);
+        expect(settings.currentMemo).not.toContain('[COMBAT]');
+
+        const ended = { currentMemo: '[COMBAT]END_COMBAT[/COMBAT]' };
+        expect(clearStaleCombatMemo(null, ended).removed).toBe(true);
+        expect(ended.currentMemo).toBe('');
+
+        const fresh = {
+            currentMemo: '[COMBAT]\nHobgoblin: 20/20 HP\n[/COMBAT]',
+        };
+        expect(clearStaleCombatMemo(oldState, fresh).removed).toBe(false);
+        expect(fresh.currentMemo).toContain('Hobgoblin');
     });
 
     it('builds a compact tracker final-state report with all sides and resources', () => {

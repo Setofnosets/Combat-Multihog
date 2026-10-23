@@ -48,7 +48,7 @@ describe('Tactical Combat narrator function tool', () => {
         expect(tool.parameters.type).toBe('object');
         expect(tool.parameters.required).toEqual([]);
         expect(Object.keys(tool.parameters.properties).sort()).toEqual([
-            'description', 'location', 'openingAction', 'openingSkill', 'openingTarget', 'reason', 'surprise', 'title',
+            'description', 'enemyNames', 'location', 'openingAction', 'openingSkill', 'openingTarget', 'reason', 'surprise', 'title',
         ]);
         expect(typeof tool.action).toBe('function');
         expect(tool.formatMessage()).toMatch(/board is open/i);
@@ -78,11 +78,15 @@ describe('Tactical Combat narrator function tool', () => {
         expect(hooksSource).toContain('stealth: false');
         expect(hooksSource).toContain("tacticalCombatEncounterSource || 'auto'");
         expect(hooksSource).toContain('openingAction');
+        expect(hooksSource).toContain('enemyNames');
         expect(hooksSource).toContain('export function syncTacticalCombatToolRegistration');
         expect(hooksSource).toContain('buildTacticalCombatRuntimeOverride');
         expect(hooksSource).toContain('[TACTICAL_COMBAT_OVERRIDE]');
         expect(indexSource).toContain('MESSAGE_SENT, () => syncTacticalCombatToolRegistration()');
         expect(uiSource).toContain('if (!options.fromNarrator) void runEnemyTurnForState');
+        expect(uiSource).toContain('scheduleDeferredEncounterArchitect');
+        expect(uiSource).toContain('state.preparing');
+        expect(uiSource).toContain('clearEndedEncounterForFreshStart');
 
         const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*syncTacticalCombatToolRegistration\(\);\s*syncLocationMappingRuntime\(\);/);
         expect(toolBlock).not.toBeNull();

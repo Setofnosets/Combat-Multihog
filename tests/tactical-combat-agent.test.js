@@ -8,6 +8,7 @@ import {
     buildEncounterRequestPayload,
     buildEncounterUserPrompt,
     buildLocalAiActions,
+    namedEnemyMismatch,
     normalizeEncounterPayload,
     normalizeSpecialEffects,
     parseAgentActionResponse,
@@ -180,18 +181,31 @@ describe('tactical encounter architect payloads', () => {
             enemies: [{ name: 'Goblin', hp: 9, maxHp: 9, ac: 11, attackBonus: 3, attackRange: 1, damage: '1d6', skills: [] }],
             location: 'The Sunken Keep',
             sceneExcerpt: 'Arrows hiss from the murder holes.',
+            playerDeclaration: 'I attack the goblins.',
+            enemyNames: ['Goblin'],
+            freshStart: false,
             summary: { party: ['Aria (Fighter, 20/24 HP)'] },
             existingCombat: true,
         };
         const payload = buildEncounterRequestPayload(context, SETTINGS);
         expect(payload.party[0].name).toBe('Aria');
         expect(payload.existingCombat[0].name).toBe('Goblin');
+        expect(payload.playerDeclaration).toBe('I attack the goblins.');
+        expect(payload.enemyNames).toEqual(['Goblin']);
+        expect(payload.freshStart).toBe(false);
         expect(payload.location).toBe('The Sunken Keep');
         expect(payload.requestedGrid.rows).toBe(10);
         expect(payload.terrainLegend['#']).toMatch(/wall/i);
         const prompt = buildEncounterUserPrompt(context, SETTINGS);
         expect(prompt).toContain('ENCOUNTER REQUEST');
         expect(prompt).toContain('The Sunken Keep');
+    });
+
+    it('rejects architect rosters that replace named enemies with a generic theme roster', () => {
+        const context = { enemyNames: ['Goblin'] };
+        expect(namedEnemyMismatch({ enemies: [{ name: 'Kobold' }, { name: 'Cave Bat' }] }, context)).toMatch(/must use the named enemy/i);
+        expect(namedEnemyMismatch({ enemies: [{ name: 'Goblin' }, { name: 'Goblin Archer' }] }, context)).toBe('');
+        expect(namedEnemyMismatch({ enemies: [{ name: 'Goblin Chief' }] }, context)).toBe('');
     });
 
     it('normalizes resolver effects and drops invalid targets/terrain', () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildTacticalCombatMarkup, escapeHtml } from '../src/features/tactical-combat/tactical-combat-markup.js';
 import {
+    beginDeployment,
     createEncounterState,
     getUnitById,
     retreatEncounter,
@@ -31,6 +32,26 @@ function makeState() {
 }
 
 describe('tactical combat markup', () => {
+    it('renders a preparing screen while the encounter architect is working', () => {
+        const state = makeState();
+        state.preparing = { active: true, startedAt: Date.now() };
+        const html = buildTacticalCombatMarkup(state, {});
+        expect(html).toContain('Designing the encounter');
+        expect(html).toContain('data-tc-action="use-fallback"');
+        expect(html).not.toContain('rt-tc-grid');
+    });
+
+    it('renders a deployment bar with a Start battle action and hides combat actions', () => {
+        const state = makeState();
+        beginDeployment(state, { columns: 3 });
+        const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1', mode: 'deploy' });
+        expect(html).toContain('Deployment');
+        expect(html).toContain('data-tc-action="start-battle"');
+        expect(html).not.toContain('data-tc-action="end-turn"');
+        expect(html).not.toContain('data-tc-action="mode-attack"');
+        expect(html).toContain('Deployment: select a player unit');
+    });
+
     it('renders a centered empty state with start/settings actions', () => {
         const html = buildTacticalCombatMarkup(null, { error: 'No encounter.' });
         expect(html).toContain('rt-tc-empty');

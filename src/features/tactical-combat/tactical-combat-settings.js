@@ -115,6 +115,8 @@ function syncStatus(settings = depsRef?.settings) {
         status.textContent = 'Open a chat to use tactical combat.';
     } else if (!state) {
         status.textContent = 'No encounter saved for this chat. Start one to build the battlefield.';
+    } else if (state.preparing?.active) {
+        status.textContent = 'The encounter architect is designing the opposition from the current scene…';
     } else if (state.status === 'active') {
         const phase = state.turnStyle === 'phase'
             ? (state.phase === 'enemy' ? 'Enemy phase' : 'Player phase')
@@ -126,7 +128,9 @@ function syncStatus(settings = depsRef?.settings) {
     const startBtn = el('rpg_tactical_combat_start');
     if (startBtn) {
         startBtn.disabled = !enabled;
-        const label = state?.status === 'active' ? 'Resume encounter' : state ? 'Start new encounter' : 'Start encounter';
+        const label = state?.preparing?.active
+            ? 'Preparing encounter…'
+            : state?.status === 'active' ? 'Resume encounter' : state ? 'Start new encounter' : 'Start encounter';
         startBtn.innerHTML = `<i class="fa-solid fa-crosshairs" aria-hidden="true"></i> ${label}`;
     }
     const resetBtn = el('rpg_tactical_combat_reset');
@@ -148,6 +152,7 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_encounter_source'), settings.tacticalCombatEncounterSource || 'auto');
     setChecked(el('rpg_tactical_combat_auto_narrate'), settings.tacticalCombatAutoNarrate !== false);
     setChecked(el('rpg_tactical_combat_opening_actions'), settings.tacticalCombatOpeningActions !== false);
+    setChecked(el('rpg_tactical_combat_deployment_phase'), settings.tacticalCombatDeploymentPhase !== false);
     setChecked(el('rpg_tactical_combat_sync_tracker_before_narration'), settings.tacticalCombatSyncTrackerBeforeNarration !== false);
     setChecked(el('rpg_tactical_combat_show_coordinates'), !!settings.tacticalCombatShowCoordinates);
     setValue(el('rpg_tactical_combat_max_tokens'), settings.tacticalCombatMaxTokens ?? 6000);
@@ -262,6 +267,7 @@ export function bindTacticalCombatSettings(deps) {
     for (const [id, key] of [
         ['rpg_tactical_combat_auto_narrate', 'tacticalCombatAutoNarrate'],
         ['rpg_tactical_combat_opening_actions', 'tacticalCombatOpeningActions'],
+        ['rpg_tactical_combat_deployment_phase', 'tacticalCombatDeploymentPhase'],
         ['rpg_tactical_combat_sync_tracker_before_narration', 'tacticalCombatSyncTrackerBeforeNarration'],
         ['rpg_tactical_combat_show_coordinates', 'tacticalCombatShowCoordinates'],
     ]) {

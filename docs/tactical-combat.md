@@ -11,7 +11,7 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 1. Open **Settings → Tactical Combat** and enable the feature.
 2. Choose a grid size, turn style, terrain theme, and (optionally) a dedicated combat-agent connection.
 3. Talk to the narrator until a fight begins. The narrator calls `StartTacticalCombat` immediately; it can reuse an existing `[COMBAT]` roster or build opposition from the current scene when none exists.
-4. The board opens with the party on the left and enemies on the right. When the fight started from a declared action, that opening action is resolved before Round 1.
+4. The board opens with the party on the left and enemies on the right. When deployment is enabled, reposition player units inside the highlighted left lane and press **Start battle**. When the fight started from a declared action, that opening action is resolved before Round 1.
 5. Select a player unit, move to a blue-highlighted cell, then attack (red targets), use a skill or item, defend, wait, or flee.
 6. Press **End player phase** (phased mode) or **End turn** (initiative mode). The combat agent controls every enemy and non-party ally, then the next player phase begins.
 7. When one side is gone — or the party retreats — final HP is written into the memo, `[COMBAT]` is closed, and the authoritative aftermath is queued for the main narrator.
@@ -32,6 +32,7 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
 | **Resolve declared opening actions** | Applies the player's declared spell, ambush, charge, or attack before Round 1. Ambushes cost the enemy their first activation. |
+| **Deploy player units before battle** | Opens a deployment step where player units can be repositioned inside the left deployment lane. Press **Start battle** to begin Round 1. |
 | **Update State Tracker before narration** | Writes final HP and the closed combat block into the memo before the aftermath prompt is sent. Disable to let the next normal tracker pass handle it. |
 | **Combat agent connection** | Main API, saved connection profile, Ollama, or OpenAI-compatible endpoint + completion preset + max output tokens. |
 | **Prompt Templates** | Editable tactical agent, encounter architect, outcome-to-narration, and special-ability resolver prompts. Reset restores the shipped template. |
@@ -70,6 +71,7 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
 - **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, and bonus-action usage. A class-appropriate fallback skill is granted if nothing parses.
 - **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
+- **Inventory ownership**: every combatant now exposes gear parsed from their own `Gear:`/`Att/def:` line in the board's Inventory panel. The player character's dedicated `[INVENTORY]` block is merged on top of their sheet gear, and only its consumables become clickable items.
 - **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` are parsed independently of `[CHARACTER]`. Both the encounter architect and the combat agent receive the party's abilities, spells, consumables, and full inventory context. Gear and other inventory entries are passed as context and shown in the board's Inventory panel; consumables/scrolls/vials become usable board items. Items such as a Restoration Vial use the special resolver with `cure` effects.
 - **Defeat**: a unit at 0 HP is defeated and remains on the board as a faded corpse. Victory = every enemy defeated. Defeat = every player unit defeated. Retreat = every player unit fled or the player presses Retreat.
 - **Hazards** damage all units standing on them at the start of each round.
@@ -139,15 +141,17 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
 
 The narrator tool is enabled by default with the **Game Systems → Components → Tactical Combat (StartTacticalCombat tool)** component. Disable that component (or the `<tactical_combat>` section in the System Prompt Control Room) if your model/provider does not support function calling. The component adds the predefined `<tactical_combat>` instruction to the system prompt and exposes the function tool whenever tactical combat is enabled and no encounter/result is already in progress.
 
-The main narrator calls the registered `StartTacticalCombat` function tool as soon as a real fight begins. Optional arguments: `title`, `location`, `description`, `reason`, `openingAction`, `openingTarget`, `openingSkill`, `surprise`. The tool:
+The main narrator calls the registered `StartTacticalCombat` function tool as soon as a real fight begins. Optional arguments: `title`, `location`, `description`, `reason`, `openingAction`, `openingTarget`, `openingSkill`, `surprise`, `enemyNames`. The tool:
 
-1. Starts the encounter through the same path as the settings button. It reuses `[COMBAT]` when present and otherwise builds opposition from the scene. When called from inside the narrator generation with no `[COMBAT]` roster, it uses the deterministic local roster instead of making a nested encounter-architect request.
-2. Seeds the board roster into `[COMBAT]` immediately, so the memo is never one turn behind.
-3. Opens/focuses the tactical board and leaves a visible tool message in chat.
+1. Clears any concluded board and its stale memo roster before preparing a fresh encounter.
+2. When a new roster must be designed, opens a **preparing** screen and defers the encounter architect until the main narrator generation ends. This keeps the architect out of the provider request that is already streaming and gives it the current scene and player declaration.
+3. Replaces the provisional roster with the architect's encounter, seeds `[COMBAT]`, and starts deployment. If the architect fails or the narrator generation never finishes, **Use local roster** remains available and named enemy types are preferred over generic terrain rosters.
 4. Resolves the declared opening action deterministically where possible; freeform/special effects are resolved after the narrator generation completes.
 5. Returns a short status string to the model.
 
 If an encounter is already active, it simply reopens the board. If Tactical Combat is disabled, it returns a message asking the player to enable it. The narrator is told not to resolve the fight itself.
+
+The encounter architect receives the player's current declaration, optional named enemies, a `freshStart` flag, and a scene excerpt that excludes prior tactical result messages, tool rows, and system notices. Named enemy types in the player declaration take precedence over the terrain theme.
 
 ---
 

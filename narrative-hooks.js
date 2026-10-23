@@ -735,6 +735,11 @@ export function registerTacticalCombatTool() {
                     openingTarget: { type: 'string', description: 'Optional exact target name or id for the opening action.' },
                     openingSkill: { type: 'string', description: 'Optional exact spell, skill, or item name used in the opening action.' },
                     surprise: { type: 'boolean', description: 'True when the player’s opening action catches the enemy off guard (ambush, sneak attack, sudden assault). The enemy loses its first activation.' },
+                    enemyNames: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional exact enemy types named or clearly established in the current scene, e.g. ["Goblin", "Goblin Archer"]. Use these instead of inventing a generic terrain roster.',
+                    },
                 },
                 required: [],
             },

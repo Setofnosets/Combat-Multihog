@@ -13,12 +13,16 @@ import {
     applyOpeningAction,
     applySpecialEffects,
     applySurprise,
+    beginDeployment,
     buildOutcomeSummary,
     completeAgentTurn,
     computeReachableCells,
     createStateRng,
+    deployUnit,
     describeUnitOptions,
     endTurn,
+    finishDeployment,
+    getDeploymentCells,
     getPendingAgentUnitIds,
     retreatEncounter,
     serializeAgentGameState,
@@ -46,6 +50,7 @@ import {
 } from './tactical-combat-outcome.js';
 import {
     buildCombatTrackerReport,
+    clearStaleCombatMemo,
     seedCombatMemo,
     syncCombatResultToMemo,
 } from './tactical-combat-memo.js';
@@ -73,6 +78,9 @@ const ui = {
     starting: false,
     centerNextRender: false,
     agentRunToken: 0,
+    architectTimer: null,
+    architectStateId: '',
+    architectToken: 0,
     autoNarrateTimer: null,
 };
 
@@ -166,6 +174,14 @@ export function buildTacticalView(state) {
     }
     view.selectedUnitId = selected.id;
     view.mode = ui.view.mode || 'move';
+    view.deploymentActive = !!state.deployment?.active;
+
+    if (view.deploymentActive) {
+        view.mode = 'deploy';
+        view.reachableCells = new Set(getDeploymentCells(state).map(cell => `${cell.x},${cell.y}`));
+        view.targetCells = new Set();
+        return view;
+    }
 
     if (view.selectedSkillId && !(selected.skills || []).some(skill => skill.id === view.selectedSkillId)) {
         view.selectedSkillId = '';
@@ -330,6 +346,15 @@ function cancelAutoNarrate() {
     }
 }
 
+function cancelArchitectPreparation() {
+    if (ui.architectTimer) {
+        clearTimeout(ui.architectTimer);
+        ui.architectTimer = null;
+    }
+    ui.architectStateId = '';
+    ui.architectToken += 1;
+}
+
 function setBusy(busy, label = '', abortable = false) {
     ui.view.busy = !!busy;
     ui.view.busyLabel = label;
@@ -403,6 +428,38 @@ function handleMove(x, y) {
     const view = buildTacticalView(getState());
     if (!view.selectedUnitId) return;
     return applyPlayerAction({ type: 'move', unitId: view.selectedUnitId, to: { x, y } });
+}
+
+function handleDeploy(x, y) {
+    const state = getState();
+    if (!state?.deployment?.active || ui.view.busy) return false;
+    const view = buildTacticalView(state);
+    if (!view.selectedUnitId) return false;
+    const result = deployUnit(state, view.selectedUnitId, x, y);
+    if (!result.ok) {
+        toast('warning', result.error || 'That deployment cell is unavailable.');
+        return false;
+    }
+    persist(state);
+    render();
+    return true;
+}
+
+function handleStartBattle() {
+    const state = getState();
+    const settings = getSettings();
+    if (!state?.deployment?.active || ui.view.busy) return;
+    if (!finishDeployment(state)) return;
+    ui.view.mode = 'move';
+    persist(state);
+    render();
+    if (state.status !== 'active') {
+        finishEncounter(state, settings);
+        return;
+    }
+    if (state.phase === 'enemy' && getPendingAgentUnitIds(state).length) {
+        toast('info', 'Deployment complete. The enemy acts first.');
+    }
 }
 
 function handleAttack(targetId) {
@@ -556,6 +613,12 @@ function handleCellClick(x, y) {
     const key = `${x},${y}`;
     const unit = state.units.find(candidate => candidate.x === x && candidate.y === y && !candidate.fled) || null;
     const view = buildTacticalView(state);
+
+    if (state.deployment?.active) {
+        if (unit) selectUnit(unit.id);
+        else if (view.reachableCells.has(key)) handleDeploy(x, y);
+        return;
+    }
 
     if (view.mode === 'attack' && unit && view.targetCells.has(key)) {
         handleAttack(unit.id);
@@ -868,11 +931,20 @@ function handleRetreat() {
 }
 
 function abortAgent() {
+    const state = getState();
+    const preparing = !!state?.preparing?.active;
     if (ui.abortController) {
         ui.abortController.abort();
         ui.abortController = null;
     }
     ui.agentRunToken += 1;
+    if (preparing) {
+        cancelArchitectPreparation();
+        void finalizePreparedEncounter(state, getSettings(), state.preparing.options || {}, {
+            error: 'The encounter architect was stopped; the local roster was used.',
+        });
+        return;
+    }
     setBusy(false);
     render();
     toast('info', 'Agent turn stopped. You can resolve the enemy turn again.');
@@ -925,6 +997,57 @@ function narratorGenerationBusy() {
         if (typeof ctx?.isGenerating === 'boolean') return ctx.isGenerating;
     } catch (_) { /* host not ready */ }
     return false;
+}
+
+function narratorPipelineBusy() {
+    if (typeof globalThis._rpgStateModelRunning === 'function' && globalThis._rpgStateModelRunning()) return true;
+    return narratorGenerationBusy();
+}
+
+/**
+ * Remove a concluded board and any memo roster that provably belonged to it.
+ * Active boards are never cleared; the tool should reopen those instead.
+ */
+function clearEndedEncounterForFreshStart(existing, settings) {
+    if (!existing || existing.status === 'active') return false;
+    const chatId = existing.chatId || getActiveChatId();
+    if (chatId) removeEncounterForChat(chatId, settings, { persist: false });
+    settings.combatDefeatedUi = [];
+    clearStaleCombatMemo(existing, settings);
+    cancelAutoNarrate();
+    cancelArchitectPreparation();
+    resetViewSelection();
+    setBusy(false);
+    return true;
+}
+
+function collectStartContext(settings, options = {}) {
+    const context = collectEncounterContext(settings, (() => {
+        try { return SillyTavern.getContext(); } catch (_) { return {}; }
+    })(), {
+        enemyNames: options.enemyNames,
+        playerDeclaration: options.playerDeclaration,
+        freshStart: options.freshStart === true,
+    });
+    context.chatId = getActiveChatId() || context.chatId;
+    if (options.location) {
+        context.location = String(options.location).slice(0, 200);
+        context.theme = inferTerrainTheme(context.location, context.sceneExcerpt);
+    }
+    if (options.reason) {
+        const reason = String(options.reason).slice(0, 300);
+        context.sceneExcerpt = `${context.sceneExcerpt || ''}\nNarrator trigger: ${reason}`.trim();
+        if (reason && !String(context.playerDeclaration || '').includes(reason)) {
+            context.playerDeclaration = `${context.playerDeclaration || ''}\n${reason}`.trim().slice(0, 1200);
+        }
+    }
+    if (options.openingAction) {
+        const declaration = String(options.openingAction).trim();
+        if (declaration && !String(context.playerDeclaration || '').includes(declaration)) {
+            context.playerDeclaration = `${declaration}\n${context.playerDeclaration || ''}`.trim().slice(0, 1200);
+        }
+    }
+    return context;
 }
 
 function buildOpeningRequest(options = {}) {
@@ -1024,7 +1147,7 @@ function scheduleOpeningResolution(state, settings, options = {}) {
         if (getActiveChatId() !== chatId) return;
         const latest = getEncounterForChat(chatId, getSettings());
         if (!latest || latest.id !== state.id || latest.status !== 'active') return;
-        if (narratorGenerationBusy() && Date.now() - startedAt < 45000) {
+        if (narratorPipelineBusy() && Date.now() - startedAt < 45000) {
             setTimeout(attempt, 600);
             return;
         }
@@ -1037,6 +1160,165 @@ function scheduleOpeningResolution(state, settings, options = {}) {
         });
     };
     setTimeout(attempt, 800);
+}
+
+function applyEncounterOptionsToState(state, settings, options, context, warnings = [], behavior = {}) {
+    if (options.title) state.title = String(options.title).slice(0, 140);
+    if (options.location) state.location = String(options.location).slice(0, 200);
+    if (options.description) state.description = String(options.description).slice(0, 4000);
+    if (options.reason && !options.description) {
+        state.description = `${state.description || ''}\n\nTrigger: ${String(options.reason).slice(0, 300)}`.trim();
+    }
+
+    let openingNeedsAgent = false;
+    if (settings.tacticalCombatOpeningActions !== false) {
+        const opening = buildOpeningRequest(options);
+        if (opening) {
+            const openingResult = applyOpeningAction(state, opening, { rng: createStateRng(state) });
+            if (openingResult.requiresAgent) openingNeedsAgent = true;
+            else if (!openingResult.ok && openingResult.error) {
+                warnings.push(`Opening action was not resolved automatically: ${openingResult.error}`);
+            }
+        } else if (options.surprise === true) {
+            applySurprise(state, 'player');
+        }
+    }
+
+    if (behavior.seedMemo !== false) seedCombatMemo(state, settings);
+    if (state.status === 'active'
+        && settings.tacticalCombatDeploymentPhase !== false
+        && !state.opening) {
+        beginDeployment(state);
+    }
+    void context;
+    return openingNeedsAgent;
+}
+
+function finalizePreparedEncounter(provisional, settings, options = {}, payload = {}) {
+    if (!provisional || provisional.status !== 'active' || !provisional.preparing?.active) return false;
+    const chatId = provisional.chatId || getActiveChatId();
+    if (!chatId) return false;
+    const warnings = [...(provisional.preparing.warnings || [])];
+    if (payload.error) warnings.push(String(payload.error));
+
+    let next = provisional;
+    if (payload.encounter?.enemies?.length) {
+        try {
+            const context = payload.context || collectStartContext(settings, options);
+            const catalog = getActionCatalog(settings).catalog;
+            const built = buildEncounterFromContext(context, settings, {
+                agentEncounter: payload.encounter,
+                source: options.source || settings.tacticalCombatEncounterSource || 'auto',
+                seed: Math.floor(Math.random() * 0x7fffffff),
+                actionCatalog: catalog,
+            });
+            next = built.state;
+            warnings.push(...(built.warnings || []));
+            next.id = provisional.id;
+            next.createdAt = provisional.createdAt;
+            next.chatId = provisional.chatId;
+        } catch (error) {
+            warnings.push(`Encounter architect result could not be applied: ${error?.message || error}`);
+        }
+    }
+
+    next.preparing = null;
+    const openingNeedsAgent = applyEncounterOptionsToState(next, settings, options, payload.context, warnings);
+    persist(next);
+    ui.starting = false;
+    setBusy(false);
+    resetViewSelection();
+    ui.centerNextRender = true;
+    render();
+    toast(warnings.length ? 'warning' : 'success', warnings.length ? warnings[0] : 'Encounter ready.');
+    if (next.status !== 'active') {
+        finishEncounter(next, settings, { autoNarrate: !options.fromNarrator });
+    } else {
+        if (openingNeedsAgent) scheduleOpeningResolution(next, settings, options);
+        if (next.phase === 'enemy' && getPendingAgentUnitIds(next).length && !options.fromNarrator) {
+            void runEnemyTurnForState(next, settings);
+        }
+    }
+    return true;
+}
+
+async function runDeferredEncounterArchitect(provisional, settings, options = {}) {
+    const chatId = provisional?.chatId || getActiveChatId();
+    if (!provisional?.preparing?.active || !chatId) return false;
+    if (narratorPipelineBusy()) {
+        scheduleDeferredEncounterArchitect(provisional, settings, options);
+        return false;
+    }
+    const controller = new AbortController();
+    ui.abortController = controller;
+    const token = ++ui.architectToken;
+    setBusy(true, 'The encounter architect is designing the opposition…', true);
+    persist(provisional);
+    render();
+    try {
+        const context = collectStartContext(settings, options);
+        const generated = await generateEncounterWithAgent(context, settings, { signal: controller.signal });
+        if (controller.signal.aborted || ui.architectToken !== token || getActiveChatId() !== chatId) return false;
+        const latest = getEncounterForChat(chatId, getSettings());
+        if (!latest || latest.id !== provisional.id || !latest.preparing?.active) return false;
+        if (!generated.ok) {
+            return finalizePreparedEncounter(latest, getSettings(), options, {
+                context,
+                error: generated.error || 'The encounter architect did not return a usable encounter.',
+            });
+        }
+        return finalizePreparedEncounter(latest, getSettings(), options, {
+            encounter: generated.encounter,
+            context,
+        });
+    } catch (error) {
+        if (controller.signal.aborted) return false;
+        if (getActiveChatId() !== chatId) return false;
+        const latest = getEncounterForChat(chatId, getSettings());
+        if (!latest || latest.id !== provisional.id) return false;
+        return finalizePreparedEncounter(latest, getSettings(), options, {
+            error: String(error?.message || error),
+        });
+    } finally {
+        if (ui.abortController === controller) ui.abortController = null;
+        setBusy(false);
+        render();
+    }
+}
+
+function scheduleDeferredEncounterArchitect(provisional, settings, options = {}) {
+    if (!provisional?.preparing?.active) return;
+    const chatId = provisional.chatId || getActiveChatId();
+    if (!chatId) return;
+    if (ui.architectTimer && ui.architectStateId === provisional.id) return;
+    cancelArchitectPreparation();
+    ui.architectStateId = provisional.id;
+    const startedAt = Date.now();
+    const attempt = () => {
+        ui.architectTimer = null;
+        if (getActiveChatId() !== chatId) {
+            ui.architectStateId = '';
+            return;
+        }
+        const latest = getEncounterForChat(chatId, getSettings());
+        if (!latest || latest.id !== provisional.id || !latest.preparing?.active) {
+            ui.architectStateId = '';
+            return;
+        }
+        if (narratorPipelineBusy() && Date.now() - startedAt < 90000) {
+            ui.architectTimer = setTimeout(attempt, 700);
+            return;
+        }
+        ui.architectStateId = '';
+        if (narratorPipelineBusy()) {
+            void finalizePreparedEncounter(latest, getSettings(), options, {
+                error: 'The narrator was still generating, so a local roster was used.',
+            });
+            return;
+        }
+        void runDeferredEncounterArchitect(latest, getSettings(), options);
+    };
+    ui.architectTimer = setTimeout(attempt, 850);
 }
 
 async function startEncounterFlow(options = {}) {
@@ -1052,6 +1334,15 @@ async function startEncounterFlow(options = {}) {
         toast('info', 'That encounter is already in progress.');
         return { ok: true, alreadyActive: true, state: existing };
     }
+    const activeChatId = getActiveChatId();
+    if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(activeChatId)) {
+        toast('info', 'A combat result is still queued for the narrator. Let it resolve before starting another encounter.');
+        return { ok: false, error: 'A combat result is still queued for this chat.' };
+    }
+    if (existing && existing.finalization?.finalizing) {
+        toast('info', 'The previous encounter is still syncing its final state. Try again when it finishes.');
+        return { ok: false, error: 'The previous encounter is still finalizing.' };
+    }
     if (existing && !options.silentNew && typeof globalThis.confirm === 'function'
         && !globalThis.confirm('Start a new encounter? The previous result has already been queued for the narrator.')) {
         return { ok: false, cancelled: true };
@@ -1063,15 +1354,15 @@ async function startEncounterFlow(options = {}) {
     ui.view.error = '';
     ui.view.dismissResult = false;
     cancelAutoNarrate();
+    cancelArchitectPreparation();
     const controller = new AbortController();
     ui.abortController = controller;
 
+    const freshStart = clearEndedEncounterForFreshStart(existing, settings) || options.freshStart === true;
     const source = String(options.source || settings.tacticalCombatEncounterSource || 'auto');
     let context;
     try {
-        context = collectEncounterContext(settings, (() => {
-            try { return SillyTavern.getContext(); } catch (_) { return {}; }
-        })());
+        context = collectStartContext(settings, { ...options, source, freshStart });
     } catch (error) {
         if (ui.abortController === controller) ui.abortController = null;
         ui.starting = false;
@@ -1081,12 +1372,6 @@ async function startEncounterFlow(options = {}) {
         toast('error', ui.view.error);
         return { ok: false, error: ui.view.error };
     }
-    context.chatId = getActiveChatId() || context.chatId;
-    if (options.location) {
-        context.location = String(options.location).slice(0, 200);
-        context.theme = inferTerrainTheme(context.location, context.sceneExcerpt);
-    }
-    if (options.reason) context.sceneExcerpt = `${context.sceneExcerpt || ''}\nNarrator trigger: ${String(options.reason).slice(0, 300)}`.trim();
     if (!context.chatId) {
         if (ui.abortController === controller) ui.abortController = null;
         ui.starting = false;
@@ -1101,11 +1386,11 @@ async function startEncounterFlow(options = {}) {
     const needsAgent = source === 'agent' || (source === 'auto' && !context.existingCombat);
     // Calling the encounter architect from inside the narrator's function-tool
     // action would create a nested provider request while the main generation is
-    // still running. In that path use the deterministic local roster; the board
-    // still starts immediately and seeds [COMBAT]. Settings/manual starts retain
-    // the full agent-designed encounter.
-    const canCallAgentNow = !options.fromNarrator;
-    if (needsAgent && canCallAgentNow) {
+    // still running. Defer that path until the generation ends. The provisional
+    // board is hidden behind a preparing screen and is replaced by the architect.
+    const deferArchitect = needsAgent && options.fromNarrator === true;
+    const canCallAgentNow = needsAgent && !deferArchitect;
+    if (canCallAgentNow) {
         setBusy(true, 'The combat agent is designing the encounter…', true);
         render();
         const generated = await generateEncounterWithAgent(context, settings, { signal: controller.signal });
@@ -1118,12 +1403,10 @@ async function startEncounterFlow(options = {}) {
         }
         if (generated.ok) agentEncounter = generated.encounter;
         else if (generated.error) warnings.push(generated.error);
-    } else if (needsAgent && options.fromNarrator) {
-        warnings.push('The narrator started this fight without an active [COMBAT] roster; a local skirmish was generated from the scene.');
     }
     if (ui.abortController === controller) ui.abortController = null;
 
-    if (source === 'existing' && !context.existingCombat) {
+    if (source === 'existing' && !context.existingCombat && !deferArchitect) {
         if (ui.abortController === controller) ui.abortController = null;
         ui.starting = false;
         setBusy(false);
@@ -1154,28 +1437,34 @@ async function startEncounterFlow(options = {}) {
             state.description = `${state.description || ''}\n\nTrigger: ${String(options.reason).slice(0, 300)}`.trim();
         }
 
-        let openingNeedsAgent = false;
-        if (settings.tacticalCombatOpeningActions !== false) {
-            const opening = buildOpeningRequest(options);
-            if (opening) {
-                const openingResult = applyOpeningAction(state, opening, { rng: createStateRng(state) });
-                if (openingResult.requiresAgent) {
-                    openingNeedsAgent = true;
-                } else if (!openingResult.ok && openingResult.error) {
-                    warnings.push(`Opening action was not resolved automatically: ${openingResult.error}`);
-                }
-            } else if (options.surprise === true) {
-                applySurprise(state, 'player');
-            }
+        if (deferArchitect) {
+            state.preparing = {
+                active: true,
+                startedAt: Date.now(),
+                source,
+                freshStart,
+                options: { ...options, source, freshStart },
+                warnings: [...warnings],
+            };
+            persist(state);
+            ui.starting = false;
+            setBusy(false);
+            resetViewSelection();
+            ui.centerNextRender = true;
+            render();
+            toast('info', 'The encounter architect is designing the opposition…');
+            scheduleDeferredEncounterArchitect(state, settings, { ...options, source, freshStart });
+            return { ok: true, state, warnings, preparing: true };
         }
 
-        // The board is authoritative. When the encounter was invented from the
-        // scene, write its roster into the memo before the State Tracker or
-        // narrator can read stale enemies. An existing, detailed [COMBAT] block
-        // is preserved until combat end; the board still owns the mechanics.
-        if (!context.existingCombat || source === 'agent') {
-            seedCombatMemo(state, settings);
-        }
+        const openingNeedsAgent = applyEncounterOptionsToState(
+            state,
+            settings,
+            options,
+            context,
+            warnings,
+            { seedMemo: !context.existingCombat || source === 'agent' },
+        );
         persist(state);
         ui.starting = false;
         setBusy(false);
@@ -1222,6 +1511,23 @@ function handleOverlayAction(action, element) {
         case 'start':
             void startEncounterFlow();
             break;
+        case 'start-battle':
+            handleStartBattle();
+            break;
+        case 'use-fallback': {
+            const state = getState();
+            if (state?.preparing?.active) {
+                if (ui.abortController) {
+                    ui.abortController.abort();
+                    ui.abortController = null;
+                }
+                cancelArchitectPreparation();
+                void finalizePreparedEncounter(state, getSettings(), state.preparing.options || {}, {
+                    error: 'The local roster was used instead of the encounter architect.',
+                });
+            }
+            break;
+        }
         case 'end-turn':
             handleEndTurn();
             break;
@@ -1366,11 +1672,14 @@ export function onTacticalCombatChatChanged(chatId = getActiveChatId()) {
     ui.agentRunToken += 1;
     ui.starting = false;
     cancelAutoNarrate();
+    cancelArchitectPreparation();
     setBusy(false);
     resetViewSelection();
     ui.centerNextRender = true;
     const arrived = chatId ? getEncounterForChat(chatId, getSettings()) : null;
-    if (arrived && arrived.status !== 'active' && !arrived.finalization?.narrationQueued) {
+    if (arrived?.preparing?.active) {
+        scheduleDeferredEncounterArchitect(arrived, getSettings(), arrived.preparing.options || {});
+    } else if (arrived && arrived.status !== 'active' && !arrived.finalization?.narrationQueued) {
         finalizeIfEnded(arrived, getSettings());
     }
     notifySettings();
@@ -1415,6 +1724,7 @@ export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
         openingTarget: args.openingTarget,
         openingSkill: args.openingSkill,
         surprise: args.surprise,
+        enemyNames: args.enemyNames,
         silentNew: true,
         source: options.source || settings.tacticalCombatEncounterSource || 'auto',
         fromNarrator: true,
@@ -1430,9 +1740,18 @@ export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
     if (result.alreadyActive) {
         return { ok: true, message: `A tactical encounter is already active (${state?.title || 'encounter'}); the board is open.` };
     }
+    const deploymentHint = state?.deployment?.active
+        ? ' Deploy the party in the highlighted lane, then press Start battle.'
+        : '';
+    if (state?.preparing?.active) {
+        return {
+            ok: true,
+            message: `Tactical encounter preparation started: ${state?.title || 'encounter'}. The encounter architect is designing the opposition from the current scene; the board will open for deployment when the roster is ready.`,
+        };
+    }
     return {
         ok: true,
-        message: `Tactical encounter ${state?.status === 'active' ? 'started' : (state?.outcome?.label || 'prepared')}: ${state?.title || 'encounter'}. The board is open; resolve the fight on the grid and the result will return to narration when it ends.`,
+        message: `Tactical encounter ${state?.status === 'active' ? 'started' : (state?.outcome?.label || 'prepared')}: ${state?.title || 'encounter'}. The board is open.${deploymentHint} Resolve the fight on the grid and the result will return to narration when it ends.`,
     };
 }
 

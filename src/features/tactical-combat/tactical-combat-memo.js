@@ -10,6 +10,8 @@
  * these helpers without pulling in SillyTavern runtime state.
  */
 
+import { parseCombatants } from '../../state/combat-persistence.js';
+
 const COMBAT_BLOCK_RX = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i;
 const HP_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(.{1,160}?):\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?\s*HP\b(.*)$/i;
 
@@ -196,6 +198,34 @@ function patchNamedBlock(memo, tag, units, options = {}) {
     return String(memo || '').replace(rx, (full, open, content, close) => {
         return `${open}${patchBlockHp(content, units, options)}${close}`;
     });
+}
+
+/**
+ * Remove a previous encounter's COMBAT block when it is provably stale.
+ * A new [COMBAT] block with different enemies is preserved for the next fight.
+ *
+ * @param {object|null} previousState
+ * @param {Record<string, any>} settings
+ * @returns {{ removed: boolean, memo: string }}
+ */
+export function clearStaleCombatMemo(previousState, settings) {
+    if (!settings) return { removed: false, memo: '' };
+    const memo = String(settings.currentMemo || '');
+    const match = memo.match(COMBAT_BLOCK_RX);
+    if (!match) return { removed: false, memo };
+    const body = match[0].replace(/^\[COMBAT\]/i, '').replace(/\[\/COMBAT\]$/i, '').trim();
+    if (!body) return { removed: false, memo };
+
+    const oldEnemies = (previousState?.units || []).filter(unit => unit?.side === 'enemy');
+    let stale = /^END_COMBAT$/i.test(body);
+    if (!stale && oldEnemies.length) {
+        const entities = parseCombatants(body).filter(entity => entity.side === 'enemies');
+        stale = entities.length > 0 && entities.every(entity => oldEnemies.some(old => sameName(entity.name, old.name)));
+    }
+    if (!stale) return { removed: false, memo };
+
+    settings.currentMemo = memo.replace(COMBAT_BLOCK_RX, '').replace(/\n{3,}/g, '\n\n').trim();
+    return { removed: true, memo: settings.currentMemo };
 }
 
 /**

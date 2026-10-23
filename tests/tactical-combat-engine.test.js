@@ -4,6 +4,7 @@ import {
     applyOpeningAction,
     applySpecialEffects,
     applySurprise,
+    beginDeployment,
     beginRound,
     buildAgentGameState,
     buildOutcomeSummary,
@@ -13,8 +14,11 @@ import {
     createEncounterState,
     createProceduralTerrain,
     decodeTerrainRows,
+    deployUnit,
     endTurn,
     findPath,
+    finishDeployment,
+    getDeploymentCells,
     getActiveUnit,
     getEffectiveAc,
     getPendingAgentUnitIds,
@@ -403,6 +407,31 @@ describe('tactical combat opening actions', () => {
         expect(state.opening.requiresAgent).toBe(true);
         expect(state.surprise.remaining).toBe(1);
         expect(getUnitById(state, 'enemy-3').surprised).toBe(true);
+    });
+});
+
+describe('tactical combat deployment', () => {
+    it('allows player units to reposition only inside the deployment lane', () => {
+        const state = makeState();
+        expect(beginDeployment(state, { columns: 3 })).toBe(true);
+        expect(state.deployment.active).toBe(true);
+        expect(getDeploymentCells(state).every(cell => cell.x <= 2)).toBe(true);
+        const aria = getUnitById(state, 'pc-1');
+        expect(deployUnit(state, aria.id, 2, 4).ok).toBe(true);
+        expect(aria.x).toBe(2);
+        expect(aria.y).toBe(4);
+        expect(deployUnit(state, aria.id, 5, 4).ok).toBe(false);
+        expect(deployUnit(state, getUnitById(state, 'enemy-3').id, 1, 1).ok).toBe(false);
+    });
+
+    it('blocks actions during deployment and starts the battle afterward', () => {
+        const state = makeState();
+        beginDeployment(state);
+        expect(applyAction(state, { type: 'defend', unitId: 'pc-1' }, { actorSide: 'player' }).ok).toBe(false);
+        expect(finishDeployment(state)).toBe(true);
+        expect(state.deployment.active).toBe(false);
+        expect(state.phase).toBe('player');
+        expect(applyAction(state, { type: 'defend', unitId: 'pc-1' }, { actorSide: 'player' }).ok).toBe(true);
     });
 });
 
