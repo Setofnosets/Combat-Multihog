@@ -377,6 +377,8 @@ Worth values can auto-render as coin badges in the UI.
 
 #### `[ABILITIES]` / `[SPELLS]`
 
+**Player character only.** These blocks describe `{{user}}`; companion abilities and spells belong inside that companion's `[PARTY]` entry. Never copy a party member's ability or spell into these blocks unless `{{user}}` also has it.
+
 Abilities = non-spell class features only. Spells = cantrips + leveled slots `Level N (avail/max): …`. Never mix the two.
 
 #### `[TIME]`

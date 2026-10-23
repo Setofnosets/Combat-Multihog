@@ -234,10 +234,14 @@ Other Items:
 - 🪢 [Common] Rope, 50 ft (~1 GP)
 - 💰 1,200 GP
 [/INVENTORY]`,
-  abilities: `Non-spell class features and active abilities ONLY (e.g. Lay on Hands, Action Surge). NEVER mix these with spells. Format each entry as: \`Ability Name (brief description)\`.
+  abilities: `PLAYER CHARACTER ONLY: [ABILITIES] describes {{user}}, not companions. Party members' abilities belong inside their own [PARTY] entry; never copy a companion's ability here unless {{user}} also has it.
+
+Non-spell class features and active abilities ONLY (e.g. Lay on Hands, Action Surge). NEVER mix these with spells. Format each entry as: \`Ability Name (brief description)\`.
 
 Every ability that is use-limited must have its uses in the parentheses, for example: "Silver-Tongued Pivot (Allows the reroll of a failed social check by seamlessly shifting the narrative framing, 1/1 per rest)". At-will / passive abilities omit a uses count.`,
-  spells: `Spell slots and spells known, grouped by level. Format each line as: \`Level N (avail/max): Spell1, Spell2\`. For cantrips, use \`Cantrips: Spell1, Spell2\`. Track slot usage accurately. NEVER mix these with abilities.
+  spells: `PLAYER CHARACTER ONLY: [SPELLS] describes {{user}}, not companions. Party members' spells belong inside their own [PARTY] entry; never copy a companion's spell here unless {{user}} also knows it.
+
+Spell slots and spells known, grouped by level. Format each line as: \`Level N (avail/max): Spell1, Spell2\`. For cantrips, use \`Cantrips: Spell1, Spell2\`. Track slot usage accurately. NEVER mix these with abilities.
 
 Example:
 [SPELLS]
