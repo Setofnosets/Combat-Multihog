@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const settingsHtml = readFileSync(new URL('../settings.html', import.meta.url), 'utf8');
 const overlaySource = readFileSync(new URL('../src/ui/settings-overlay.js', import.meta.url), 'utf8');
 const defaultsSource = readFileSync(new URL('../src/state/defaults.js', import.meta.url), 'utf8');
+const constantsSource = readFileSync(new URL('../constants.js', import.meta.url), 'utf8');
 const settingsStateSource = readFileSync(new URL('../src/state/settings.js', import.meta.url), 'utf8');
 const connectionsSource = readFileSync(new URL('../src/state/connection-setups.js', import.meta.url), 'utf8');
 const style = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
@@ -124,6 +125,13 @@ describe('Tactical Combat settings tab contract', () => {
             expect(defaultsSource).toContain(key);
         }
         expect(defaultsSource).toContain("from '../features/tactical-combat/tactical-combat-prompts.js'");
+    });
+
+    it('documents standalone abilities and spells as player-character-only loadouts', () => {
+        expect(constantsSource).toContain('PLAYER CHARACTER ONLY: [ABILITIES]');
+        expect(constantsSource).toContain('PLAYER CHARACTER ONLY: [SPELLS]');
+        expect(constantsSource).toContain("Party members' abilities belong inside their own [PARTY] entry");
+        expect(constantsSource).toContain("Party members' spells belong inside their own [PARTY] entry");
     });
 
     it('treats tactical settings as global UI preferences, not chat state', () => {

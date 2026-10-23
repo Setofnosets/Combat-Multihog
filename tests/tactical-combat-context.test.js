@@ -291,6 +291,79 @@ Other Items:
         expect(corrin.items.find(item => item.name === 'Restoration Vial')).toMatchObject({ kind: 'special' });
     });
 
+    it('does not give the player character companion-owned standalone spells', () => {
+        const memo = `[CHARACTER]
+Aria (Fighter): 30/30 HP
+Combat: BAB: +5 | Ranged (1 attack): +6 | Melee (1 attack): +8 | Base AC: 14 | Total AC: 18
+Gear: Longsword (1d8+4 Slashing) | Shield (+2 AC)
+Status: Healthy
+[/CHARACTER]
+
+[PARTY]
+Mira (Wizard): 20/24 HP
+Combat: BAB: +2 | Ranged (1 attack): +7 | Melee (1 attack): +3 | Base AC: 12 | Total AC: 13
+Gear: Wand (1d10 Fire) | Robes (+1 AC)
+Spells: Cantrips: Ray of Frost
+Spells: Level 1 (2/2): Magic Missile, Shield
+Status: Healthy
+[/PARTY]
+
+[ABILITIES]
+- Action Surge (extra action; 1/1 per rest)
+[/ABILITIES]
+
+[SPELLS]
+Cantrips: Firebolt
+Level 1 (2/2): Magic Missile, Cure Wounds
+[/SPELLS]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'pc-only', chat: [] });
+        const aria = context.playerUnits.find(unit => unit.name === 'Aria');
+        const mira = context.playerUnits.find(unit => unit.name === 'Mira');
+        expect(aria.skills.map(skill => skill.name)).toContain('Firebolt');
+        expect(aria.skills.map(skill => skill.name)).not.toContain('Magic Missile');
+        expect(mira.skills.map(skill => skill.name)).toContain('Magic Missile');
+        expect(mira.skills.map(skill => skill.name)).toContain('Shield');
+    });
+
+    it('keeps a shared spell when the player character explicitly has it', () => {
+        const memo = `[CHARACTER]
+Aria (Cleric): 30/30 HP
+Spells: Cantrips: Firebolt
+Status: Healthy
+[/CHARACTER]
+
+[PARTY]
+Mira (Wizard): 20/24 HP
+Spells: Cantrips: Firebolt
+Status: Healthy
+[/PARTY]
+
+[SPELLS]
+Cantrips: Firebolt, Guidance
+[/SPELLS]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'shared', chat: [] });
+        const aria = context.playerUnits.find(unit => unit.name === 'Aria');
+        expect(aria.skills.map(skill => skill.name)).toContain('Firebolt');
+        expect(aria.skills.map(skill => skill.name)).toContain('Guidance');
+    });
+
+    it('never assigns standalone player spells to a party member when [CHARACTER] is missing', () => {
+        const memo = `[PARTY]
+Mira (Wizard): 20/24 HP
+Spells: Cantrips: Ray of Frost
+Status: Healthy
+[/PARTY]
+
+[SPELLS]
+Cantrips: Firebolt
+Level 1 (2/2): Magic Missile
+[/SPELLS]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'no-pc', chat: [] });
+        expect(context.playerUnits).toHaveLength(1);
+        expect(context.playerUnits[0].isPlayerCharacter).toBe(false);
+        expect(context.playerUnits[0].skills.map(skill => skill.name)).not.toContain('Firebolt');
+    });
+
     it('passes abilities, spells, items, and inventory to the encounter architect payload', () => {
         const context = {
             playerUnits: [{

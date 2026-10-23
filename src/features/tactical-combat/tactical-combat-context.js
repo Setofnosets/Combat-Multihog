@@ -411,7 +411,10 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
             const fallbackName = ctx.name1 || 'Player';
             const rawName = String(parsed.name || fallbackName).replace(/\{\{user\}\}/gi, fallbackName);
             const unit = parseStatSheet(rawName || fallbackName, parsed.classLabel, entry.lines, 'player', { classifier });
-            if (unit && unit.hp > 0 && !unit._defeated) units.push(unit);
+            if (unit && unit.hp > 0 && !unit._defeated) {
+                unit.isPlayerCharacter = true;
+                units.push(unit);
+            }
         }
     }
 
@@ -421,7 +424,10 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
             const parsed = parseNameClass(entry.lines[0] || '');
             if (!parsed.name) continue;
             const unit = parseStatSheet(parsed.name, parsed.classLabel, entry.lines, 'player', { classifier });
-            if (unit && unit.hp > 0 && !unit._defeated) units.push(unit);
+            if (unit && unit.hp > 0 && !unit._defeated) {
+                unit.isPlayerCharacter = false;
+                units.push(unit);
+            }
         }
     }
 
@@ -607,6 +613,7 @@ export function buildFallbackPlayer(ctx = {}, movement = 6) {
         name: cleanText(ctx.name1 || 'Adventurer').slice(0, 80),
         classLabel: 'Adventurer',
         side: 'player',
+        isPlayerCharacter: true,
         maxHp: 26,
         hp: 26,
         ac: 14,
@@ -736,32 +743,64 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
         ...parseStandaloneSpells(memo, standaloneNames, classifier),
     ];
     const playerUnits = characterUnits.length ? characterUnits : [buildFallbackPlayer(ctx, movement)];
+    // Standalone [ABILITIES]/[SPELLS]/[INVENTORY] blocks belong to the player
+    // character. Never attach them to an arbitrary first party member when the
+    // [CHARACTER] sheet is missing or unparseable.
+    const pcUnit = playerUnits.find(unit => unit.isPlayerCharacter === true) || null;
+    const partySkillNames = new Set(
+        playerUnits
+            .filter(unit => unit !== pcUnit)
+            .flatMap(unit => (unit.skills || []).map(skill => String(skill?.name || '').toLowerCase()))
+            .filter(Boolean),
+    );
 
-    if (playerUnits.length) {
-        const first = playerUnits[0];
+    if (pcUnit) {
+        const pcOwnSkillNames = new Set(
+            (pcUnit.skills || []).map(skill => String(skill?.name || '').toLowerCase()).filter(Boolean),
+        );
         const byName = new Map();
-        for (const skill of [...(first.skills || []), ...standaloneSkills]) {
+        for (const skill of pcUnit.skills || []) {
             const key = String(skill?.name || '').toLowerCase();
             if (key && !byName.has(key)) byName.set(key, skill);
         }
-        first.skills = [...byName.values()];
+        const skipped = [];
+        for (const skill of standaloneSkills) {
+            const key = String(skill?.name || '').toLowerCase();
+            if (!key || byName.has(key)) continue;
+            // A companion's exclusive spell occasionally leaks into the
+            // standalone block because the tracker prompt is not owner-aware.
+            // Keep it off the player character; [PARTY] already owns it.
+            if (partySkillNames.has(key) && !pcOwnSkillNames.has(key)) {
+                skipped.push(skill.name);
+                continue;
+            }
+            byName.set(key, skill);
+        }
+        pcUnit.skills = [...byName.values()];
+        if (skipped.length && settings?.debugMode) {
+            console.log('[RPG Tracker][Tactical Combat] Ignored companion-owned standalone skills for the player character:', skipped);
+        }
+
         const itemById = new Map();
-        for (const item of [...(first.items || []), ...inventoryItems]) {
+        for (const item of [...(pcUnit.items || []), ...inventoryItems]) {
             if (item?.id && !itemById.has(item.id)) itemById.set(item.id, item);
         }
-        first.items = [...itemById.values()];
+        pcUnit.items = [...itemById.values()];
         // Preserve gear parsed from the character sheet, then let the dedicated
         // [INVENTORY] block win on duplicate names.
         const inventoryByName = new Map();
-        for (const entry of [...(first.inventory || []), ...inventory]) {
+        for (const entry of [...(pcUnit.inventory || []), ...inventory]) {
             const key = String(entry?.name || '').trim().toLowerCase();
             if (key) inventoryByName.set(key, entry);
         }
-        first.inventory = [...inventoryByName.values()];
+        pcUnit.inventory = [...inventoryByName.values()];
+    } else if (standaloneSkills.length && settings?.debugMode) {
+        console.log('[RPG Tracker][Tactical Combat] No player character was found; standalone skills were not assigned to party members.');
     }
+
     for (const unit of playerUnits) {
         if (!unit.skills?.length) unit.skills = fallbackSkills('player', unit.classLabel);
-        if (!unit.items?.length && unit === playerUnits[0]) unit.items = [defaultPotion()];
+        if (!unit.items?.length && unit === pcUnit) unit.items = [defaultPotion()];
         if (!Array.isArray(unit.inventory)) unit.inventory = [];
         if (!unit.speed) unit.speed = movement;
     }
