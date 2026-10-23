@@ -98,6 +98,7 @@ describe('tactical combat memo context', () => {
         expect(mira.attackRange).toBe(6);
         expect(mira.damage).toBe('1d10');
         expect(mira.skills.map(skill => skill.name)).toEqual(expect.arrayContaining(['Firebolt', 'Magic Missile', 'Shield']));
+        expect(mira.inventory.map(entry => entry.name)).toEqual(expect.arrayContaining(['Wand', 'Robes']));
     });
 
     it('parses enemies and non-party allies from the [COMBAT] block', () => {
@@ -131,6 +132,47 @@ describe('tactical combat memo context', () => {
         expect(context.playerUnits[0].items[0].name).toBe('Healing Potion');
         expect(context.sceneExcerpt).toContain('gatehouse');
         expect(context.summary.party.length).toBe(2);
+    });
+
+    it('uses named enemies instead of the terrain roster', () => {
+        const context = collectEncounterContext(
+            { ...BASE_SETTINGS, currentMemo: '' },
+            { name1: 'Rook', chatId: 'named', chat: [{ mes: 'The goblins rush from the cave mouth.' }] },
+            { enemyNames: ['Goblin'] },
+        );
+        const enemies = buildFallbackEnemies({ ...context, theme: 'cave', partySize: 3 }, 7);
+        expect(enemies.some(enemy => /goblin/i.test(enemy.name))).toBe(true);
+        expect(enemies.some(enemy => /kobold|cave bat/i.test(enemy.name))).toBe(false);
+    });
+
+    it('keeps previous tactical results and tool rows out of the encounter scene excerpt', () => {
+        const context = collectEncounterContext(
+            { ...BASE_SETTINGS, currentMemo: '' },
+            {
+                name1: 'Rook',
+                chatId: 'filtered',
+                chat: [
+                    { is_user: true, mes: 'We enter the cave.' },
+                    { mes: 'The previous fight ended with a Kobold and Cave Bat.', extra: { tcResultId: 'old-state' } },
+                    { is_system: true, mes: '{"name":"StartTacticalCombat","result":"ok"}' },
+                    { mes: 'A goblin war band blocks the passage.' },
+                ],
+            },
+        );
+        expect(context.sceneExcerpt).toContain('goblin war band');
+        expect(context.sceneExcerpt).not.toContain('Kobold');
+        expect(context.sceneExcerpt).not.toContain('StartTacticalCombat');
+    });
+
+    it('passes named-enemy and player-declaration context to the architect payload', () => {
+        const context = collectEncounterContext(
+            { ...BASE_SETTINGS, currentMemo: '' },
+            { name1: 'Rook', chatId: 'declaration', chat: [{ is_user: true, mes: 'I attack the goblins.' }] },
+            { enemyNames: ['Goblin', 'Goblin Archer'] },
+        );
+        const payload = buildEncounterRequestPayload(context, BASE_SETTINGS);
+        expect(payload.playerDeclaration).toBe('I attack the goblins.');
+        expect(payload.enemyNames).toEqual(['Goblin', 'Goblin Archer']);
     });
 
     it('falls back to a playable adventurer and themed enemies when the memo is empty', () => {

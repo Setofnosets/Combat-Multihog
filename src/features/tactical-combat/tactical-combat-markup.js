@@ -88,6 +88,7 @@ function renderHeader(state, view) {
 }
 
 function renderInitiativeRail(state) {
+    if (state.deployment?.active) return '';
     const order = Array.isArray(state.initiativeOrder) && state.initiativeOrder.length
         ? state.initiativeOrder
         : state.units.map(unit => unit.id);
@@ -200,7 +201,7 @@ function renderUnitCard(state, view) {
     }
     const isPlayer = unit.side === 'player';
     const isActiveTurn = state.turnStyle !== 'initiative' || view.activeUnitId === unit.id;
-    const canAct = state.status === 'active' && state.phase === 'player' && isPlayer
+    const canAct = state.status === 'active' && !state.deployment?.active && state.phase === 'player' && isPlayer
         && isActiveTurn && !unit.defeated && !unit.fled && !unit.doneForRound && !view.busy;
     const hpPct = pct(unit.hp, unit.maxHp);
     const movementLeft = Math.max(0, (Number(unit.speed) || 0) - (Number(unit.movementUsed) || 0));
@@ -291,11 +292,12 @@ function renderUnitCard(state, view) {
             <span class="${unit.bonusUsed ? 'is-used' : ''}">Bonus ${unit.bonusUsed ? 'used' : 'ready'}</span>
             <span class="${unit.doneForRound ? 'is-used' : ''}">${unit.doneForRound ? 'Finished' : 'Acting'}</span>
         </div>
-        ${isPlayer && state.status === 'active' ? `<div class="rt-tc-actions">${actionButtons.join('')}</div>` : ''}
-        ${view.mode === 'skill' ? '<div class="rt-tc-hint">Choose a skill, then a highlighted target.</div>' : ''}
-        ${view.mode === 'item' ? '<div class="rt-tc-hint">Choose an item, then a highlighted ally.</div>' : ''}
-        ${view.mode === 'attack' ? '<div class="rt-tc-hint">Choose a highlighted enemy to attack.</div>' : ''}
-        ${view.mode === 'move' ? '<div class="rt-tc-hint">Choose a highlighted cell to move.</div>' : ''}
+        ${isPlayer && state.status === 'active' && !state.deployment?.active ? `<div class="rt-tc-actions">${actionButtons.join('')}</div>` : ''}
+        ${state.deployment?.active ? '<div class="rt-tc-hint">Deployment: select a player unit, then choose a highlighted cell in the left zone. Press Start battle when ready.</div>' : ''}
+        ${!state.deployment?.active && view.mode === 'skill' ? '<div class="rt-tc-hint">Choose a skill, then a highlighted target.</div>' : ''}
+        ${!state.deployment?.active && view.mode === 'item' ? '<div class="rt-tc-hint">Choose an item, then a highlighted ally.</div>' : ''}
+        ${!state.deployment?.active && view.mode === 'attack' ? '<div class="rt-tc-hint">Choose a highlighted enemy to attack.</div>' : ''}
+        ${!state.deployment?.active && view.mode === 'move' ? '<div class="rt-tc-hint">Choose a highlighted cell to move.</div>' : ''}
         ${skillList}
         ${itemList}
         ${inventoryList}
@@ -330,6 +332,13 @@ function renderLog(state) {
 }
 
 function renderTurnControls(state, view) {
+    if (state.status === 'active' && state.deployment?.active) {
+        const columns = Number(state.deployment.columns) || (Number(state.deployment.maxX) + 1) || 3;
+        return `<div class="rt-tc-turnbar">
+            <div class="rt-tc-turn-info"><span class="rt-tc-side-dot rt-tc-side-player"></span>Deployment <small>${columns}-column zone</small></div>
+            <button type="button" class="rt-tc-primary" data-tc-action="start-battle" ${view.busy ? 'disabled' : ''}>Start battle</button>
+        </div>`;
+    }
     if (state.status !== 'active') {
         return `<div class="rt-tc-turnbar">
             <div class="rt-tc-turn-info"><span class="rt-tc-side-dot"></span>${escapeHtml(state.outcome?.label || 'Combat ended')} <small>Round ${Number(state.round) || 1}</small></div>
@@ -435,6 +444,23 @@ export function buildTacticalCombatMarkup(state, view = {}) {
     };
     if (!state) {
         return `<div class="rt-tc-shell is-empty-shell">${renderEmptyState(safeView)}</div>`;
+    }
+    if (state.preparing?.active) {
+        const error = safeView.error ? `<div class="rt-tc-error">${escapeHtml(safeView.error)}</div>` : '';
+        return `<div class="rt-tc-shell is-empty-shell">
+            <div class="rt-tc-empty">
+                <div class="rt-tc-empty-art" aria-hidden="true"><span>⚔</span><span>◈</span><span>♜</span></div>
+                <div class="rt-tc-kicker">Tactical Combat</div>
+                <h2>Designing the encounter…</h2>
+                <p>The encounter architect is building opposition from the current scene and the player's declaration. Combat actions are disabled until the roster is ready.</p>
+                ${error}
+                <div class="rt-tc-loading"><i class="rt-tc-spinner" aria-hidden="true"></i><span>Designing the encounter…</span></div>
+                <div class="rt-tc-empty-actions">
+                    <button type="button" class="rt-tc-ghost" data-tc-action="use-fallback">Use local roster</button>
+                    <button type="button" class="rt-tc-ghost" data-tc-action="close">Close</button>
+                </div>
+            </div>
+        </div>`;
     }
     const activeUnitId = state.turnStyle === 'initiative'
         ? (state.units.find(unit => unit.id === state.initiativeOrder?.[state.turnIndex])?.id || '')

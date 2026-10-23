@@ -248,6 +248,7 @@ function parseGear(lines) {
     const weapons = entries.filter(entry => entry.damage);
     const armor = entries.filter(entry => entry.armorBonus > 0);
     return {
+        entries,
         weapons,
         armorBonus: armor.reduce((sum, entry) => sum + entry.armorBonus, 0),
         armorName: armor[0]?.name || '',
@@ -356,6 +357,14 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
         stats,
         skills,
         items: [],
+        inventory: gear.entries.map(entry => ({
+            name: entry.name,
+            description: entry.description,
+            equipped: true,
+            section: 'gear',
+            rarity: '',
+            quantity: 1,
+        })).filter(entry => entry.name),
         level,
         notes,
         source: 'memo',
@@ -631,18 +640,65 @@ function locationFromChat(ctx = {}, memo = '') {
 function sceneExcerpt(ctx = {}, memo = '') {
     const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
     const parts = [];
-    for (let i = chat.length - 1; i >= 0 && parts.length < 8; i -= 1) {
-        const raw = String(chat[i]?.mes || chat[i]?.content || '');
+    for (let i = chat.length - 1; i >= 0 && parts.length < 4; i -= 1) {
+        const message = chat[i];
+        if (!message) continue;
+        if (message.is_system) continue;
+        const extraType = String(message.extra?.type || '').toLowerCase();
+        if (extraType === 'narrator' || extraType === 'tool' || extraType === 'tool_call' || extraType === 'function') continue;
+        if (message.extra?.tcResultId) continue;
+        const raw = String(message.mes || message.content || '');
+        if (!raw.trim()) continue;
         const text = raw
             .replace(/<div\s+hidden[\s\S]*?<\/div>/gi, ' ')
             .replace(/<[^>]+>/g, ' ')
+            .replace(/\[TACTICAL_COMBAT_CONTEXT\][\s\S]*?\[\/TACTICAL_COMBAT_CONTEXT\]/gi, ' ')
+            .replace(/\[TACTICAL_COMBAT_RESULT_NOTICE\][\s\S]*?\[\/TACTICAL_COMBAT_RESULT_NOTICE\]/gi, ' ')
+            .replace(/\[TACTICAL COMBAT RESULT[\s\S]*$/gi, ' ')
             .replace(/\[[^\]]+\][\s\S]*?\[\/[^\]]+\]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-        if (text) parts.unshift(text);
+        // Ignore JSON/tool-call payloads that survived the system-row filter.
+        if (!text || /^[\[{][\s\S]*"(?:name|result|actions|effects)"\s*:/.test(text)) continue;
+        parts.unshift(text);
     }
-    const excerpt = parts.join('\n').slice(-3500);
+    const excerpt = parts.join('\n').slice(-2500);
     return excerpt || cleanText(memo).slice(-2000);
+}
+
+/**
+ * The player's latest typed declaration is the strongest encounter signal.
+ * @param {object} ctx
+ * @returns {string}
+ */
+function latestUserDeclaration(ctx = {}) {
+    const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
+    for (let i = chat.length - 1; i >= 0; i -= 1) {
+        if (!chat[i]?.is_user) continue;
+        const raw = String(chat[i].mes || chat[i].content || '');
+        const inputParts = raw.split(/###\s*CURRENT USER INPUT\s*\n/i);
+        const text = (inputParts.length > 1 ? inputParts[inputParts.length - 1] : raw)
+            .replace(/\[[^\]]+\][\s\S]*?\[\/[^\]]+\]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        return text.slice(0, 1200);
+    }
+    return '';
+}
+
+function sanitizeEnemyNames(value) {
+    const list = Array.isArray(value) ? value : (value == null ? [] : [value]);
+    const seen = new Set();
+    const names = [];
+    for (const entry of list) {
+        const name = cleanText(entry).slice(0, 80);
+        const key = name.toLowerCase();
+        if (!name || seen.has(key)) continue;
+        seen.add(key);
+        names.push(name);
+        if (names.length >= 6) break;
+    }
+    return names;
 }
 
 export function inferTerrainTheme(location = '', scene = '') {
@@ -667,7 +723,7 @@ export function resolveTerrainTheme(settings, context) {
  * @param {object} [ctx]
  * @returns {object}
  */
-export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : {})) {
+export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : {}), options = {}) {
     const memo = String(settings?.currentMemo || '');
     const movement = clampIntOr(settings?.tacticalCombatMovement, 6, 1, 24);
     const classifier = getLoadoutClassifier(settings).config;
@@ -694,7 +750,14 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
             if (item?.id && !itemById.has(item.id)) itemById.set(item.id, item);
         }
         first.items = [...itemById.values()];
-        first.inventory = inventory;
+        // Preserve gear parsed from the character sheet, then let the dedicated
+        // [INVENTORY] block win on duplicate names.
+        const inventoryByName = new Map();
+        for (const entry of [...(first.inventory || []), ...inventory]) {
+            const key = String(entry?.name || '').trim().toLowerCase();
+            if (key) inventoryByName.set(key, entry);
+        }
+        first.inventory = [...inventoryByName.values()];
     }
     for (const unit of playerUnits) {
         if (!unit.skills?.length) unit.skills = fallbackSkills('player', unit.classLabel);
@@ -710,12 +773,17 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
     const location = locationFromChat(ctx, memo);
     const scene = sceneExcerpt(ctx, memo);
     const existingCombat = enemies.length > 0 || allies.length > 0;
+    const playerDeclaration = String(options.playerDeclaration || latestUserDeclaration(ctx) || '').trim().slice(0, 1200);
+    const enemyNames = sanitizeEnemyNames(options.enemyNames);
 
     return {
         chatId: String(ctx?.chatId || ctx?.getCurrentChatId?.() || ''),
         memo,
         location,
         sceneExcerpt: scene,
+        playerDeclaration,
+        enemyNames,
+        freshStart: options.freshStart === true,
         playerUnits,
         enemies,
         allies,
@@ -741,7 +809,7 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
  */
 export function buildFallbackEnemies(context, seed = 1) {
     const theme = context?.theme || 'plain';
-    const roster = {
+    const themeRoster = {
         dungeon: ['Skeleton', 'Cultist', 'Ghoul', 'Grave Warden'],
         forest: ['Bandit', 'Wolf', 'Poacher', 'Briar Stalker'],
         cave: ['Kobold', 'Cave Bat', 'Cave Troll', 'Myconid'],
@@ -749,16 +817,26 @@ export function buildFallbackEnemies(context, seed = 1) {
         interior: ['Drunken Brawler', 'Mercenary', 'House Guard', 'Duellist'],
         plain: ['Raider', 'Scout', 'Marauder', 'Outrider'],
     }[theme] || ['Raider', 'Scout', 'Marauder', 'Outrider'];
+    const named = sanitizeEnemyNames(context?.enemyNames);
+    const roster = named.length ? named : themeRoster;
     const partySize = Math.max(1, Number(context?.partySize) || 1);
-    const count = Math.max(2, Math.min(6, partySize));
+    const count = named.length
+        ? Math.max(2, Math.min(6, named.length > 1 ? named.length : Math.max(2, Math.min(partySize, 4))))
+        : Math.max(2, Math.min(6, partySize));
+    const singleBase = named.length === 1 ? named[0] : '';
+    const variants = ['', ' Archer', ' Bruiser', ' Skirmisher', ' Shaman', ' Veteran'];
     const enemies = [];
     for (let i = 0; i < count; i += 1) {
-        const name = roster[i % roster.length];
+        let name = roster[i % roster.length];
+        if (singleBase && i > 0 && !/\b(archer|brute|shaman|scout|guard|leader|boss|veteran)\b/i.test(singleBase)) {
+            name = `${singleBase}${variants[Math.min(i, variants.length - 1)]}`;
+        }
         const boss = i === 0;
+        const namedRanged = /\b(archer|bow|slinger|skirmisher|mage|wizard|sorcerer|shaman|caster)\b/i.test(name);
+        const ranged = namedRanged || (i === 1 && count >= 3);
         const maxHp = 10 + partySize * 3 + i * 2 + (boss ? 6 : 0);
         const attackBonus = 3 + Math.floor(partySize / 2) + (boss ? 1 : 0);
         const damageBonus = 1 + Math.floor(partySize / 2);
-        const ranged = i === 1 && count >= 3;
         enemies.push({
             name,
             classLabel: boss ? 'Leader' : ranged ? 'Skirmisher' : 'Fighter',
@@ -772,7 +850,7 @@ export function buildFallbackEnemies(context, seed = 1) {
             initiativeBonus: 1 + i,
             level: Math.max(1, Math.floor(partySize / 2)),
             notes: `A ${name.toLowerCase()} drawn into the fight.`,
-            skills: fallbackSkills('enemy', boss ? 'Fighter' : 'Rogue'),
+            skills: fallbackSkills('enemy', boss ? 'Fighter' : ranged ? 'Ranger' : 'Fighter'),
             color: '#e05252',
             _seed: seed + i,
         });

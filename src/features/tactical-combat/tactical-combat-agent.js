@@ -133,7 +133,10 @@ export function buildEncounterRequestPayload(context, settings) {
     const unitCount = (context?.playerUnits?.length || 1) + (context?.allies?.length || 0) + 4;
     const grid = resolveGridDimensions(settings, unitCount);
     return {
-        request: 'Design one tactical encounter that fits the current scene.',
+        request: 'Design one tactical encounter that fits the current scene and the player declaration below.',
+        playerDeclaration: String(context?.playerDeclaration || '').slice(0, 1200),
+        enemyNames: Array.isArray(context?.enemyNames) ? context.enemyNames.slice(0, 6) : [],
+        freshStart: context?.freshStart === true,
         party: (context?.playerUnits || []).map(compactUnitForContext),
         nonPartyAllies: (context?.allies || []).map(compactUnitForContext),
         existingCombat: (context?.enemies || []).map(compactUnitForContext),
@@ -276,6 +279,25 @@ export function normalizeEncounterPayload(value, options = {}) {
     };
 }
 
+export function namedEnemyMismatch(encounter, context) {
+    const requested = Array.isArray(context?.enemyNames)
+        ? context.enemyNames.map(name => String(name || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+    if (!requested.length) return '';
+    const allowed = new Set();
+    for (const name of requested) {
+        allowed.add(name);
+        allowed.add(name.split(/\s+/)[0]);
+    }
+    const enemies = Array.isArray(encounter?.enemies) ? encounter.enemies : [];
+    if (!enemies.length) return '';
+    const bad = enemies.find(enemy => {
+        const name = String(enemy?.name || '').toLowerCase();
+        return ![...allowed].some(type => name.includes(type));
+    });
+    return bad ? `The encounter must use the named enemy type(s): ${context.enemyNames.join(', ')}. "${bad.name}" does not match.` : '';
+}
+
 const ENCOUNTER_JSON_SCHEMA = {
     name: 'tactical_encounter',
     description: 'A tactical encounter with terrain and enemies.',
@@ -382,6 +404,11 @@ export async function generateEncounterWithAgent(context, settings, options = {}
             const normalized = normalizeEncounterPayload(parsed.value);
             if (!normalized.ok) {
                 lastError = normalized.errors.join(' ');
+                continue;
+            }
+            const mismatch = namedEnemyMismatch(normalized.encounter, context);
+            if (mismatch) {
+                lastError = mismatch;
                 continue;
             }
             return { ok: true, encounter: normalized.encounter, attempts, raw };

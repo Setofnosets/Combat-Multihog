@@ -75,7 +75,10 @@ Return exactly ONE JSON object and no prose, no markdown fences:
 6. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Include range in grid cells and maxUses as a number.
 7. The description must not dictate player actions, outcomes, or dialogue. It sets the scene only.
 8. Never output player units. The party comes from the state memo, not from you.
-9. The party payload includes abilities, spells, items, and inventory. Treat those as available to the player and design opposition that gives them room to matter. Special/freeform effects are resolved by the framework at cast time; do not try to simulate them in the encounter JSON.`;
+9. The party payload includes abilities, spells, items, and inventory. Treat those as available to the player and design opposition that gives them room to matter. Special/freeform effects are resolved by the framework at cast time; do not try to simulate them in the encounter JSON.
+10. NAMED ENEMIES WIN: If "playerDeclaration" or "enemyNames" names a creature type (goblins, bandits, wolves, etc.), the encounter MUST use that creature type. Do not substitute a generic terrain roster such as Kobolds, Cave Bats, or Skeletons merely because the location is a cave or dungeon. Only invent a different type when the player does not name one.
+11. CURRENT DECLARATION WINS OVER OLD COMBAT: "sceneExcerpt" may include the aftermath of a previous board fight. Do not reuse those old enemies unless they also appear in "existingCombat" or the current player declaration. When "freshStart" is true, treat any prior tactical board as concluded and build the new encounter from the current scene.
+12. Keep the requested enemy type consistent across the whole group. If the player says goblins, use goblins or goblin variants — not a mixed cave ecology unless the narrative explicitly established it.`;
 
 export const DEFAULT_TACTICAL_OUTCOME_PROMPT = `[TACTICAL COMBAT RESULT — AUTHORITATIVE]
 Encounter: {{title}}

@@ -197,6 +197,7 @@ export function buildDefaultSettings() {
         tacticalCombatEncounterSource: "auto",
         tacticalCombatAutoNarrate: true,
         tacticalCombatOpeningActions: true,
+        tacticalCombatDeploymentPhase: true,
         tacticalCombatSyncTrackerBeforeNarration: true,
         tacticalCombatShowCoordinates: false,
         tacticalCombatConnectionSource: "default",

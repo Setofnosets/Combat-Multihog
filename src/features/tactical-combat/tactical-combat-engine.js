@@ -660,6 +660,102 @@ export function placeUnits(state, units, rng = Math.random) {
     placeGroup(groups[2], [state.grid.cols - 2, state.grid.cols - 1, state.grid.cols - 3]);
 }
 
+// ── Deployment phase ─────────────────────────────────────────────────────────
+
+/**
+ * Start a pre-battle deployment phase. Player units may be repositioned inside
+ * the left deployment lane before the first normal turn.
+ * @param {object} state
+ * @param {{ columns?: number }} [options]
+ * @returns {boolean}
+ */
+export function beginDeployment(state, options = {}) {
+    if (!state || state.status !== 'active') return false;
+    const players = state.units.filter(unit => unit.side === 'player' && !unit.defeated && !unit.fled);
+    if (!players.length) return false;
+    const configured = Number(options.columns);
+    const columns = Number.isFinite(configured)
+        ? clampInt(configured, 1, state.grid.cols - 1)
+        : Math.max(2, Math.min(6, Math.ceil(state.grid.cols * 0.25)));
+    state.deployment = {
+        active: true,
+        maxX: columns - 1,
+        columns,
+        startedAt: Date.now(),
+    };
+    state.phase = 'player';
+    state.pendingAgentUnitIds = [];
+    state.turnIndex = 0;
+    addLog(state, 'deployment', `Deployment: place player units within the left ${columns} column${columns === 1 ? '' : 's'}.`, null);
+    return true;
+}
+
+/**
+ * @param {object} state
+ * @returns {{ x: number, y: number }[]}
+ */
+export function getDeploymentCells(state) {
+    const cells = [];
+    if (!state?.deployment?.active) return cells;
+    const maxX = clampInt(state.deployment.maxX, 0, state.grid.cols - 1);
+    for (let y = 0; y < state.grid.rows; y += 1) {
+        for (let x = 0; x <= maxX; x += 1) {
+            if (isWalkableTerrain(state, x, y)) cells.push({ x, y });
+        }
+    }
+    return cells;
+}
+
+/**
+ * Move one player unit to a deployment cell.
+ * @param {object} state
+ * @param {string} unitId
+ * @param {number} x
+ * @param {number} y
+ * @returns {{ ok: boolean, error?: string }}
+ */
+export function deployUnit(state, unitId, x, y) {
+    if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is over.' };
+    if (!state.deployment?.active) return { ok: false, error: 'Deployment is not active.' };
+    const unit = getUnitById(state, unitId);
+    if (!unit || unit.side !== 'player') return { ok: false, error: 'Only player units can be deployed.' };
+    if (unit.defeated || unit.fled) return { ok: false, error: `${unit.name} cannot deploy.` };
+    if (!inBounds(state, x, y)) return { ok: false, error: 'That cell is outside the grid.' };
+    if (x > Number(state.deployment.maxX)) return { ok: false, error: 'That cell is outside the deployment lane.' };
+    if (!isWalkableTerrain(state, x, y)) return { ok: false, error: 'That cell is impassable terrain.' };
+    const occupant = state.units.find(other => other.id !== unit.id && !other.defeated && !other.fled && other.x === x && other.y === y);
+    if (occupant) return { ok: false, error: `${occupant.name} is standing there.` };
+    const from = { x: unit.x, y: unit.y };
+    unit.x = x;
+    unit.y = y;
+    addLog(state, 'deployment', `${unit.name} deploys from (${from.x},${from.y}) to (${x},${y}).`, unit.id);
+    return { ok: true };
+}
+
+/**
+ * End deployment and hand the first turn to the normal turn-order logic.
+ * @param {object} state
+ * @returns {boolean}
+ */
+export function finishDeployment(state) {
+    if (!state?.deployment?.active) return false;
+    state.deployment.active = false;
+    state.deployment.finishedAt = Date.now();
+    if (state.turnStyle === 'initiative') {
+        state.turnIndex = 0;
+        state.pendingAgentUnitIds = [];
+        advanceTurnPointerToLiving(state);
+        const active = getActiveUnit(state);
+        state.phase = active && active.side !== 'player' ? 'enemy' : 'player';
+        state.pendingAgentUnitIds = state.phase === 'enemy' ? collectConsecutiveAgentUnits(state) : [];
+    } else {
+        state.phase = 'player';
+        state.pendingAgentUnitIds = [];
+    }
+    addLog(state, 'deployment', 'Deployment complete. Battle begins.', null);
+    return true;
+}
+
 // ── Initiative & turn flow ───────────────────────────────────────────────────
 
 export function getUnitById(state, unitId) {
@@ -1420,6 +1516,10 @@ function resolveTarget(state, unit, action, options) {
  */
 export function applyAction(state, action, options = {}) {
     if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is over.' };
+    if (state.preparing?.active) return { ok: false, error: 'The encounter is still being prepared.' };
+    if (state.deployment?.active && !options.ignoreDeployment) {
+        return { ok: false, error: 'Finish deployment before taking combat actions.' };
+    }
     if (!action || !action.type) return { ok: false, error: 'Invalid action.' };
     const catalog = Array.isArray(state.actionCatalog) && state.actionCatalog.length
         ? state.actionCatalog
@@ -2165,6 +2265,8 @@ export function createEncounterState(options = {}) {
         pendingAgentUnitIds: [],
         surprise: null,
         opening: null,
+        deployment: null,
+        preparing: null,
         log: [],
         outcome: null,
         seed,
@@ -2208,7 +2310,7 @@ export function createEncounterState(options = {}) {
  * @returns {string[]}
  */
 export function getPendingAgentUnitIds(state) {
-    if (!state || state.status !== 'active') return [];
+    if (!state || state.status !== 'active' || state.deployment?.active || state.preparing?.active) return [];
     if (Array.isArray(state.pendingAgentUnitIds) && state.pendingAgentUnitIds.length) {
         return state.pendingAgentUnitIds.filter(id => {
             const unit = getUnitById(state, id);
