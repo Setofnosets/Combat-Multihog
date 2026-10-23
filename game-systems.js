@@ -314,15 +314,15 @@ export function extractTopLevelSections(rawText) {
 export const TACTICAL_COMBAT_COMBAT_OVERRIDE = `<combat>
 TACTICAL COMBAT OVERRIDE
 All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT]. On the next response, call StartTacticalCombat exactly once and wait for the player to resolve the fight.
-If [COMBAT] is already present, call StartTacticalCombat immediately (once) and do not continue combat narration.
+When a fight actually begins, call StartTacticalCombat immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and seeds the State Memo. Do not wait for the State Tracker to add [COMBAT].
+If the player's immediately preceding message declared a concrete opening action (spell, ambush, charge, or attack), copy it into openingAction and set surprise=true for an ambush. The board resolves it before Round 1; do not resolve it yourself.
+If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
 </combat>`;
 
 export const TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL = `<combat>
 TACTICAL COMBAT OVERRIDE
 All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble and stop before resolving any combat action. The State Tracker will add [COMBAT].
-Once [COMBAT] is present, do not continue combat narration. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns the fight.
+If a fight begins, narrate only the opening preamble and stop before resolving any combat action. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns the fight and will seed the roster.
 </combat>`;
 
 // ─────────────────────────────────────────────────────────────────────────

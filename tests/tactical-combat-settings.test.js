@@ -28,6 +28,8 @@ describe('Tactical Combat settings tab contract', () => {
             'rpg_tactical_combat_movement',
             'rpg_tactical_combat_encounter_source',
             'rpg_tactical_combat_auto_narrate',
+            'rpg_tactical_combat_opening_actions',
+            'rpg_tactical_combat_sync_tracker_before_narration',
             'rpg_tactical_combat_show_coordinates',
             'rpg_tactical_combat_max_tokens',
             'rpg_tactical_combat_agent_prompt',
@@ -103,6 +105,8 @@ describe('Tactical Combat settings tab contract', () => {
             'tacticalCombatMovement: 6',
             'tacticalCombatEncounterSource: "auto"',
             'tacticalCombatAutoNarrate: true',
+            'tacticalCombatOpeningActions: true',
+            'tacticalCombatSyncTrackerBeforeNarration: true',
             'tacticalCombatShowCoordinates: false',
             'tacticalCombatConnectionSource: "default"',
             'tacticalCombatMaxTokens: 6000',
@@ -154,14 +158,16 @@ describe('Tactical Combat settings tab contract', () => {
         expect(panelMarkup).toContain('fa-chess-board');
     });
 
-    it('injects the authoritative outcome and clears it after a real generation', () => {
+    it('injects the authoritative outcome as a narrator message and consumes it only after a real generation', () => {
         expect(hooksSource).toContain('buildNarrationBlock');
+        expect(hooksSource).toContain('markNarrationInjected');
         expect(hooksSource).toContain('clearNarrationAfterGeneration');
         expect(hooksSource).toContain('registerTacticalCombatTool');
         expect(hooksSource).toContain("name: 'StartTacticalCombat'");
         expect(hooksSource).toContain('startTacticalCombatFromNarrator');
         expect(hooksSource).toContain('const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());');
-        expect(hooksSource).toContain("currentType !== 'quiet' && currentType !== 'impersonate'");
+        expect(hooksSource).toContain('tcResultId');
+        expect(hooksSource).toContain("!['quiet', 'impersonate', 'swipe', 'regenerate'].includes(typeLower)");
     });
 
     it('ships responsive board styles with a terrain legend and reduced-motion support', () => {

@@ -2416,6 +2416,16 @@
                                 <span>Automatically return to narration when combat ends</span>
                             </label>
                             <div class="rt-tc-settings-note">The final outcome is always queued for the next narrator generation. Automatic return simply triggers that generation for you.</div>
+                            <label class="checkbox_label" for="rpg_tactical_combat_opening_actions">
+                                <input type="checkbox" id="rpg_tactical_combat_opening_actions" checked />
+                                <span>Resolve declared opening actions before Round 1</span>
+                            </label>
+                            <div class="rt-tc-settings-note">When the player's preceding message declares a spell, ambush, or attack, the board resolves it before normal turns. Ambushes also cost the enemy their first activation.</div>
+                            <label class="checkbox_label" for="rpg_tactical_combat_sync_tracker_before_narration">
+                                <input type="checkbox" id="rpg_tactical_combat_sync_tracker_before_narration" checked />
+                                <span>Update the State Tracker before returning to narration</span>
+                            </label>
+                            <div class="rt-tc-settings-note">Writes final HP and combat state into the memo before the result is sent to the narrator. Disable only if you prefer to let the next normal tracker pass handle it.</div>
                         </div>
                     </div>
 

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
     applyAction,
+    applyOpeningAction,
     applySpecialEffects,
+    applySurprise,
     beginRound,
     buildAgentGameState,
     buildOutcomeSummary,
@@ -346,6 +348,64 @@ describe('tactical combat movement & actions', () => {
     });
 });
 
+describe('tactical combat opening actions', () => {
+    it('resolves a declared opening attack before normal turn budgets', () => {
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-3');
+        enemy.x = 7;
+        enemy.y = 7;
+        const result = applyOpeningAction(state, {
+            text: 'Aria looses an arrow at the Goblin',
+            targetName: 'Goblin',
+        }, { rng: midRoll });
+        expect(result.ok).toBe(true);
+        expect(enemy.hp).toBeLessThan(enemy.maxHp);
+        expect(getUnitById(state, 'pc-1').actionUsed).toBe(false);
+        expect(state.opening.resolved).toBe(true);
+    });
+
+    it('can mark surprise without an opening action', () => {
+        const state = makeState();
+        expect(applySurprise(state, 'player')).toBe(true);
+        expect(state.surprise.remaining).toBe(1);
+        expect(state.units.find(unit => unit.side === 'enemy').surprised).toBe(true);
+        expect(applySurprise(state, 'player')).toBe(true);
+    });
+
+    it('advances past a surprised opening unit in initiative mode', () => {
+        const state = makeState({ turnStyle: 'initiative' });
+        state.initiativeOrder = ['enemy-3', 'pc-1', 'pc-2'];
+        state.turnIndex = 0;
+        state.phase = 'enemy';
+        expect(applySurprise(state, 'player')).toBe(true);
+        expect(state.phase).toBe('player');
+        expect(getActiveUnit(state)?.id).toBe('pc-1');
+    });
+
+    it('marks ambushes as a surprise round and defers special abilities', () => {
+        const state = makeState();
+        const aria = getUnitById(state, 'pc-1');
+        aria.skills = [{
+            id: 'skill-fireball',
+            name: 'Fireball',
+            kind: 'special',
+            uses: 1,
+            maxUses: 1,
+            range: 6,
+            description: 'A burst of fire.',
+        }];
+        const result = applyOpeningAction(state, {
+            text: 'Aria casts Fireball at the Goblin',
+            targetName: 'Goblin',
+            surprise: true,
+        }, { rng: midRoll });
+        expect(result.requiresAgent).toBe(true);
+        expect(state.opening.requiresAgent).toBe(true);
+        expect(state.surprise.remaining).toBe(1);
+        expect(getUnitById(state, 'enemy-3').surprised).toBe(true);
+    });
+});
+
 describe('tactical combat turn flow & outcomes', () => {
     it('runs a phased round: player phase, enemy phase, then a fresh player round', () => {
         const state = makeState();
@@ -402,6 +462,28 @@ describe('tactical combat turn flow & outcomes', () => {
         defeatState.units.filter(unit => unit.side === 'player').forEach(unit => { unit.hp = 0; unit.defeated = true; });
         expect(checkEncounterEnd(defeatState)).toBe(true);
         expect(defeatState.status).toBe('defeat');
+    });
+
+    it('skips the first enemy phase when the party has surprise', () => {
+        const state = makeState();
+        state.surprise = { remaining: 1, side: 'player' };
+        state.units.filter(unit => unit.side === 'enemy').forEach(unit => { unit.surprised = true; });
+        const result = endTurn(state, midRoll);
+        expect(result.agentUnitIds).toEqual([]);
+        expect(state.round).toBe(2);
+        expect(state.phase).toBe('player');
+        expect(state.surprise).toBeNull();
+        expect(state.units.find(unit => unit.side === 'enemy').surprised).toBe(false);
+    });
+
+    it('reports surviving enemies, final units, and highlights in the outcome', () => {
+        const state = makeState();
+        state.log.push({ type: 'defeat', text: 'Goblin is defeated.', round: 1 });
+        const summary = buildOutcomeSummary(state);
+        expect(summary.enemySurvivors).toHaveLength(1);
+        expect(summary.enemySurvivors[0].name).toBe('Goblin');
+        expect(summary.finalUnits).toHaveLength(state.units.length);
+        expect(summary.highlights).toContain('Goblin is defeated.');
     });
 
     it('supports player retreat', () => {

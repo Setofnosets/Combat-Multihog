@@ -128,7 +128,7 @@ Bench ETAs: If it is clearly implied in the narrative when a character may retur
 The ETA must always be an explicit timestamp, e.g. "Day 1, HH:MM", or "17/10/2002, HH:MM." Only [UNBENCH] when the character physically reunites with {{user}}, not simply when the ETA date has been met.
 
 ETA [BENCH] example: Status: Benched (08:08 AM, Day 1, separated to investigate the docks and meet back at Day 1, 12:10 AM)`,
-  combat: `Active enemies and temporary allied NPCs in combat. Track the current COMBAT ROUND starting from 1. Decrement buff/debuff durations by 1 each round.
+  combat: `Active enemies and temporary allied NPCs in combat. Create this section in the same pass in which a fight begins, an attack is declared, or an ambush is sprung — do not wait for the first round to resolve. Track the current COMBAT ROUND starting from 1. Decrement buff/debuff durations by 1 each round. If a tactical-board [COMBAT] block is present, it is authoritative: preserve its roster and stats while the board is active.
 
 Group combatants under ENEMIES: and NON-PARTY ALLIES: headers, with ENEMIES first. NON-PARTY ALLIES means exactly that: allied combatants who are NOT listed in [PARTY]. Never put any [PARTY] member in [COMBAT]. Always include both headers when non-party allies are present. If there are no non-party allies, include ENEMIES: only.
 
@@ -426,8 +426,10 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT].
-Once [COMBAT] is present, call the StartTacticalCombat tool exactly once, then wait for the player to resolve the fight on the grid. Do not call it every turn or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief.
+When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
+If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
+If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+After calling the tool, do not resolve the fight yourself. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative.
 </tactical_combat>
 
 <end_of_output_footer>
@@ -809,8 +811,10 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT].
-Once [COMBAT] is present, call the StartTacticalCombat tool exactly once, then wait for the player to resolve the fight on the grid. Do not call it every turn or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief.
+When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
+If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
+If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+After calling the tool, do not resolve the fight yourself. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative.
 </tactical_combat>
 
 <end_of_output_footer>

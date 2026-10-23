@@ -10,11 +10,11 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 
 1. Open **Settings → Tactical Combat** and enable the feature.
 2. Choose a grid size, turn style, terrain theme, and (optionally) a dedicated combat-agent connection.
-3. Talk to the narrator until a `[COMBAT]` block exists, or let the encounter architect invent opposition from the current scene.
-4. Press **Start encounter**. The board opens with the party on the left and enemies on the right.
+3. Talk to the narrator until a fight begins. The narrator calls `StartTacticalCombat` immediately; it can reuse an existing `[COMBAT]` roster or build opposition from the current scene when none exists.
+4. The board opens with the party on the left and enemies on the right. When the fight started from a declared action, that opening action is resolved before Round 1.
 5. Select a player unit, move to a blue-highlighted cell, then attack (red targets), use a skill or item, defend, wait, or flee.
 6. Press **End player phase** (phased mode) or **End turn** (initiative mode). The combat agent controls every enemy and non-party ally, then the next player phase begins.
-7. When one side is gone — or the party retreats — the result is written into `[COMBAT]` as `END_COMBAT` and queued as an authoritative aftermath block for the main narrator.
+7. When one side is gone — or the party retreats — final HP is written into the memo, `[COMBAT]` is closed, and the authoritative aftermath is queued for the main narrator.
 
 ---
 
@@ -31,6 +31,8 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 | **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
+| **Resolve declared opening actions** | Applies the player's declared spell, ambush, charge, or attack before Round 1. Ambushes cost the enemy their first activation. |
+| **Update State Tracker before narration** | Writes final HP and the closed combat block into the memo before the aftermath prompt is sent. Disable to let the next normal tracker pass handle it. |
 | **Combat agent connection** | Main API, saved connection profile, Ollama, or OpenAI-compatible endpoint + completion preset + max output tokens. |
 | **Prompt Templates** | Editable tactical agent, encounter architect, outcome-to-narration, and special-ability resolver prompts. Reset restores the shipped template. |
 | **Special ability resolver prompt** | Used only when a non-standard ability/spell/item is cast. Converts freeform effects (summoning, terrain, control) into engine primitives. |
@@ -99,9 +101,9 @@ This keeps token usage limited to the rare ability that actually needs adjudicat
 While Tactical Combat is enabled, ordinary narrative combat is disabled:
 
 - The normal `<combat>` system-prompt section is replaced by a **TACTICAL COMBAT OVERRIDE** that forbids narrating attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-- If a fight begins before `[COMBAT]` exists, the narrator may describe only the **opening preamble** and must stop before resolving any combat action. The State Tracker then writes `[COMBAT]`.
-- On the next response, the narrator is instructed to call `StartTacticalCombat` once (or, if the component/tool is disabled, to ask the player to open the board).
-- A runtime `[TACTICAL_COMBAT_OVERRIDE]` block is injected on every prompt while `[COMBAT]` is active and no board encounter is running, so this also holds for custom sysprompts.
+- When a fight actually begins, the narrator calls `StartTacticalCombat` immediately — it no longer waits for `[COMBAT]` to appear. If no roster exists, the encounter architect builds one from the current scene and the board seeds the memo.
+- The player's immediately preceding action can be passed through `openingAction` (and `surprise` for an ambush), so the declared spell or attack resolves before normal turns instead of being lost.
+- A runtime `[TACTICAL_COMBAT_OVERRIDE]` block is injected while a board encounter is active, and while `[COMBAT]` exists without a running board, so this also holds for custom sysprompts.
 
 ### Loadout classifiers
 
@@ -135,13 +137,15 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
 
 ### Narrator tool
 
-The narrator tool is enabled by default with the **Game Systems → Components → Tactical Combat (StartTacticalCombat tool)** component. Disable that component (or the `<tactical_combat>` section in the System Prompt Control Room) if your model/provider does not support function calling. The component adds the predefined `<tactical_combat>` instruction to the system prompt and makes the function tool available while a `[COMBAT]` block is active.
+The narrator tool is enabled by default with the **Game Systems → Components → Tactical Combat (StartTacticalCombat tool)** component. Disable that component (or the `<tactical_combat>` section in the System Prompt Control Room) if your model/provider does not support function calling. The component adds the predefined `<tactical_combat>` instruction to the system prompt and exposes the function tool whenever tactical combat is enabled and no encounter/result is already in progress.
 
-The main narrator can call the registered `StartTacticalCombat` function tool when a fight becomes a set-piece battle. Optional arguments: `title`, `location`, `description`, `reason`. The tool:
+The main narrator calls the registered `StartTacticalCombat` function tool as soon as a real fight begins. Optional arguments: `title`, `location`, `description`, `reason`, `openingAction`, `openingTarget`, `openingSkill`, `surprise`. The tool:
 
-1. Starts the encounter through the same path as the settings button.
-2. Opens/focuses the tactical board.
-3. Returns a short status string to the model.
+1. Starts the encounter through the same path as the settings button. It reuses `[COMBAT]` when present and otherwise builds opposition from the scene. When called from inside the narrator generation with no `[COMBAT]` roster, it uses the deterministic local roster instead of making a nested encounter-architect request.
+2. Seeds the board roster into `[COMBAT]` immediately, so the memo is never one turn behind.
+3. Opens/focuses the tactical board and leaves a visible tool message in chat.
+4. Resolves the declared opening action deterministically where possible; freeform/special effects are resolved after the narrator generation completes.
+5. Returns a short status string to the model.
 
 If an encounter is already active, it simply reopens the board. If Tactical Combat is disabled, it returns a message asking the player to enable it. The narrator is told not to resolve the fight itself.
 
@@ -246,7 +250,7 @@ Four prompts are editable:
 2. **Encounter architect system prompt** — how to build a fair encounter from party, existing `[COMBAT]`, location, and scene. It can also return a terrain map using the legend characters. The party payload includes the full ability/spell/item/inventory loadout.
 3. **Outcome-to-narration template** — the authoritative aftermath block injected into the next narrator generation. Supported placeholders:
 
-   `{{title}}`, `{{location}}`, `{{outcome}}`, `{{rounds}}`, `{{survivors}}`, `{{fallen}}`, `{{fled}}`, `{{defeated}}`, `{{details}}`, `{{summary}}`.
+   `{{title}}`, `{{location}}`, `{{outcome}}`, `{{rounds}}`, `{{trigger}}`, `{{survivors}}`, `{{fallen}}`, `{{fled}}`, `{{defeated}}`, `{{enemiesRemaining}}`, `{{allyState}}`, `{{partyState}}`, `{{highlights}}`, `{{finalState}}`, `{{details}}`, `{{summary}}`.
 
 4. **Special ability resolver prompt** — used only for `kind: "special"` abilities/items. It converts summoning, terrain reshaping, and other complex effects into the engine's primitive effect list.
 
@@ -275,11 +279,12 @@ Valid `type` values are `move`, `attack`, `skill`, `item`, `defend`, `wait`, and
 
 When combat ends:
 
-1. `[COMBAT]` is closed with `[COMBAT]END_COMBAT[/COMBAT]` (the tracker's defeated-combatant archive is cleared through `mergeMemo`).
-2. A payload is queued in `settings.tacticalCombatReturn` with the title, location, outcome, rounds, survivors, fallen, defeated enemies, and detail lines.
-3. The board shows a result dialog. **Return to narration** closes the board and calls the main `generate('normal')`. If automatic return is enabled, this happens after ~1 second.
-4. On the next real narrator generation, `rpgTrackerInterceptor` injects the rendered outcome block at the top of the core context. After `GENERATION_ENDED` (excluding quiet/impersonate passes), the payload is cleared, so it cannot leak into later scenes.
-5. If automatic return is disabled or generation is busy, the payload stays queued for the user's next message.
+1. Final party HP is patched directly from the board into `[CHARACTER]`/`[PARTY]`, and `[COMBAT]` is closed with `[COMBAT]END_COMBAT[/COMBAT]`. This happens before the narrator sees the result.
+2. If the State Tracker is enabled and **Update State Tracker before narration** is on, a finalization pass applies the authoritative final-state report before the result is queued.
+3. A payload is queued in `settings.tacticalCombatReturn` with the title, location, outcome, rounds, player/ally/enemy survivors, fallen, fled, defeated enemies, opening action, highlights, and compact final unit state.
+4. The board shows a result dialog. **Return to narration** closes the board and calls the main `generate('normal')`. If automatic return is enabled, this happens after the tracker sync and a short delay.
+5. On the next real narrator generation, `rpgTrackerInterceptor` appends the rendered outcome as a dedicated system/narrator message at the end of the prompt. A short notice in the user message states that the previous player action was already resolved. The payload is cleared only after a real assistant message consumes it; stopped, quiet/impersonate, or failed generations keep it queued.
+6. If automatic return is disabled or generation is busy, the payload stays queued for the user's next message.
 
 ---
 
@@ -304,6 +309,7 @@ When combat ends:
 | `tactical-combat-context.js` | Memo parsing (`[CHARACTER]`, `[PARTY]`, `[COMBAT]`, `[INVENTORY]`), location/theme inference, fallback roster/encounters. |
 | `tactical-combat-agent.js` | Encounter architect + tactical agent requests, correction retries, local tactics fallback, connection probe. |
 | `tactical-combat-store.js` | Per-chat board and pending-narration persistence. |
+| `tactical-combat-memo.js` | Deterministic board → `[COMBAT]`/party HP synchronization and the tracker final-state report. |
 | `tactical-combat-outcome.js` | Memo closure, outcome payload, narration block, automatic continuation. |
 | `tactical-combat-markup.js` | Pure HTML for the board, sidebar, legend, log, and result dialog. |
 | `tactical-combat-ui.js` | Overlay controller, targeting, delegated events, async agent turns, export. |

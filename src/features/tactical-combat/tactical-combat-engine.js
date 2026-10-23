@@ -548,6 +548,7 @@ export function normalizeUnitSeed(seed, meta) {
         reactionUsed: false,
         doneForRound: false,
         defending: false,
+        surprised: false,
         defeated: false,
         fled: false,
         statuses: [],
@@ -771,6 +772,10 @@ export function beginRound(state, rng = Math.random, options = {}) {
     state.turnIndex = 0;
     state.pendingAgentUnitIds = [];
     state.phase = state.turnStyle === 'phase' ? 'player' : 'enemy';
+    if (state.round > 1) {
+        state.surprise = null;
+        for (const unit of state.units) unit.surprised = false;
+    }
 
     for (const unit of state.units) {
         if (unit.defeated || unit.fled) continue;
@@ -794,10 +799,14 @@ export function beginRound(state, rng = Math.random, options = {}) {
     return state;
 }
 
+function isSurprisedThisRound(state, unit) {
+    return !!unit?.surprised && Number(state.round) === 1 && Number(state.surprise?.remaining) > 0;
+}
+
 function advanceTurnPointerToLiving(state) {
     while ((state.turnIndex || 0) < state.initiativeOrder.length) {
         const unit = getUnitById(state, state.initiativeOrder[state.turnIndex]);
-        if (unit && !unit.defeated && !unit.fled) return;
+        if (unit && !unit.defeated && !unit.fled && !isSurprisedThisRound(state, unit)) return;
         state.turnIndex += 1;
     }
 }
@@ -812,7 +821,7 @@ function collectConsecutiveAgentUnits(state) {
             continue;
         }
         if (unit.side === 'player') break;
-        ids.push(unit.id);
+        if (!isSurprisedThisRound(state, unit)) ids.push(unit.id);
         index += 1;
     }
     return ids;
@@ -864,10 +873,15 @@ export function endTurn(state, rng = Math.random) {
             beginRound(state, rng);
             return { agentUnitIds: [], phase: state.phase, roundAdvanced: true };
         }
-        const ids = getAgentControlledUnits(state).map(unit => unit.id);
+        const ids = getAgentControlledUnits(state)
+            .filter(unit => !isSurprisedThisRound(state, unit))
+            .map(unit => unit.id);
         state.phase = 'enemy';
         state.pendingAgentUnitIds = ids;
         if (!ids.length) {
+            if (Number(state.surprise?.remaining) > 0 && Number(state.round) === 1) {
+                addLog(state, 'round', 'The surprised side loses its first activation.', null);
+            }
             beginRound(state, rng);
             return { agentUnitIds: [], phase: state.phase, roundAdvanced: true };
         }
@@ -991,6 +1005,47 @@ function addStatus(unit, status) {
  * @param {object} state
  * @returns {object|null}
  */
+function buildFinalUnit(unit) {
+    return {
+        id: unit.id,
+        name: unit.name,
+        side: unit.side,
+        classLabel: unit.classLabel || '',
+        hp: Math.max(0, Number(unit.hp) || 0),
+        maxHp: Math.max(1, Number(unit.maxHp) || 1),
+        defeated: !!unit.defeated,
+        fled: !!unit.fled,
+        statuses: (unit.statuses || []).map(status => ({
+            label: status.label || status.id || 'Afflicted',
+            rounds: Number(status.rounds) || 0,
+            acBonus: Number(status.acBonus) || 0,
+            attackBonus: Number(status.attackBonus) || 0,
+        })),
+    };
+}
+
+function buildCombatHighlights(state) {
+    const highlights = [];
+    const seen = new Set();
+    for (const entry of state.log || []) {
+        const text = String(entry?.text || '').trim();
+        if (!text || seen.has(text)) continue;
+        const type = String(entry?.type || '');
+        const important = type === 'defeat'
+            || type === 'special'
+            || type === 'summon'
+            || type === 'terrain'
+            || type === 'flee'
+            || type === 'opening'
+            || type === 'surprise'
+            || /critical|crit\b|killing blow|falls|defeated|surrenders/i.test(text);
+        if (!important) continue;
+        seen.add(text);
+        highlights.push(text);
+    }
+    return highlights.slice(-10);
+}
+
 export function buildOutcomeSummary(state) {
     const status = state.status === 'active' ? 'draw' : state.status;
     const label = status === 'victory' ? 'Victory'
@@ -1002,12 +1057,19 @@ export function buildOutcomeSummary(state) {
     const playerSurvivors = realUnits.filter(unit => unit.side === 'player' && !unit.defeated);
     const playerFallen = realUnits.filter(unit => unit.side === 'player' && unit.defeated);
     const playerFled = realUnits.filter(unit => unit.side === 'player' && unit.fled && !unit.defeated);
-    const enemyDefeated = realUnits.filter(unit => unit.side === 'enemy' && (unit.defeated || unit.fled));
+    const enemyDefeated = realUnits.filter(unit => unit.side === 'enemy' && unit.defeated);
+    const enemyFled = realUnits.filter(unit => unit.side === 'enemy' && unit.fled && !unit.defeated);
+    const enemySurvivors = realUnits.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled);
+    const allySurvivors = realUnits.filter(unit => unit.side === 'ally' && !unit.defeated);
     const allyFallen = realUnits.filter(unit => unit.side === 'ally' && unit.defeated);
+    const allyFled = realUnits.filter(unit => unit.side === 'ally' && unit.fled && !unit.defeated);
     const details = [];
 
     if (status === 'victory') {
-        details.push(`The opposition is broken. ${enemyDefeated.map(unit => unit.name).join(', ') || 'All enemies'} have been defeated.`);
+        details.push(enemyDefeated.length
+            ? `The opposition is broken. ${enemyDefeated.map(unit => unit.name).join(', ')} were defeated.`
+            : 'The opposition is broken; the remaining enemies flee the field.');
+        if (enemyFled.length) details.push(`Driven off: ${enemyFled.map(unit => unit.name).join(', ')}.`);
     } else if (status === 'defeat') {
         details.push(`The party has fallen. ${playerFallen.map(unit => unit.name).join(', ') || 'Every player unit'} can fight no longer.`);
         if (playerFled.length) details.push(`Escaped: ${playerFled.map(unit => unit.name).join(', ')}.`);
@@ -1020,9 +1082,18 @@ export function buildOutcomeSummary(state) {
     if (playerSurvivors.length) {
         details.push(`Survivors: ${playerSurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
     }
+    if (enemySurvivors.length) {
+        details.push(`Still standing: ${enemySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
+    }
+    if (enemyFled.length) details.push(`Enemies driven off: ${enemyFled.map(unit => unit.name).join(', ')}.`);
+    if (allySurvivors.length) {
+        details.push(`Allies standing: ${allySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
+    }
     if (allyFallen.length) details.push(`Fallen allies: ${allyFallen.map(unit => unit.name).join(', ')}.`);
+    if (allyFled.length) details.push(`Allies withdrawn: ${allyFled.map(unit => unit.name).join(', ')}.`);
 
     const summary = `${label} after ${state.round} round${state.round === 1 ? '' : 's'} at ${state.location || 'the battlefield'}.`;
+    const finalUnits = realUnits.map(buildFinalUnit);
     return {
         status,
         label,
@@ -1033,6 +1104,20 @@ export function buildOutcomeSummary(state) {
         fallen: playerFallen.map(unit => ({ id: unit.id, name: unit.name })),
         fled: playerFled.map(unit => ({ id: unit.id, name: unit.name })),
         defeatedEnemies: enemyDefeated.map(unit => ({ id: unit.id, name: unit.name })),
+        enemySurvivors: enemySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp })),
+        enemyFled: enemyFled.map(unit => ({ id: unit.id, name: unit.name })),
+        allySurvivors: allySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp })),
+        allyFallen: allyFallen.map(unit => ({ id: unit.id, name: unit.name })),
+        allyFled: allyFled.map(unit => ({ id: unit.id, name: unit.name })),
+        finalUnits,
+        highlights: buildCombatHighlights(state),
+        opening: state.opening ? {
+            text: String(state.opening.text || ''),
+            resolved: !!state.opening.resolved,
+            surprise: !!state.opening.surprise,
+            actorId: state.opening.actorId || '',
+            targetId: state.opening.targetId || '',
+        } : null,
         summary,
         details,
         endedAt: Date.now(),
@@ -1276,7 +1361,7 @@ function validateActor(state, action, options) {
     if (!unit) return { error: `Unknown unit "${action.unitId}".` };
     if (unit.defeated) return { error: `${unit.name} is defeated.` };
     if (unit.fled) return { error: `${unit.name} has fled.` };
-    if (unit.doneForRound) return { error: `${unit.name} has already finished acting this round.` };
+    if (unit.doneForRound && !options.ignoreTurn) return { error: `${unit.name} has already finished acting this round.` };
 
     const actorSide = options.actorSide || (unit.side === 'player' ? 'player' : 'agent');
     if (actorSide === 'player' && unit.side !== 'player') {
@@ -1384,10 +1469,10 @@ export function applyAction(state, action, options = {}) {
             if (!target) return rejectAction(state, action, error || 'Attack needs a targetId.', source);
             if (!canTarget(unit, target, 'attack')) return rejectAction(state, action, 'That target is not hostile.', source);
             const distance = chebyshev(unit, target);
-            if (distance > (Number(unit.attackRange) || 1)) {
+            if (!options.ignoreRange && distance > (Number(unit.attackRange) || 1)) {
                 return rejectAction(state, action, `${target.name} is out of range (${distance} cells, range ${unit.attackRange}).`, source);
             }
-            if ((Number(unit.attackRange) || 1) > 1 && !hasLineOfSight(state, unit, target)) {
+            if (!options.ignoreLineOfSight && (Number(unit.attackRange) || 1) > 1 && !hasLineOfSight(state, unit, target)) {
                 return rejectAction(state, action, 'Line of sight is blocked.', source);
             }
             return resolveAttack(state, unit, target, {
@@ -1421,10 +1506,10 @@ export function applyAction(state, action, options = {}) {
                 return rejectAction(state, action, `${skill.name} cannot target ${target.name}.`, source);
             }
             const distance = unit.id === target.id ? 0 : chebyshev(unit, target);
-            if (distance > (Number(skill.range) || 1)) {
+            if (!options.ignoreRange && distance > (Number(skill.range) || 1)) {
                 return rejectAction(state, action, `${target.name} is out of ${skill.name}'s range (${distance} cells, range ${skill.range}).`, source);
             }
-            if (skill.kind === 'attack' && (Number(skill.range) || 1) > 1 && !hasLineOfSight(state, unit, target)) {
+            if (!options.ignoreLineOfSight && skill.kind === 'attack' && (Number(skill.range) || 1) > 1 && !hasLineOfSight(state, unit, target)) {
                 return rejectAction(state, action, 'Line of sight is blocked.', source);
             }
             unit[resourceKey] = true;
@@ -1519,6 +1604,192 @@ export function applyAction(state, action, options = {}) {
         default:
             return rejectAction(state, action, `Unsupported action type "${action.type}".`, source);
     }
+}
+
+function openingNameMatch(candidate, wanted) {
+    const left = String(candidate || '').trim().toLowerCase();
+    const right = String(wanted || '').trim().toLowerCase();
+    if (!left || !right) return false;
+    return left === right || left.includes(right) || right.includes(left);
+}
+
+function findOpeningUnit(state, wanted, side) {
+    const needle = String(wanted || '').trim();
+    if (!needle) return null;
+    return state.units.find(unit => unit.side === side && openingNameMatch(unit.name, needle)) || null;
+}
+
+/**
+ * Mark the opposing side as surprised for the first round. The enemy loses its
+ * first activation; normal turns resume in round 2.
+ * @param {object} state
+ * @param {'player'} [side]
+ * @returns {boolean}
+ */
+export function applySurprise(state, side = 'player') {
+    if (!state || state.status !== 'active') return false;
+    if (side !== 'player') return false;
+    const enemies = state.units.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled);
+    if (!enemies.length) return false;
+    if (Number(state.surprise?.remaining) > 0 && enemies.every(unit => unit.surprised)) return true;
+    state.surprise = { remaining: 1, side: 'player' };
+    for (const enemy of enemies) enemy.surprised = true;
+    addLog(state, 'surprise', 'The enemy is caught off guard and loses their first activation.', null);
+    if (state.turnStyle === 'phase') {
+        state.phase = 'player';
+    } else {
+        state.turnIndex = 0;
+        state.pendingAgentUnitIds = [];
+        advanceTurnPointerToLiving(state);
+        const active = getActiveUnit(state);
+        state.phase = active && active.side !== 'player' ? 'enemy' : 'player';
+    }
+    return true;
+}
+
+/**
+ * Resolve the player's declared pre-combat action on the freshly built board.
+ * Ordinary attacks and parsed skills/items are deterministic and apply here.
+ * Special/freeform effects return `requiresAgent: true` so the UI can invoke
+ * the special resolver after the narrator generation has finished.
+ *
+ * @param {object} state
+ * @param {object|string} opening
+ * @param {{ rng?: () => number }} [options]
+ * @returns {{ ok: boolean, requiresAgent?: boolean, actorId?: string, targetId?: string, skillId?: string, itemId?: string, ended?: boolean, error?: string }}
+ */
+export function applyOpeningAction(state, opening, options = {}) {
+    if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is already over.' };
+    const request = typeof opening === 'string' ? { text: opening } : { ...(opening || {}) };
+    const text = String(request.text || request.description || '').trim();
+    if (!text) return { ok: false, error: 'No opening action was supplied.' };
+
+    const players = state.units.filter(unit => unit.side === 'player' && !unit.defeated && !unit.fled);
+    if (!players.length) return { ok: false, error: 'No player unit can perform the opening action.' };
+    const actor = findOpeningUnit(state, request.actorName, 'player')
+        || players.find(unit => text.toLowerCase().includes(String(unit.name || '').toLowerCase()))
+        || players[0];
+    const enemies = state.units.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled);
+    const target = (request.targetId ? getUnitById(state, String(request.targetId)) : null)
+        || findOpeningUnit(state, request.targetName, 'enemy')
+        || (request.targetName ? findOpeningUnit(state, request.targetName, 'ally') : null)
+        || enemies[0]
+        || null;
+
+    const inferSurprise = request.surprise === true
+        || /\b(ambush|ambushes|surprise|surprised|sneak attack|from behind|caught off guard)\b/i.test(text);
+    if (inferSurprise) applySurprise(state, 'player');
+
+    const skill = (actor.skills || []).find(entry => {
+        if (request.skillName && openingNameMatch(entry.name, request.skillName)) return true;
+        return text.toLowerCase().includes(String(entry.name || '').toLowerCase());
+    }) || null;
+    const item = !skill ? (actor.items || []).find(entry => {
+        if (request.itemName && openingNameMatch(entry.name, request.itemName)) return true;
+        return text.toLowerCase().includes(String(entry.name || '').toLowerCase());
+    }) || null : null;
+
+    const looksFreeform = !skill && !item
+        && /\b(cast|casting|spell|summon|summons|conjure|invoke|unleash|channel|ritual|scroll|wand|potion|vial)\b/i.test(text);
+    if (skill?.kind === 'special' || item?.kind === 'special' || looksFreeform) {
+        state.opening = {
+            ...request,
+            text,
+            surprise: inferSurprise,
+            resolved: false,
+            requiresAgent: true,
+            actorId: actor.id,
+            targetId: target?.id || '',
+            skillId: skill?.id || '',
+            itemId: item?.id || '',
+            log: '',
+            error: '',
+            resolvedAt: 0,
+        };
+        return {
+            ok: false,
+            requiresAgent: true,
+            actorId: actor.id,
+            targetId: target?.id || '',
+            skillId: skill?.id || '',
+            itemId: item?.id || '',
+            error: 'The opening action needs special resolution.',
+        };
+    }
+
+    let action;
+    if (skill) {
+        action = { type: 'skill', unitId: actor.id, skillId: skill.id, targetId: target?.id };
+    } else if (item) {
+        action = { type: 'item', unitId: actor.id, itemId: item.id, targetId: target?.id || actor.id };
+    } else {
+        if (!target || target.side === 'player') {
+            return { ok: false, error: 'No hostile target was found for the opening action.' };
+        }
+        action = { type: 'attack', unitId: actor.id, targetId: target.id };
+    }
+
+    state.opening = {
+        ...request,
+        text,
+        surprise: inferSurprise,
+        resolved: false,
+        actorId: actor.id,
+        targetId: target?.id || '',
+        skillId: skill?.id || '',
+        itemId: item?.id || '',
+        log: '',
+        error: '',
+        resolvedAt: 0,
+    };
+    const result = applyAction(state, action, {
+        rng: options.rng || createStateRng(state),
+        actorSide: 'player',
+        source: 'opening',
+        ignoreTurn: true,
+        ignoreRange: true,
+        ignoreLineOfSight: true,
+    });
+    state.opening = {
+        ...request,
+        text,
+        surprise: inferSurprise,
+        resolved: !!result.ok,
+        actorId: actor.id,
+        targetId: target?.id || '',
+        skillId: skill?.id || '',
+        itemId: item?.id || '',
+        log: result.log || '',
+        error: result.ok ? '' : (result.error || ''),
+        resolvedAt: result.ok ? Date.now() : 0,
+    };
+    if (!result.ok) {
+        addLog(state, 'opening', `Opening action could not be resolved: ${result.error || 'unknown error'}.`, actor.id);
+        return { ok: false, actorId: actor.id, targetId: target?.id || '', error: result.error };
+    }
+    if (state.status !== 'active') {
+        state.outcome = buildOutcomeSummary(state);
+    }
+
+    // A pre-combat action does not consume the first normal round's budget.
+    actor.actionUsed = false;
+    actor.bonusUsed = false;
+    actor.doneForRound = false;
+    actor.movementUsed = 0;
+    addLog(
+        state,
+        'opening',
+        `${actor.name} opens the fight: ${text}${target ? ` → ${target.name}` : ''}.`,
+        actor.id,
+    );
+    return {
+        ok: true,
+        actorId: actor.id,
+        targetId: target?.id || '',
+        skillId: skill?.id || '',
+        itemId: item?.id || '',
+        ended: state.status !== 'active',
+    };
 }
 
 function applyMove(state, unit, path, rng, source) {
@@ -1892,6 +2163,8 @@ export function createEncounterState(options = {}) {
         round: 1,
         phase: 'player',
         pendingAgentUnitIds: [],
+        surprise: null,
+        opening: null,
         log: [],
         outcome: null,
         seed,
@@ -1939,11 +2212,13 @@ export function getPendingAgentUnitIds(state) {
     if (Array.isArray(state.pendingAgentUnitIds) && state.pendingAgentUnitIds.length) {
         return state.pendingAgentUnitIds.filter(id => {
             const unit = getUnitById(state, id);
-            return unit && !unit.defeated && !unit.fled;
+            return unit && !unit.defeated && !unit.fled && !isSurprisedThisRound(state, unit);
         });
     }
     if (state.turnStyle === 'phase') {
-        return state.phase === 'enemy' ? getAgentControlledUnits(state).map(unit => unit.id) : [];
+        return state.phase === 'enemy'
+            ? getAgentControlledUnits(state).filter(unit => !isSurprisedThisRound(state, unit)).map(unit => unit.id)
+            : [];
     }
     if (state.phase === 'enemy') {
         return collectConsecutiveAgentUnits(state);

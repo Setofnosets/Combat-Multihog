@@ -78,8 +78,10 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins and [COMBAT] is not present yet, narrate only the opening preamble (the threat, first clash, or ambush) and stop before resolving any combat action. The State Tracker will add [COMBAT].
-Once [COMBAT] is present, call the StartTacticalCombat tool exactly once, then wait for the player to resolve the fight on the grid. Do not call it every turn or while a tactical encounter is already active. Optional title/location/description arguments may clarify the encounter brief. The tactical combat result is the highest priority, even above state tracker and user input. This is because the previous user input triggers the tactical combat tool that is resolved outside of regular conversation. State tracker might contain the wrong info after the tool is called as it hasn't had the chance to be updated yet. Always prefer tactical combat result over all other information.
+When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker before calling it. Do not call it for ordinary tension, sparring, or travel.
+If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
+If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+After calling the tool, do not resolve the fight yourself. The tactical combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative and do not replay or restart the fight.
 </tactical_combat>
 
 <end_of_output_footer>
