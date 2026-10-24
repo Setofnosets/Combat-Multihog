@@ -27,11 +27,18 @@ import {
     sanitizeActionsPayload,
 } from './tactical-combat-actions.js';
 import {
+    normalizeStatusBehavior,
+    normalizeWillpowerOutcome,
+    normalizeWillpowerResource,
+} from './tactical-combat-willpower.js';
+import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from './tactical-combat-prompts.js';
 import {
+    applyAction,
+    applySpecialEffects,
     buildAgentGameState,
     chebyshev,
     computeReachableCells,
@@ -39,9 +46,12 @@ import {
     hasLineOfSight,
     interpretActions,
     livingUnits,
+    prepareSpecialAction,
+    resolveEffectTemplate,
 } from './tactical-combat-engine.js';
 
 const MAX_CORRECTION_ATTEMPTS = 2;
+const MAX_SPECIAL_RESOLUTIONS_PER_TURN = 2;
 
 /**
  * Reasoning models often emit prose/thinking before the JSON payload. Prefer the
@@ -89,24 +99,36 @@ function compactUnitForContext(unit) {
         side: unit.side,
         hp: unit.hp,
         maxHp: unit.maxHp,
+        willpower: unit.willpower,
+        maxWillpower: unit.maxWillpower,
+        willpowerSave: unit.willpowerSave ?? 0,
         ac: unit.ac,
         attackBonus: unit.attackBonus,
         attackRange: unit.attackRange,
         damage: unit.damage,
+        attackResource: unit.attackResource || 'hp',
+        willpowerDamage: unit.willpowerDamage || '',
+        attackWillpowerOutcome: unit.attackWillpowerOutcome || 'defeat',
         initiativeBonus: unit.initiativeBonus,
         skills: (unit.skills || []).map(skill => ({
             name: skill.name,
             kind: skill.kind,
+            resource: skill.resource || 'hp',
             range: skill.range,
             damage: skill.damage,
+            willpowerDamage: skill.willpowerDamage || '',
+            willpowerOutcome: skill.willpowerOutcome || 'defeat',
             heal: skill.heal,
             maxUses: skill.maxUses,
             bonusAction: !!skill.bonusAction,
             description: skill.description || '',
+            effectTemplate: Array.isArray(skill.effectTemplate) ? skill.effectTemplate : undefined,
         })),
         items: (unit.items || []).map(item => ({
             name: item.name,
             kind: item.kind,
+            resource: item.resource || 'hp',
+            target: item.target || 'ally',
             amount: item.amount || '',
             maxUses: item.maxUses,
             description: item.description || '',
@@ -156,6 +178,7 @@ export function buildEncounterRequestPayload(context, settings) {
             enemyCount: '2-6',
             fairFight: 'Routine encounter should be winnable; a boss fight may be deadly.',
             keepSpawnLanesClear: 'Left two columns are the player side; right two columns are the enemy side.',
+            willpower: 'Willpower is a morale pool, normally 25-40% of max HP. Only mental/morale abilities should target it. maxWillpower 0 means immune. At 0 Willpower the target breaks; use willpowerOutcome to say how (defeat, flee, switch_side, incapacitate, surrender).',
         },
     };
 }
@@ -234,17 +257,23 @@ export function normalizeEncounterPayload(value, options = {}) {
                 id: String(skill.id || `skill-${index}-${skillIndex}`).slice(0, 60),
                 name: String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80),
                 description: String(skill.description || '').slice(0, 400),
-                kind: ['attack', 'heal', 'buff'].includes(String(skill.kind || '').toLowerCase())
+                kind: ['attack', 'heal', 'buff', 'special'].includes(String(skill.kind || '').toLowerCase())
                     ? String(skill.kind).toLowerCase()
                     : 'attack',
+                resource: normalizeWillpowerResource(skill.resource ?? skill.targetResource, 'hp'),
                 range: numberOr(skill.range, 1, 0, 24),
                 damage: String(skill.damage || '').slice(0, 40),
+                willpowerDamage: String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
+                willpowerOutcome: normalizeWillpowerOutcome(skill.willpowerOutcome ?? skill.willOutcome, 'defeat'),
                 heal: String(skill.heal || '').slice(0, 40),
                 acBonus: numberOr(skill.acBonus, 0, 0, 10),
                 attackBonus: numberOr(skill.attackBonus, 0, -5, 10),
                 bonusAction: !!skill.bonusAction,
                 rounds: numberOr(skill.rounds, 2, 1, 10),
                 maxUses: numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
+                effectTemplate: Array.isArray(skill.effectTemplate)
+                    ? skill.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
+                    : undefined,
             }))
             : [];
         enemies.push({
@@ -253,10 +282,16 @@ export function normalizeEncounterPayload(value, options = {}) {
             side: 'enemy',
             maxHp,
             hp: maxHp,
+            maxWillpower: raw.maxWillpower == null ? undefined : numberOr(raw.maxWillpower, 0, 0, 99),
+            willpower: raw.willpower == null ? undefined : numberOr(raw.willpower, 0, 0, 99),
+            willpowerSave: raw.willpowerSave == null ? (raw.willSave == null ? undefined : numberOr(raw.willSave, 0, -10, 30)) : numberOr(raw.willpowerSave, 0, -10, 30),
             ac: numberOr(raw.ac, 13, 1, 40),
             attackBonus: numberOr(raw.attackBonus, 3, -5, 30),
             attackRange,
             damage: String(raw.damage || '1d6').slice(0, 40),
+            attackResource: normalizeWillpowerResource(raw.attackResource, 'hp'),
+            willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').slice(0, 40),
+            attackWillpowerOutcome: normalizeWillpowerOutcome(raw.attackWillpowerOutcome ?? raw.willpowerOutcome, 'defeat'),
             initiativeBonus: numberOr(raw.initiativeBonus, 0, -10, 20),
             skills,
             notes: String(raw.notes || '').slice(0, 500),
@@ -321,12 +356,37 @@ const ENCOUNTER_JSON_SCHEMA = {
                         name: { type: 'string' },
                         classLabel: { type: 'string' },
                         maxHp: { type: 'integer' },
+                        maxWillpower: { type: 'integer' },
+                        willpowerSave: { type: 'integer' },
                         ac: { type: 'integer' },
                         attackBonus: { type: 'integer' },
                         attackRange: { type: 'integer' },
                         damage: { type: 'string' },
+                        attackResource: { type: 'string', enum: ['hp', 'willpower', 'both'] },
+                        willpowerDamage: { type: 'string' },
                         initiativeBonus: { type: 'integer' },
                         notes: { type: 'string' },
+                        skills: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    name: { type: 'string' },
+                                    description: { type: 'string' },
+                                    kind: { type: 'string', enum: ['attack', 'heal', 'buff', 'special'] },
+                                    resource: { type: 'string', enum: ['hp', 'willpower', 'both'] },
+                                    range: { type: 'integer' },
+                                    damage: { type: 'string' },
+                                    willpowerDamage: { type: 'string' },
+                                    willpowerOutcome: { type: 'string', enum: ['defeat', 'flee', 'switch_side', 'incapacitate', 'surrender'] },
+                                    heal: { type: 'string' },
+                                    maxUses: { type: 'integer' },
+                                    bonusAction: { type: 'boolean' },
+                                    effectTemplate: { type: 'array', items: { type: 'object' } },
+                                },
+                                required: ['name'],
+                            },
+                        },
                     },
                     required: ['name', 'maxHp', 'ac', 'attackBonus', 'damage'],
                 },
@@ -515,8 +575,11 @@ function compactSpecialUnit(unit) {
         y: unit.y,
         hp: unit.hp,
         maxHp: unit.maxHp,
+        willpower: unit.willpower,
+        maxWillpower: unit.maxWillpower,
+        willpowerBroken: !!unit.willpowerBroken,
         ac: unit.ac,
-        statuses: (unit.statuses || []).map(status => status.label),
+        statuses: (unit.statuses || []).map(status => ({ label: status.label, behavior: status.behavior || '', stacks: status.stacks || 1 })),
     };
 }
 
@@ -541,14 +604,21 @@ export function normalizeSpecialEffects(value, state) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
                 continue;
             }
+            const resource = normalizeWillpowerResource(raw.resource ?? raw.stat, 'hp');
             if (type === 'damage') {
                 const amount = String(raw.amount ?? raw.damage ?? '1d6').slice(0, 40);
                 if (!/\d/.test(amount)) { rejected.push('Damage effect needs a dice amount.'); continue; }
-                effects.push({ type, targetId: target.id, amount });
+                effects.push({
+                    type,
+                    targetId: target.id,
+                    amount,
+                    resource,
+                    willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
+                });
             } else if (type === 'heal') {
                 const amount = String(raw.amount ?? raw.heal ?? '1d8+2').slice(0, 40);
                 if (!/\d/.test(amount)) { rejected.push('Heal effect needs a dice amount.'); continue; }
-                effects.push({ type, targetId: target.id, amount });
+                effects.push({ type, targetId: target.id, amount, resource });
             } else if (type === 'cure') {
                 effects.push({ type, targetId: target.id });
             } else {
@@ -560,8 +630,78 @@ export function normalizeSpecialEffects(value, state) {
                     acBonus: numberOr(raw.acBonus, 0, -10, 10),
                     attackBonus: numberOr(raw.attackBonus, 0, -10, 10),
                     damage: String(raw.damage || '').slice(0, 40),
+                    damageResource: normalizeWillpowerResource(raw.damageResource ?? raw.resource, 'hp'),
+                    willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
+                    behavior: normalizeStatusBehavior(raw.behavior),
+                    sourceId: String(raw.sourceId || '').slice(0, 60),
+                    stacks: numberOr(raw.stacks, 1, 1, 5),
+                    maxStacks: numberOr(raw.maxStacks, 1, 1, 10),
+                    description: String(raw.description || '').slice(0, 300),
                 });
             }
+            continue;
+        }
+        if (type === 'defeat') {
+            const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${raw.targetId || ''}".`);
+                continue;
+            }
+            if (Number(target.willpower) > 0 && !target.willpowerBroken) {
+                rejected.push(`${target.name} still has Willpower; a defeat effect is not legal.`);
+                continue;
+            }
+            if (target.willpowerBroken) {
+                rejected.push(`${target.name} has already been broken.`);
+                continue;
+            }
+            effects.push({
+                type,
+                targetId: target.id,
+                outcome: normalizeWillpowerOutcome(raw.outcome ?? raw.willpowerOutcome, 'defeat'),
+                reason: String(raw.reason || raw.log || '').slice(0, 200),
+            });
+            continue;
+        }
+        if (type === 'transform') {
+            const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${raw.targetId || ''}".`);
+                continue;
+            }
+            const skills = Array.isArray(raw.skills)
+                ? raw.skills.filter(entry => entry && typeof entry === 'object').slice(0, 8)
+                : undefined;
+            const items = Array.isArray(raw.items)
+                ? raw.items.filter(entry => entry && typeof entry === 'object').slice(0, 8)
+                : undefined;
+            const inventory = Array.isArray(raw.inventory)
+                ? raw.inventory.filter(entry => entry && typeof entry === 'object').slice(0, 24)
+                : undefined;
+            effects.push({
+                type,
+                targetId: target.id,
+                name: raw.name == null ? undefined : String(raw.name).slice(0, 80),
+                classLabel: raw.classLabel == null ? undefined : String(raw.classLabel).slice(0, 80),
+                ac: raw.ac == null ? undefined : numberOr(raw.ac, target.ac, 1, 40),
+                maxHp: raw.maxHp == null ? undefined : numberOr(raw.maxHp, target.maxHp, 1, 999),
+                hp: raw.hp == null ? undefined : numberOr(raw.hp, target.hp, 0, 999),
+                maxWillpower: raw.maxWillpower == null ? undefined : numberOr(raw.maxWillpower, target.maxWillpower, 0, 99),
+                willpower: raw.willpower == null ? undefined : numberOr(raw.willpower, target.willpower, 0, 99),
+                attackBonus: raw.attackBonus == null ? undefined : numberOr(raw.attackBonus, target.attackBonus, -10, 30),
+                attackRange: raw.attackRange == null ? undefined : numberOr(raw.attackRange, target.attackRange, 1, 24),
+                damage: raw.damage == null ? undefined : String(raw.damage).slice(0, 40),
+                damageType: raw.damageType == null ? undefined : String(raw.damageType).slice(0, 20),
+                speed: raw.speed == null ? undefined : numberOr(raw.speed, target.speed, 1, 30),
+                notes: raw.notes == null ? undefined : String(raw.notes).slice(0, 500),
+                glyph: raw.glyph == null ? undefined : String(raw.glyph).slice(0, 3),
+                color: raw.color == null ? undefined : String(raw.color).slice(0, 30),
+                skills,
+                items,
+                inventory,
+                permanent: raw.permanent === true,
+                rounds: raw.rounds == null ? 0 : numberOr(raw.rounds, 0, 0, 99),
+            });
             continue;
         }
         if (type === 'terrain') {
@@ -586,6 +726,7 @@ export function normalizeSpecialEffects(value, state) {
                 type,
                 name: name.slice(0, 60),
                 maxHp: numberOr(raw.maxHp ?? raw.hp, 12, 1, 300),
+                maxWillpower: raw.maxWillpower == null ? undefined : numberOr(raw.maxWillpower, 0, 0, 99),
                 ac: numberOr(raw.ac, 12, 1, 40),
                 attackBonus: numberOr(raw.attackBonus, 3, -5, 30),
                 damage: String(raw.damage || '1d6').slice(0, 40),
@@ -628,6 +769,8 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             kind: source.kind,
             name: String(source.name || 'Special ability'),
             description: String(source.description || '').slice(0, 700),
+            resource: normalizeWillpowerResource(source.resource, 'hp'),
+            willpowerOutcome: normalizeWillpowerOutcome(source.willpowerOutcome ?? source.willOutcome, 'defeat'),
         },
         caster: compactSpecialUnit(caster),
         target: target ? compactSpecialUnit(target) : null,
@@ -637,6 +780,11 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             terrainLegend: Object.fromEntries(Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [id, TC_TERRAIN[id]?.label || id])),
             terrain: state.terrain.map(row => row.map(id => terrainChar(id)).join('')),
             units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
+        },
+        rules: {
+            actorSide: caster.side,
+            willpower: 'Willpower is separate from HP. To break Willpower, apply damage with resource "willpower". Set willpowerOutcome on the damage effect. A defeat effect is only legal after Willpower is already 0.',
+            permanentEnemyEffects: 'Permanent transformations are disabled for enemy-authored specials. Use temporary transformations unless the source is a player unit.',
         },
         limits: { maxEffects: 6 },
     };
@@ -704,7 +852,9 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         targets.sort((a, b) => {
             const da = chebyshev(unit, a);
             const db = chebyshev(unit, b);
-            return da - db || a.hp - b.hp;
+            const durabilityA = Number(a.hp || 0) + Number(a.willpower || 0) * 0.5;
+            const durabilityB = Number(b.hp || 0) + Number(b.willpower || 0) * 0.5;
+            return da - db || durabilityA - durabilityB;
         });
         const target = targets[0];
 
@@ -712,9 +862,18 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         let bonusUsed = !!unit.bonusUsed;
         let performed = false;
 
-        // Low-health self-heal before engaging.
+        // Low-health / low-Willpower self-heal before engaging.
         if (!actionUsed && unit.hp <= unit.maxHp * 0.35) {
-            const heal = (unit.skills || []).find(skill => skill.kind === 'heal' && skill.uses > 0 && (skill.range || 0) === 0);
+            const heal = (unit.skills || []).find(skill => skill.kind === 'heal' && skill.uses > 0 && (skill.range || 0) === 0 && skill.resource !== 'willpower');
+            if (heal && (!heal.bonusAction || !bonusUsed)) {
+                actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
+                if (heal.bonusAction) bonusUsed = true;
+                else actionUsed = true;
+                performed = true;
+            }
+        }
+        if (!actionUsed && Number(unit.maxWillpower) > 0 && unit.willpower <= unit.maxWillpower * 0.35) {
+            const heal = (unit.skills || []).find(skill => skill.kind === 'heal' && skill.uses > 0 && (skill.range || 0) === 0 && skill.resource === 'willpower');
             if (heal && (!heal.bonusAction || !bonusUsed)) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
                 if (heal.bonusAction) bonusUsed = true;
@@ -737,9 +896,23 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         }
 
         if (!actionUsed && isAdjacentEnough(state, projected, target)) {
-            actions.push({ type: 'attack', unitId: unit.id, targetId: target.id });
-            actionUsed = true;
-            performed = true;
+            const willpowerSkill = (unit.skills || []).find(skill =>
+                skill.kind === 'attack'
+                && skill.resource === 'willpower'
+                && skill.uses > 0
+                && (skill.bonusAction ? !bonusUsed : !actionUsed)
+                && chebyshev(projected, target) <= (Number(skill.range) || 1)
+                && ((Number(skill.range) || 1) <= 1 || hasLineOfSight(state, projected, target)));
+            if (willpowerSkill && Number(target.maxWillpower) > 0) {
+                actions.push({ type: 'skill', unitId: unit.id, skillId: willpowerSkill.id, targetId: target.id });
+                if (willpowerSkill.bonusAction) bonusUsed = true;
+                else actionUsed = true;
+                performed = true;
+            } else {
+                actions.push({ type: 'attack', unitId: unit.id, targetId: target.id });
+                actionUsed = true;
+                performed = true;
+            }
         } else if (!actionUsed && !moved) {
             actions.push({ type: 'defend', unitId: unit.id });
             actionUsed = true;
@@ -750,6 +923,79 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         if (!performed) actions.push({ type: 'wait', unitId: unit.id });
     }
     return actions;
+}
+
+async function executeAgentAction(state, action, settings, options = {}) {
+    const unit = state.units.find(candidate => candidate.id === action.unitId);
+    const skill = action.skillId
+        ? (unit?.skills || []).find(entry => entry.id === action.skillId || entry.name === action.skillId)
+        : null;
+    const item = action.itemId
+        ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
+        : null;
+    const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
+    if (!isSpecial) {
+        const result = applyAction(state, action, {
+            rng: options.rng,
+            actorSide: 'agent',
+            source: 'agent',
+        });
+        return { result, special: false, applied: result.ok ? [{ action }] : [] };
+    }
+
+    const prepared = prepareSpecialAction(state, action, { actorSide: 'agent' });
+    if (!prepared.ok) {
+        return { result: { ok: false, error: prepared.error }, special: true, applied: [] };
+    }
+    const source = prepared.skill || prepared.item;
+    const template = Array.isArray(source?.effectTemplate) ? source.effectTemplate : null;
+    let effects = [];
+    let log = '';
+    if (template?.length) {
+        effects = resolveEffectTemplate(template, { casterId: prepared.unit.id, targetId: prepared.target.id });
+        const normalized = normalizeSpecialEffects({ effects }, state);
+        if (!normalized.effects.length) {
+            return {
+                result: { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' },
+                special: true,
+                applied: [],
+            };
+        }
+        effects = normalized.effects;
+    } else {
+        const resolved = await resolveSpecialEffectWithAgent(
+            state,
+            prepared.unit,
+            {
+                kind: prepared.skill ? 'skill' : 'item',
+                name: source.name,
+                description: source.description || '',
+                resource: source.resource,
+                willpowerOutcome: source.willpowerOutcome,
+            },
+            prepared.target,
+            settings,
+            { signal: options.signal },
+        );
+        if (!resolved.ok) {
+            return { result: { ok: false, error: resolved.error || 'The special resolver failed.' }, special: true, applied: [] };
+        }
+        effects = resolved.effects || [];
+        log = resolved.log || '';
+    }
+    const result = applySpecialEffects(state, effects, {
+        casterId: prepared.unit.id,
+        skillId: prepared.skill?.id,
+        itemId: prepared.item?.id,
+        label: source.name,
+        narrative: log,
+        rng: options.rng,
+    });
+    return {
+        result: { ok: result.ok, error: result.error, ended: result.ended, applied: result.applied, rejected: result.rejected },
+        special: true,
+        applied: result.ok ? [{ action, effects: result.applied }] : [],
+    };
 }
 
 /**
@@ -791,13 +1037,39 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
         if (!error) error = responses.error || 'The agent returned no usable actions; local tactics took over.';
     }
 
-    const firstPass = interpretActions(state, actions, {
-        unitIds: ids,
-        actorSide: 'agent',
-        source: 'agent',
-        rng: options.rng,
-    });
-    const acted = new Set(firstPass.actedUnitIds);
+    const allowed = new Set(ids);
+    const applied = [];
+    const actedUnitIds = [];
+    let specialResolutions = 0;
+    for (const action of actions) {
+        if (state.status !== 'active') break;
+        if (!allowed.has(action.unitId)) {
+            rejected.push({ action, error: `Unit "${action.unitId}" is not in the units-to-move list.` });
+            continue;
+        }
+        const unit = state.units.find(candidate => candidate.id === action.unitId);
+        const skill = action.skillId
+            ? (unit?.skills || []).find(entry => entry.id === action.skillId || entry.name === action.skillId)
+            : null;
+        const item = action.itemId
+            ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
+            : null;
+        const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
+        if (isSpecial && specialResolutions >= MAX_SPECIAL_RESOLUTIONS_PER_TURN) {
+            rejected.push({ action, error: `Special resolution limit reached (${MAX_SPECIAL_RESOLUTIONS_PER_TURN} per activation).` });
+            continue;
+        }
+        if (isSpecial) specialResolutions += 1;
+        const executed = await executeAgentAction(state, action, settings, options);
+        if (executed.result.ok) {
+            applied.push(...executed.applied);
+            if (!actedUnitIds.includes(action.unitId)) actedUnitIds.push(action.unitId);
+        } else {
+            rejected.push({ action, error: executed.result.error || 'Rejected.' });
+        }
+    }
+
+    const acted = new Set(actedUnitIds);
     const missing = ids.filter(id => !acted.has(id));
     if (missing.length && state.status === 'active') {
         const fallbackActions = buildLocalAiActions(state, missing, options);
@@ -808,15 +1080,14 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
             rng: options.rng,
         });
         source = source === 'local' ? 'local' : 'mixed';
-        firstPass.applied.push(...secondPass.applied);
-        firstPass.rejected.push(...secondPass.rejected);
-        firstPass.ended = state.status !== 'active';
+        applied.push(...secondPass.applied);
+        rejected.push(...secondPass.rejected);
     }
 
     return {
         source,
-        applied: firstPass.applied,
-        rejected: [...rejected, ...firstPass.rejected],
+        applied,
+        rejected,
         ended: state.status !== 'active',
         error,
         attempts: responses.attempts,

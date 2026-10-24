@@ -110,6 +110,7 @@ export function renderDayNightBadge(str) {
         'skills': 'pills',
         'key skills': 'pills',
         'saves': 'numbers',
+        'willpower': 'hp_bar',
         'status': 'pills',
         'traits': 'pills',
         'abilities': 'pills',
@@ -952,6 +953,17 @@ export function renderDayNightBadge(str) {
 
         const ll = line.toLowerCase();
         const colonIdx = line.indexOf(':');
+
+        // Willpower is a secondary pool, not the `Saves: ... Will +X` saving
+        // throw. Render it as a distinct purple bar so the two never collide.
+        if (/^willpower\s*:/i.test(line) || /^will\s*:\s*\d/i.test(line)) {
+            return renderSubFieldByRule(
+                { renderType: 'hp_bar', color: 'linear-gradient(90deg,#7c3aed,#c4b5fd)' },
+                line,
+                `${tag}:${entityName}:WILLPOWER`,
+                { customMarker: true },
+            );
+        }
 
         // 2. Try known stock keywords
         for (const [key, ruleType] of Object.entries(STOCK_FIELD_RULES)) {

@@ -103,6 +103,24 @@ Unchanged | keep me
         expect(fresh.currentMemo).toContain('Hobgoblin');
     });
 
+    it('round-trips Willpower and restores it to max when combat ends', () => {
+        const state = makeState();
+        const enemy = state.units.find(unit => unit.id === 'enemy-3');
+        enemy.willpower = 2;
+        const block = buildCombatMemoBlock(state);
+        expect(block).toContain('Willpower: 2/');
+        const parsed = parseCombatUnits(block).enemies[0];
+        expect(parsed.maxWillpower).toBe(enemy.maxWillpower);
+        expect(parsed.willpower).toBe(2);
+
+        const settings = {
+            currentMemo: `[CHARACTER]\nAria: 14/20 HP\nWillpower: 2/12\n[/CHARACTER]\n[COMBAT]\nGoblin Archer: 7/12 HP\n[/COMBAT]`,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Willpower: 8/8');
+        expect(settings.currentMemo).toContain('[COMBAT]END_COMBAT[/COMBAT]');
+    });
+
     it('builds a compact tracker final-state report with all sides and resources', () => {
         const state = makeState();
         state.status = 'victory';

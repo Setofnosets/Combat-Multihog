@@ -15,7 +15,9 @@ import {
     getLoadoutClassifier,
     isBonusAction,
     isRangedAbility,
+    matchesAny,
     matchesAnyWord,
+    willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
 import {
     TC_DYNAMIC_MAX,
@@ -25,8 +27,14 @@ import {
     clampIntOr,
     resolveGridDimensions,
 } from './tactical-combat-constants.js';
+import {
+    deriveMaxWillpower,
+    normalizeWillpowerOutcome,
+    normalizeWillpowerResource,
+} from './tactical-combat-willpower.js';
 
 const HP_HEADER_RX = /^(.{2,140}?):\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?\s*HP\b(.*)$/i;
+const WILLPOWER_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(Willpower|Will)\s*:\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?\s*$/i;
 const ABILITY_RX = /([^,|;()]{2,70}?)\s*\(([^)]*)\)/g;
 
 function cleanText(value) {
@@ -38,6 +46,38 @@ function parseNumber(value, fallback = 0) {
     if (!raw || /^\?+$/.test(raw)) return fallback;
     const n = Number(raw);
     return Number.isFinite(n) ? n : fallback;
+}
+
+function parseWillpowerSave(lines) {
+    const line = findLine(lines, /^Saves:/i);
+    if (!line) return 0;
+    const match = line.match(/\bWill\s*([+-]\d+)/i);
+    return match ? clampInt(match[1], -10, 30) : 0;
+}
+
+function parseWillpowerLine(lines) {
+    for (const rawLine of lines || []) {
+        const match = String(rawLine || '').trim().match(WILLPOWER_LINE_RX);
+        if (!match) continue;
+        if (/^\?+$/.test(match[3]) || (match[4] != null && /^\?+$/.test(match[4]))) return null;
+        const current = parseNumber(match[3], 0);
+        const max = match[4] != null ? parseNumber(match[4], current) : current;
+        return {
+            current: clampInt(current, 0, 99),
+            max: clampInt(max, 0, 99),
+        };
+    }
+    return null;
+}
+
+const WILLPOWER_BOTH_RX = /(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*HP\s*\+\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*(?:willpower|will)\b/i;
+const WILLPOWER_BREAK_RX = /(?:on\s+)?will(?:power)?\s+break\s*:\s*([a-z_]+)/i;
+
+function parseWillpowerOutcomeText(text, classifier) {
+    const source = String(text || '');
+    const explicit = source.match(WILLPOWER_BREAK_RX);
+    if (explicit) return normalizeWillpowerOutcome(explicit[1], 'defeat');
+    return willpowerOutcomeFor(source, source, classifier);
 }
 
 function findLine(lines, regex) {
@@ -110,19 +150,52 @@ function buildSkillFromName(name, description, options = {}) {
     if (!cleanedName || cleanedName.length < 2) return null;
     if (/^(level|cantrips?|spells?|abilities)$/i.test(cleanedName)) return null;
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
-    const kind = options.kind || classifyAbility(cleanedName, description, classifier);
+    const text = `${cleanedName} ${description || ''}`;
+    const bothMatch = text.match(WILLPOWER_BOTH_RX);
+    const willHealMatch = text.match(/(?:willpower|will)\s+heal(?:ing)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\bheal(?:ing)?\s+(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s+(?:willpower|will)\b/i);
+    const willAmountMatch = text.match(/(?:willpower|will)\s*(?:damage)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\b(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*(?:willpower|will)\b/i);
+    const explicitWillpower = !!willAmountMatch || !!bothMatch || !!willHealMatch;
+    let resource = normalizeWillpowerResource(options.resource, 'hp');
+    let willpowerDamage = '';
+    let willpowerOutcome = 'defeat';
+    let kind = options.kind || classifyAbility(cleanedName, description, classifier);
+    let damage = kind === 'attack' ? (parseDice(description) || options.defaultDamage || '1d8') : '';
+    let heal = kind === 'heal' ? (parseDice(description) || '1d8+2') : '';
+
+    if (bothMatch) {
+        resource = 'both';
+        damage = bothMatch[1].replace(/\s+/g, '');
+        willpowerDamage = bothMatch[2].replace(/\s+/g, '');
+        kind = matchesAny(text, classifier?.willpower?.complexKeywords || []) ? 'special' : 'attack';
+        willpowerOutcome = parseWillpowerOutcomeText(text, classifier);
+    } else if (willHealMatch) {
+        resource = 'willpower';
+        kind = 'heal';
+        heal = (willHealMatch[1] || willHealMatch[2]).replace(/\s+/g, '');
+        damage = '';
+    } else if (explicitWillpower) {
+        resource = 'willpower';
+        damage = (willAmountMatch?.[1] || willAmountMatch?.[2] || parseDice(description) || '1d6').replace(/\s+/g, '');
+        kind = matchesAny(text, classifier?.willpower?.complexKeywords || []) ? 'special' : 'attack';
+        willpowerOutcome = parseWillpowerOutcomeText(text, classifier);
+    } else if (kind === 'special' && willpowerOutcomeFor(cleanedName, description, classifier) !== 'defeat') {
+        resource = 'willpower';
+        willpowerOutcome = willpowerOutcomeFor(cleanedName, description, classifier);
+    }
+
     const ranged = isRangedAbility(cleanedName, description, classifier) || options.ranged === true;
-    const damage = kind === 'attack' ? (parseDice(description) || options.defaultDamage || '1d8') : '';
-    const heal = kind === 'heal' ? (parseDice(description) || '1d8+2') : '';
     const buff = kind === 'buff' ? buffModifiers(cleanedName, description, classifier) : { acBonus: 0, attackBonus: 0, rounds: 2 };
     return {
         id: `skill-${cleanedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`,
         name: cleanedName,
         description: cleanText(description).slice(0, 400),
         kind,
+        resource,
         target: kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally',
         range: kind === 'attack' ? (ranged ? 6 : 1) : kind === 'special' ? (options.range == null ? 6 : clampInt(options.range, 1, 24)) : (ranged ? 6 : 0),
         damage,
+        willpowerDamage,
+        willpowerOutcome,
         heal,
         acBonus: buff.acBonus,
         attackBonus: buff.attackBonus,
@@ -331,6 +404,21 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
     const damage = anyWeapon?.damage || combat.damage || `1d6${abilityMod >= 0 ? `+${abilityMod}` : abilityMod}`;
     const level = inferLevel(sourceLines, maxHp || currentHp);
     const maxHpSafe = Math.max(1, maxHp || currentHp || 10);
+    const willpowerSave = parseWillpowerSave(sourceLines);
+    const explicitWillpower = parseWillpowerLine(sourceLines);
+    const maxWillpower = explicitWillpower
+        ? explicitWillpower.max
+        : deriveMaxWillpower(maxHpSafe, stats.wisMod, willpowerSave);
+    const willpower = explicitWillpower
+        ? Math.min(explicitWillpower.current, maxWillpower)
+        : maxWillpower;
+    const attackLine = findLine(sourceLines, /^(Att\/def|Combat):/i);
+    const attackResource = /\[(?:HP\s*\+\s*)?Will(?:power)?\]/i.test(attackLine)
+        ? (/\[HP\s*\+\s*Will(?:power)?\]/i.test(attackLine) ? 'both' : 'willpower')
+        : (/\bWill(?:power)?\s+damage\b/i.test(attackLine) ? 'willpower' : 'hp');
+    const attackWillpowerOutcome = attackResource === 'hp'
+        ? 'defeat'
+        : parseWillpowerOutcomeText(attackLine, classifier);
 
     const skillNames = new Set();
     const skills = [
@@ -347,6 +435,13 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
         side,
         maxHp: maxHpSafe,
         hp: Math.max(0, Math.min(maxHpSafe, currentHp)),
+        willpower,
+        maxWillpower,
+        willpowerSave,
+        willpowerImmune: maxWillpower === 0,
+        attackResource,
+        willpowerDamage: attackResource === 'both' ? damage : '',
+        attackWillpowerOutcome,
         ac: clampInt(ac, 1, 40) || 12,
         attackBonus: clampInt(attackBonus, -10, 30),
         attackRange,
@@ -516,15 +611,17 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
         }
         const usable = matchesAnyWord(name, itemRules.usableKeywords);
         if (!usable) continue;
-        const healing = matchesAnyWord(`${name} ${description}`, itemRules.healingKeywords);
-        if (!healing && !matchesAnyWord(name, itemRules.specialItemKeywords)) continue;
+        const willpowerHealing = matchesAnyWord(`${name} ${description}`, itemRules.willpowerHealingKeywords || ['willpower', 'morale']);
+        const healing = !willpowerHealing && matchesAnyWord(`${name} ${description}`, itemRules.healingKeywords);
+        if (!healing && !willpowerHealing && !matchesAnyWord(name, itemRules.specialItemKeywords)) continue;
         const id = `item-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
         if (items.some(item => item.id === id)) continue;
-        items.push(healing ? {
+        items.push((healing || willpowerHealing) ? {
             id,
             name: name.slice(0, 80),
             description: cleanText(description || line).slice(0, 300),
             kind: 'heal',
+            resource: willpowerHealing ? 'willpower' : 'hp',
             amount: /greater|superior|supreme/i.test(name) ? '4d4+4' : '2d4+2',
             maxUses: quantity,
             uses: quantity,
@@ -616,6 +713,8 @@ export function buildFallbackPlayer(ctx = {}, movement = 6) {
         isPlayerCharacter: true,
         maxHp: 26,
         hp: 26,
+        willpower: 11,
+        maxWillpower: 11,
         ac: 14,
         attackBonus: 4,
         attackRange: 1,
@@ -831,9 +930,9 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
         theme: inferTerrainTheme(location, scene),
         movement,
         summary: {
-            party: playerUnits.map(unit => `${unit.name} (${unit.classLabel || 'adventurer'}, ${unit.hp}/${unit.maxHp} HP)`),
-            enemies: enemies.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`),
-            allies: allies.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`),
+            party: playerUnits.map(unit => `${unit.name} (${unit.classLabel || 'adventurer'}, ${unit.hp}/${unit.maxHp} HP, ${unit.willpower ?? '?'}/${unit.maxWillpower ?? '?'} WP)`),
+            enemies: enemies.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower ?? '?'}/${unit.maxWillpower ?? '?'} WP)`),
+            allies: allies.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower ?? '?'}/${unit.maxWillpower ?? '?'} WP)`),
             location,
         },
     };
@@ -882,6 +981,8 @@ export function buildFallbackEnemies(context, seed = 1) {
             side: 'enemy',
             maxHp,
             hp: maxHp,
+            willpower: deriveMaxWillpower(maxHp, 0, 0),
+            maxWillpower: deriveMaxWillpower(maxHp, 0, 0),
             ac: 12 + Math.floor(partySize / 2) + (boss ? 1 : 0),
             attackBonus,
             attackRange: ranged ? 6 : 1,

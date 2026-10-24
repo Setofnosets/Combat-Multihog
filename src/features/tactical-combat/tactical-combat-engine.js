@@ -29,6 +29,14 @@ import {
     terrainChar,
 } from './tactical-combat-constants.js';
 import { describeActionCatalog, isActionEnabled, getEnabledActions } from './tactical-combat-actions.js';
+import {
+    deriveMaxWillpower,
+    isWillpowerImmune,
+    normalizeStatusBehavior,
+    normalizeWillpowerOutcome,
+    normalizeWillpowerResource,
+    willpowerOutcomeLabel,
+} from './tactical-combat-willpower.js';
 
 // ── RNG & dice ───────────────────────────────────────────────────────────────
 
@@ -429,6 +437,7 @@ function makeUnitGlyph(name) {
 function normalizeStatus(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const rounds = clampInt(raw.rounds, 1, 99) || 1;
+    const maxStacks = clampInt(raw.maxStacks ?? 1, 1, 10) || 1;
     return {
         id: String(raw.id || raw.name || 'status').slice(0, 40),
         label: String(raw.label || raw.name || raw.id || 'Status').slice(0, 60),
@@ -436,6 +445,12 @@ function normalizeStatus(raw) {
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
         damage: String(raw.damage || '').trim(),
+        damageResource: normalizeWillpowerResource(raw.damageResource || raw.resource, 'hp'),
+        willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
+        behavior: normalizeStatusBehavior(raw.behavior),
+        sourceId: String(raw.sourceId || raw.casterId || '').slice(0, 60),
+        stacks: clampInt(raw.stacks ?? 1, 1, maxStacks) || 1,
+        maxStacks,
         description: String(raw.description || '').slice(0, 300),
     };
 }
@@ -449,14 +464,18 @@ function normalizeSkill(raw, index, side) {
     const range = kind === 'buff' ? clampInt(raw.range, 0, 24)
         : kind === 'special' ? (raw.range == null ? 6 : clampInt(raw.range, 1, 24))
             : clampInt(raw.range, 1, 24) || 1;
+    const resource = normalizeWillpowerResource(raw.resource ?? raw.targetResource ?? raw.stat, 'hp');
     return {
         id: String(raw.id || `skill-${slug(name, `skill-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || raw.effect || '').slice(0, 500),
         kind,
+        resource,
         target: String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase(),
         range,
         damage: String(raw.damage || (kind === 'attack' ? '1d8' : '')).trim().slice(0, 40),
+        willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').trim().slice(0, 40),
+        willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
         heal: String(raw.heal || (kind === 'heal' ? '1d8+2' : '')).trim().slice(0, 40),
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
@@ -464,6 +483,9 @@ function normalizeSkill(raw, index, side) {
         rounds: clampInt(raw.rounds, 1, 10) || 2,
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
+        effectTemplate: Array.isArray(raw.effectTemplate)
+            ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
+            : null,
         side,
     };
 }
@@ -472,6 +494,7 @@ function normalizeItem(raw, index) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || `Item ${index + 1}`).trim().slice(0, 80);
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
+    const rawTarget = String(raw.target || 'ally').toLowerCase();
     return {
         id: String(raw.id || `item-${slug(name, `item-${index + 1}`)}`).slice(0, 60),
         name,
@@ -479,6 +502,8 @@ function normalizeItem(raw, index) {
         kind: ['heal', 'buff', 'special'].includes(String(raw.kind || '').toLowerCase())
             ? String(raw.kind).toLowerCase()
             : 'heal',
+        resource: normalizeWillpowerResource(raw.resource ?? raw.stat, 'hp'),
+        target: ['ally', 'enemy', 'any'].includes(rawTarget) ? rawTarget : 'ally',
         amount: String(raw.amount || raw.heal || ((raw.kind || 'heal') === 'heal' ? '2d4+2' : '')).slice(0, 40),
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
@@ -524,21 +549,57 @@ export function normalizeUnitSeed(seed, meta) {
         cha: clampIntOr(seed?.stats?.cha, 10, 1, 30),
         dexMod: Number.isFinite(dexMod) ? clampInt(dexMod, -10, 20) : Math.floor((clampIntOr(seed?.stats?.dex, 10, 1, 30) - 10) / 2),
     };
+    for (const key of ['str', 'con', 'int', 'wis', 'cha']) {
+        const explicit = Number(seed?.stats?.[`${key}Mod`]);
+        stats[`${key}Mod`] = Number.isFinite(explicit)
+            ? clampInt(explicit, -10, 20)
+            : Math.floor((stats[key] - 10) / 2);
+    }
+    const willSave = Number.isFinite(Number(seed?.willpowerSave ?? seed?.willSave ?? seed?.stats?.willSave))
+        ? clampInt(seed.willpowerSave ?? seed.willSave ?? seed.stats.willSave, -10, 30)
+        : 0;
+    const hasExplicitMaxWillpower = seed?.maxWillpower != null || seed?.maxWill != null;
+    const explicitMaxWillpower = Number(seed?.maxWillpower ?? seed?.maxWill);
+    const maxWillpower = hasExplicitMaxWillpower && Number.isFinite(explicitMaxWillpower)
+        ? clampInt(explicitMaxWillpower, 0, 99)
+        : deriveMaxWillpower(maxHp, stats.wisMod, willSave);
+    const explicitWillpower = Number(seed?.willpower ?? seed?.will);
+    const willpower = Number.isFinite(explicitWillpower)
+        ? clampInt(explicitWillpower, 0, maxWillpower)
+        : maxWillpower;
+    const attackResource = normalizeWillpowerResource(seed?.attackResource, 'hp');
 
     return {
         id: String(seed?.id || `${prefix}-${index + 1}`).slice(0, 60),
         name,
         classLabel: String(seed?.classLabel || seed?.className || '').slice(0, 80),
         side,
+        originalSide: side,
+        sideChanged: false,
         x: 0,
         y: 0,
         hp,
         maxHp,
+        willpower,
+        maxWillpower,
+        willpowerSave: willSave,
+        willpowerImmune: maxWillpower === 0,
+        willpowerBroken: false,
+        willpowerOutcome: '',
+        willpowerBreakSource: '',
+        willpowerBreakAt: 0,
+        defeatCause: '',
+        incapacitated: false,
+        surrendered: false,
+        transform: null,
         ac: clampIntOr(seed?.ac, 12, 1, 40),
         attackBonus,
         attackRange,
         damage: String(seed?.damage || '1d6').slice(0, 40),
         damageType: String(seed?.damageType || '').slice(0, 20),
+        attackResource,
+        willpowerDamage: String(seed?.willpowerDamage ?? seed?.willDamage ?? '').trim().slice(0, 40),
+        attackWillpowerOutcome: normalizeWillpowerOutcome(seed?.attackWillpowerOutcome ?? seed?.willOutcome, 'defeat'),
         initiativeBonus,
         initiative: 0,
         speed,
@@ -817,9 +878,23 @@ function tickStatuses(unit, state, rng) {
     const remaining = [];
     for (const status of unit.statuses) {
         if (status.damage) {
-            const damage = rollDice(status.damage, rng).total;
+            const stacks = Math.max(1, Number(status.stacks) || 1);
+            const damage = rollDice(status.damage, rng).total * stacks;
             if (damage > 0) {
-                applyDamageToUnit(state, unit, damage, `${status.label}`);
+                if (status.damageResource === 'willpower') {
+                    applyWillpowerDamageToUnit(state, unit, damage, status.label, {
+                        outcome: status.willpowerOutcome,
+                    });
+                } else if (status.damageResource === 'both') {
+                    applyDamageToUnit(state, unit, damage, `${status.label}`);
+                    if (!unit.defeated) {
+                        applyWillpowerDamageToUnit(state, unit, damage, status.label, {
+                            outcome: status.willpowerOutcome,
+                        });
+                    }
+                } else {
+                    applyDamageToUnit(state, unit, damage, `${status.label}`);
+                }
             }
         }
         status.rounds = Math.max(0, Number(status.rounds || 0) - 1);
@@ -829,11 +904,26 @@ function tickStatuses(unit, state, rng) {
 }
 
 export function getStatusAcBonus(unit) {
-    return (unit.statuses || []).reduce((sum, status) => sum + (Number(status.acBonus) || 0), 0);
+    return (unit.statuses || []).reduce(
+        (sum, status) => sum + (Number(status.acBonus) || 0) * Math.max(1, Number(status.stacks) || 1),
+        0,
+    );
 }
 
 export function getStatusAttackBonus(unit) {
-    return (unit.statuses || []).reduce((sum, status) => sum + (Number(status.attackBonus) || 0), 0);
+    return (unit.statuses || []).reduce(
+        (sum, status) => sum + (Number(status.attackBonus) || 0) * Math.max(1, Number(status.stacks) || 1),
+        0,
+    );
+}
+
+export function getStatusBehavior(unit, behavior) {
+    if (!behavior) return null;
+    return (unit?.statuses || []).find(status => status.behavior === behavior) || null;
+}
+
+function isStunned(unit) {
+    return !!getStatusBehavior(unit, 'stunned');
 }
 
 export function getEffectiveAc(state, unit) {
@@ -855,6 +945,22 @@ function applyHazardAtRoundStart(state, unit, rng) {
     applyDamageToUnit(state, unit, damage, 'Hazard');
 }
 
+function applyBehaviorAtRoundStart(state, rng) {
+    for (const unit of livingUnits(state)) {
+        if (isStunned(unit)) {
+            unit.actionUsed = true;
+            unit.doneForRound = true;
+            addLog(state, 'status', `${unit.name} is stunned and cannot act.`, unit.id);
+            continue;
+        }
+        if (getStatusBehavior(unit, 'confused') && rollDie(2, rng) === 1) {
+            unit.actionUsed = true;
+            unit.doneForRound = true;
+            addLog(state, 'status', `${unit.name} is confused and loses the action.`, unit.id);
+        }
+    }
+}
+
 /**
  * Start a new round. At combat start pass `{ initial: true }` so statuses do not
  * tick before anyone has acted.
@@ -871,6 +977,7 @@ export function beginRound(state, rng = Math.random, options = {}) {
     if (state.round > 1) {
         state.surprise = null;
         for (const unit of state.units) unit.surprised = false;
+        revertExpiredTransforms(state);
     }
 
     for (const unit of state.units) {
@@ -879,6 +986,7 @@ export function beginRound(state, rng = Math.random, options = {}) {
     }
     if (!options.initial) {
         for (const unit of livingUnits(state)) applyHazardAtRoundStart(state, unit, rng);
+        applyBehaviorAtRoundStart(state, rng);
     }
 
     // If a DOT or hazard ended the fight, stop before assigning turns.
@@ -902,7 +1010,7 @@ function isSurprisedThisRound(state, unit) {
 function advanceTurnPointerToLiving(state) {
     while ((state.turnIndex || 0) < state.initiativeOrder.length) {
         const unit = getUnitById(state, state.initiativeOrder[state.turnIndex]);
-        if (unit && !unit.defeated && !unit.fled && !isSurprisedThisRound(state, unit)) return;
+        if (unit && !unit.defeated && !unit.fled && !unit.doneForRound && !isStunned(unit) && !isSurprisedThisRound(state, unit)) return;
         state.turnIndex += 1;
     }
 }
@@ -912,7 +1020,7 @@ function collectConsecutiveAgentUnits(state) {
     let index = Number(state.turnIndex) || 0;
     while (index < state.initiativeOrder.length) {
         const unit = getUnitById(state, state.initiativeOrder[index]);
-        if (!unit || unit.defeated || unit.fled) {
+        if (!unit || unit.defeated || unit.fled || unit.doneForRound || isStunned(unit)) {
             index += 1;
             continue;
         }
@@ -970,7 +1078,7 @@ export function endTurn(state, rng = Math.random) {
             return { agentUnitIds: [], phase: state.phase, roundAdvanced: true };
         }
         const ids = getAgentControlledUnits(state)
-            .filter(unit => !isSurprisedThisRound(state, unit))
+            .filter(unit => !isSurprisedThisRound(state, unit) && !unit.doneForRound && !isStunned(unit))
             .map(unit => unit.id);
         state.phase = 'enemy';
         state.pendingAgentUnitIds = ids;
@@ -1058,7 +1166,14 @@ function isFriendly(attackerSide, targetSide) {
 
 function canTarget(unit, target, kind) {
     if (!target || target === unit) return kind !== 'attack';
-    if (kind === 'attack') return isHostile(unit.side, target.side);
+    if (getStatusBehavior(unit, 'berserk')) return true;
+    if (kind === 'attack') {
+        const charmed = getStatusBehavior(unit, 'charmed');
+        const frightened = getStatusBehavior(unit, 'frightened');
+        if ((charmed?.sourceId && charmed.sourceId === target.id)
+            || (frightened?.sourceId && frightened.sourceId === target.id)) return false;
+        return isHostile(unit.side, target.side);
+    }
     return isFriendly(unit.side, target.side);
 }
 
@@ -1071,13 +1186,58 @@ export function applyDamageToUnit(state, target, amount, sourceLabel = '') {
     if (target.hp <= 0) {
         target.defeated = true;
         target.hp = 0;
+        target.defeatCause = target.defeatCause || 'hp';
         addLog(state, 'defeat', `${target.name} is defeated.`, target.id);
     }
     return damage;
 }
 
-export function healUnit(state, target, amount, sourceLabel = '') {
+export function applyWillpowerDamageToUnit(state, target, amount, sourceLabel = '', options = {}) {
     if (!target || target.defeated || target.fled) return 0;
+    if (isWillpowerImmune(target)) return 0;
+    const before = Math.max(0, Number(target.willpower) || 0);
+    if (before <= 0 && !target.willpowerBroken) {
+        breakWillpower(state, target, {
+            outcome: options.outcome ?? options.willpowerOutcome,
+            source: sourceLabel || options.source || '',
+            casterId: options.casterId,
+        });
+        return 0;
+    }
+    const damage = Math.max(0, Math.round(Number(amount) || 0));
+    if (!damage) return 0;
+    target.willpower = Math.max(0, before - damage);
+    const dealt = before - target.willpower;
+    if (!dealt) return 0;
+    addLog(
+        state,
+        'willpower-damage',
+        `${target.name} loses ${dealt} Willpower${sourceLabel ? ` from ${sourceLabel}` : ''} (${target.willpower}/${target.maxWillpower} WP).`,
+        target.id,
+    );
+    if (target.willpower <= 0 && !target.willpowerBroken) {
+        breakWillpower(state, target, {
+            outcome: options.outcome ?? options.willpowerOutcome,
+            source: sourceLabel || options.source || '',
+            casterId: options.casterId,
+        });
+    }
+    return dealt;
+}
+
+export function healUnit(state, target, amount, sourceLabel = '', resource = 'hp') {
+    if (!target || target.defeated || target.fled) return 0;
+    if (normalizeWillpowerResource(resource, 'hp') === 'willpower') {
+        if (isWillpowerImmune(target)) return 0;
+        const before = Number(target.willpower) || 0;
+        const healed = Math.max(0, Math.round(Number(amount) || 0));
+        target.willpower = Math.min(Number(target.maxWillpower) || before, before + healed);
+        const gained = target.willpower - before;
+        if (gained > 0) {
+            addLog(state, 'willpower-heal', `${target.name} recovers ${gained} Willpower${sourceLabel ? ` (${sourceLabel})` : ''} (${target.willpower}/${target.maxWillpower} WP).`, target.id);
+        }
+        return gained;
+    }
     const before = Number(target.hp) || 0;
     const healed = Math.max(0, Math.round(Number(amount) || 0));
     target.hp = Math.min(Number(target.maxHp) || before, before + healed);
@@ -1088,13 +1248,100 @@ export function healUnit(state, target, amount, sourceLabel = '') {
     return gained;
 }
 
+/**
+ * Mark a unit as Willpower-broken and apply the source-specific terminal
+ * outcome. Idempotent: the first outcome wins for the encounter.
+ *
+ * @param {object} state
+ * @param {object} target
+ * @param {{ outcome?: string, source?: string }} [options]
+ * @returns {boolean}
+ */
+export function breakWillpower(state, target, options = {}) {
+    if (!target || target.defeated || target.fled) return false;
+    if (target.willpowerBroken) return false;
+    const outcome = normalizeWillpowerOutcome(options.outcome, 'defeat');
+    target.willpower = 0;
+    target.willpowerBroken = true;
+    target.willpowerOutcome = outcome;
+    target.willpowerBreakSource = String(options.source || '').slice(0, 120);
+    target.willpowerBreakAt = Date.now();
+    target.doneForRound = true;
+
+    if (outcome === 'flee') {
+        target.fled = true;
+    } else if (outcome === 'switch_side') {
+        applySideChange(state, target, options);
+    } else if (outcome === 'incapacitate') {
+        target.defeated = true;
+        target.incapacitated = true;
+        target.defeatCause = 'willpower';
+    } else if (outcome === 'surrender') {
+        target.defeated = true;
+        target.surrendered = true;
+        target.defeatCause = 'willpower';
+    } else {
+        target.defeated = true;
+        target.defeatCause = 'willpower';
+    }
+
+    addLog(
+        state,
+        'willpower-break',
+        `${target.name}'s Willpower breaks — ${willpowerOutcomeLabel(outcome)}.`,
+        target.id,
+    );
+    checkEncounterEnd(state);
+    return true;
+}
+
+function applySideChange(state, target, options = {}) {
+    const caster = options.casterId ? getUnitById(state, options.casterId) : null;
+    const casterFriendly = caster ? (caster.side === 'player' || caster.side === 'ally') : null;
+    const currentSide = target.side;
+    let nextSide = currentSide;
+    if (casterFriendly === true) {
+        nextSide = currentSide === 'enemy' ? 'ally' : currentSide;
+    } else if (casterFriendly === false) {
+        nextSide = 'enemy';
+    } else {
+        nextSide = currentSide === 'enemy' ? 'ally' : 'enemy';
+    }
+    if (nextSide === currentSide) return;
+    target.originalSide = target.originalSide || currentSide;
+    target.side = nextSide;
+    target.sideChanged = true;
+    target.actionUsed = true;
+    target.bonusUsed = true;
+    target.doneForRound = true;
+    const source = caster ? caster.name : (options.source || 'the effect');
+    addLog(state, 'side-change', `${target.name} turns against their former allies under ${source}.`, target.id);
+    if (state.turnStyle === 'phase') {
+        state.pendingAgentUnitIds = (state.pendingAgentUnitIds || []).filter(id => {
+            const unit = getUnitById(state, id);
+            return unit && !unit.doneForRound && !unit.defeated && !unit.fled;
+        });
+    }
+}
+
 function addStatus(unit, status) {
     const normalized = normalizeStatus(status);
     if (!normalized) return;
     unit.statuses = Array.isArray(unit.statuses) ? unit.statuses : [];
     const existing = unit.statuses.find(item => item.id === normalized.id);
-    if (existing) Object.assign(existing, normalized);
-    else unit.statuses.push(normalized);
+    if (existing && normalized.maxStacks > 1) {
+        existing.stacks = Math.min(normalized.maxStacks, Math.max(1, Number(existing.stacks) || 1) + Math.max(1, normalized.stacks || 1));
+        existing.rounds = Math.max(Number(existing.rounds) || 0, normalized.rounds);
+        Object.assign(existing, { ...normalized, stacks: existing.stacks });
+    } else if (existing) {
+        Object.assign(existing, normalized);
+    } else {
+        unit.statuses.push(normalized);
+    }
+    if (normalized.behavior === 'stunned') {
+        unit.actionUsed = true;
+        unit.doneForRound = true;
+    }
 }
 
 /**
@@ -1105,10 +1352,22 @@ function buildFinalUnit(unit) {
     return {
         id: unit.id,
         name: unit.name,
+        originalName: unit.transform?.original?.name || unit.name,
         side: unit.side,
+        originalSide: unit.originalSide || unit.side,
+        sideChanged: !!unit.sideChanged,
         classLabel: unit.classLabel || '',
         hp: Math.max(0, Number(unit.hp) || 0),
         maxHp: Math.max(1, Number(unit.maxHp) || 1),
+        willpower: Math.max(0, Number(unit.willpower) || 0),
+        maxWillpower: Math.max(0, Number(unit.maxWillpower) || 0),
+        willpowerBroken: !!unit.willpowerBroken,
+        willpowerOutcome: unit.willpowerOutcome || '',
+        defeatCause: unit.defeatCause || '',
+        incapacitated: !!unit.incapacitated,
+        surrendered: !!unit.surrendered,
+        transformed: !!unit.transform,
+        transformName: unit.transform ? unit.name : '',
         defeated: !!unit.defeated,
         fled: !!unit.fled,
         statuses: (unit.statuses || []).map(status => ({
@@ -1116,6 +1375,8 @@ function buildFinalUnit(unit) {
             rounds: Number(status.rounds) || 0,
             acBonus: Number(status.acBonus) || 0,
             attackBonus: Number(status.attackBonus) || 0,
+            behavior: status.behavior || '',
+            stacks: Number(status.stacks) || 1,
         })),
     };
 }
@@ -1134,7 +1395,10 @@ function buildCombatHighlights(state) {
             || type === 'flee'
             || type === 'opening'
             || type === 'surprise'
-            || /critical|crit\b|killing blow|falls|defeated|surrenders/i.test(text);
+            || type === 'willpower-break'
+            || type === 'transform'
+            || type === 'side-change'
+            || /critical|crit\b|killing blow|falls|defeated|surrenders|willpower breaks/i.test(text);
         if (!important) continue;
         seen.add(text);
         highlights.push(text);
@@ -1150,15 +1414,43 @@ export function buildOutcomeSummary(state) {
                 : 'Draw';
     // A unit that fled is still a survivor; only 0 HP counts as fallen.
     const realUnits = state.units.filter(unit => !unit.summoned);
-    const playerSurvivors = realUnits.filter(unit => unit.side === 'player' && !unit.defeated);
-    const playerFallen = realUnits.filter(unit => unit.side === 'player' && unit.defeated);
-    const playerFled = realUnits.filter(unit => unit.side === 'player' && unit.fled && !unit.defeated);
+    const originalSideOf = unit => unit.originalSide || unit.side;
+    const playerSurvivors = realUnits.filter(unit => originalSideOf(unit) === 'player' && !unit.defeated);
+    const playerFallen = realUnits.filter(unit => originalSideOf(unit) === 'player' && unit.defeated);
+    const playerFled = realUnits.filter(unit => originalSideOf(unit) === 'player' && unit.fled && !unit.defeated);
     const enemyDefeated = realUnits.filter(unit => unit.side === 'enemy' && unit.defeated);
     const enemyFled = realUnits.filter(unit => unit.side === 'enemy' && unit.fled && !unit.defeated);
-    const enemySurvivors = realUnits.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled);
+    const enemySurvivors = realUnits.filter(unit => unit.side === 'enemy' && !unit.defeated && !unit.fled && !unit.sideChanged);
     const allySurvivors = realUnits.filter(unit => unit.side === 'ally' && !unit.defeated);
     const allyFallen = realUnits.filter(unit => unit.side === 'ally' && unit.defeated);
     const allyFled = realUnits.filter(unit => unit.side === 'ally' && unit.fled && !unit.defeated);
+    const willpowerBreaks = realUnits
+        .filter(unit => unit.willpowerBroken)
+        .map(unit => ({
+            id: unit.id,
+            name: unit.name,
+            side: unit.side,
+            originalSide: originalSideOf(unit),
+            outcome: unit.willpowerOutcome || 'defeat',
+            source: unit.willpowerBreakSource || '',
+        }));
+    const sideChanges = realUnits
+        .filter(unit => unit.sideChanged)
+        .map(unit => ({
+            id: unit.id,
+            name: unit.name,
+            originalSide: originalSideOf(unit),
+            side: unit.side,
+        }));
+    const transformations = realUnits
+        .filter(unit => unit.transform)
+        .map(unit => ({
+            id: unit.id,
+            name: unit.name,
+            originalName: unit.transform?.original?.name || unit.name,
+            permanent: !!unit.transform?.permanent,
+            expiresRound: unit.transform?.expiresRound || 0,
+        }));
     const details = [];
 
     if (status === 'victory') {
@@ -1176,17 +1468,26 @@ export function buildOutcomeSummary(state) {
         details.push('Both sides are spent. The fighting ends without a clear victor.');
     }
     if (playerSurvivors.length) {
-        details.push(`Survivors: ${playerSurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
+        details.push(`Survivors: ${playerSurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower}/${unit.maxWillpower} WP)`).join(', ')}.`);
     }
     if (enemySurvivors.length) {
-        details.push(`Still standing: ${enemySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
+        details.push(`Still standing: ${enemySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower}/${unit.maxWillpower} WP)`).join(', ')}.`);
     }
     if (enemyFled.length) details.push(`Enemies driven off: ${enemyFled.map(unit => unit.name).join(', ')}.`);
     if (allySurvivors.length) {
-        details.push(`Allies standing: ${allySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP)`).join(', ')}.`);
+        details.push(`Allies standing: ${allySurvivors.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower}/${unit.maxWillpower} WP)`).join(', ')}.`);
     }
     if (allyFallen.length) details.push(`Fallen allies: ${allyFallen.map(unit => unit.name).join(', ')}.`);
     if (allyFled.length) details.push(`Allies withdrawn: ${allyFled.map(unit => unit.name).join(', ')}.`);
+    if (willpowerBreaks.length) {
+        details.push(`Willpower broken: ${willpowerBreaks.map(entry => `${entry.name} (${entry.outcome.replace(/_/g, ' ')})`).join(', ')}.`);
+    }
+    if (sideChanges.length) {
+        details.push(`Changed sides: ${sideChanges.map(entry => `${entry.name} (${entry.originalSide} → ${entry.side})`).join(', ')}.`);
+    }
+    if (transformations.length) {
+        details.push(`Transformed: ${transformations.map(entry => `${entry.originalName}${entry.permanent ? ' (permanent)' : ''}`).join(', ')}.`);
+    }
 
     const summary = `${label} after ${state.round} round${state.round === 1 ? '' : 's'} at ${state.location || 'the battlefield'}.`;
     const finalUnits = realUnits.map(buildFinalUnit);
@@ -1196,15 +1497,18 @@ export function buildOutcomeSummary(state) {
         title: state.title || 'Tactical encounter',
         location: state.location || '',
         rounds: state.round,
-        survivors: playerSurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp })),
+        survivors: playerSurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp, willpower: unit.willpower, maxWillpower: unit.maxWillpower })),
         fallen: playerFallen.map(unit => ({ id: unit.id, name: unit.name })),
         fled: playerFled.map(unit => ({ id: unit.id, name: unit.name })),
         defeatedEnemies: enemyDefeated.map(unit => ({ id: unit.id, name: unit.name })),
-        enemySurvivors: enemySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp })),
+        enemySurvivors: enemySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp, willpower: unit.willpower, maxWillpower: unit.maxWillpower })),
         enemyFled: enemyFled.map(unit => ({ id: unit.id, name: unit.name })),
-        allySurvivors: allySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp })),
+        allySurvivors: allySurvivors.map(unit => ({ id: unit.id, name: unit.name, hp: unit.hp, maxHp: unit.maxHp, willpower: unit.willpower, maxWillpower: unit.maxWillpower })),
         allyFallen: allyFallen.map(unit => ({ id: unit.id, name: unit.name })),
         allyFled: allyFled.map(unit => ({ id: unit.id, name: unit.name })),
+        willpowerBreaks,
+        sideChanges,
+        transformations,
         finalUnits,
         highlights: buildCombatHighlights(state),
         opening: state.opening ? {
@@ -1259,7 +1563,8 @@ export function checkEncounterEnd(state) {
 export function retreatEncounter(state) {
     if (!state || state.status !== 'active') return false;
     for (const unit of state.units) {
-        if (unit.side === 'player' && !unit.defeated) {
+        const partySide = (unit.originalSide || unit.side) === 'player';
+        if (partySide && !unit.defeated) {
             unit.fled = true;
             unit.doneForRound = true;
         }
@@ -1272,15 +1577,177 @@ export function retreatEncounter(state) {
     return true;
 }
 
+// ── Transformations ─────────────────────────────────────────────────────────
+
+function cloneJson(value) {
+    try { return JSON.parse(JSON.stringify(value)); } catch (_) { return value; }
+}
+
+function snapshotUnitForm(unit) {
+    return {
+        name: unit.name,
+        classLabel: unit.classLabel,
+        ac: unit.ac,
+        maxHp: unit.maxHp,
+        hp: unit.hp,
+        maxWillpower: unit.maxWillpower,
+        willpower: unit.willpower,
+        attackBonus: unit.attackBonus,
+        attackRange: unit.attackRange,
+        damage: unit.damage,
+        damageType: unit.damageType,
+        speed: unit.speed,
+        level: unit.level,
+        notes: unit.notes,
+        glyph: unit.glyph,
+        color: unit.color,
+        attackResource: unit.attackResource,
+        willpowerDamage: unit.willpowerDamage,
+        attackWillpowerOutcome: unit.attackWillpowerOutcome,
+        skills: cloneJson(unit.skills || []),
+        items: cloneJson(unit.items || []),
+        inventory: cloneJson(unit.inventory || []),
+    };
+}
+
+function normalizeTransformInventory(value) {
+    return (Array.isArray(value) ? value : [])
+        .filter(entry => entry && typeof entry === 'object')
+        .slice(0, 24)
+        .map(entry => ({
+            name: String(entry.name || '').slice(0, 80),
+            description: String(entry.description || '').slice(0, 300),
+            section: String(entry.section || '').slice(0, 20),
+            equipped: !!entry.equipped,
+            rarity: String(entry.rarity || '').slice(0, 20),
+            quantity: clampIntOr(entry.quantity, 1, 1, 99),
+        }))
+        .filter(entry => entry.name);
+}
+
+function applyTransform(state, target, effect) {
+    if (!target || target.fled) return { ok: false, error: 'Invalid transform target.' };
+    if (!target.transform) {
+        target.transform = {
+            original: snapshotUnitForm(target),
+            permanent: false,
+            appliedAt: Date.now(),
+            expiresRound: 0,
+        };
+    }
+    const transform = target.transform;
+    transform.permanent = effect.permanent === true;
+    transform.expiresRound = Number(effect.rounds) > 0 ? (Number(state.round) || 1) + Number(effect.rounds) : 0;
+
+    if (effect.name != null) target.name = String(effect.name).slice(0, 80) || target.name;
+    if (effect.classLabel != null) target.classLabel = String(effect.classLabel).slice(0, 80);
+    if (effect.ac != null) target.ac = clampIntOr(effect.ac, target.ac, 1, 40);
+    if (effect.maxHp != null) target.maxHp = clampIntOr(effect.maxHp, target.maxHp, 1, 999);
+    if (effect.hp != null) target.hp = clampInt(effect.hp, 0, target.maxHp);
+    else target.hp = Math.min(Math.max(0, Number(target.hp) || 0), target.maxHp);
+    if (effect.maxWillpower != null) target.maxWillpower = clampIntOr(effect.maxWillpower, target.maxWillpower, 0, 99);
+    if (effect.willpower != null) target.willpower = clampInt(effect.willpower, 0, target.maxWillpower);
+    else target.willpower = Math.min(Math.max(0, Number(target.willpower) || 0), target.maxWillpower);
+    target.willpowerImmune = target.maxWillpower === 0;
+    if (effect.attackBonus != null) target.attackBonus = clampInt(effect.attackBonus, -10, 30);
+    if (effect.attackRange != null) target.attackRange = clampIntOr(effect.attackRange, target.attackRange, 1, 24);
+    if (effect.damage != null) target.damage = String(effect.damage || '1d6').slice(0, 40);
+    if (effect.damageType != null) target.damageType = String(effect.damageType).slice(0, 20);
+    if (effect.speed != null) target.speed = clampIntOr(effect.speed, target.speed, 1, 30);
+    target.movementUsed = Math.min(Number(target.movementUsed) || 0, Number(target.speed) || 1);
+    if (effect.notes != null) target.notes = String(effect.notes).slice(0, 500);
+    if (effect.glyph != null) target.glyph = String(effect.glyph).slice(0, 3);
+    if (effect.color != null) target.color = String(effect.color).slice(0, 30);
+    if (effect.attackResource != null) target.attackResource = normalizeWillpowerResource(effect.attackResource, target.attackResource);
+    if (effect.willpowerDamage != null) target.willpowerDamage = String(effect.willpowerDamage).slice(0, 40);
+    if (effect.attackWillpowerOutcome != null) target.attackWillpowerOutcome = normalizeWillpowerOutcome(effect.attackWillpowerOutcome, target.attackWillpowerOutcome);
+    if (Array.isArray(effect.skills)) {
+        target.skills = effect.skills
+            .slice(0, 8)
+            .map((skill, index) => normalizeSkill(skill, index, target.side))
+            .filter(Boolean);
+    }
+    if (Array.isArray(effect.items)) {
+        target.items = effect.items
+            .slice(0, 8)
+            .map((item, index) => normalizeItem(item, index))
+            .filter(Boolean);
+    }
+    if (Array.isArray(effect.inventory)) {
+        target.inventory = normalizeTransformInventory(effect.inventory);
+    }
+    addLog(state, 'transform', `${target.name} is transformed${transform.permanent ? ' permanently' : ''}.`, target.id);
+    return {
+        ok: true,
+        name: target.name,
+        permanent: transform.permanent,
+        expiresRound: transform.expiresRound,
+    };
+}
+
+function revertTransform(state, unit, reason = '') {
+    if (!unit?.transform || unit.transform.permanent) return false;
+    const original = unit.transform.original || {};
+    for (const key of [
+        'name', 'classLabel', 'ac', 'maxHp', 'maxWillpower', 'attackBonus', 'attackRange',
+        'damage', 'damageType', 'speed', 'level', 'notes', 'glyph', 'color',
+        'attackResource', 'willpowerDamage', 'attackWillpowerOutcome', 'skills', 'items', 'inventory',
+    ]) {
+        if (Object.prototype.hasOwnProperty.call(original, key)) {
+            unit[key] = cloneJson(original[key]);
+        }
+    }
+    unit.hp = Math.min(Math.max(0, Number(unit.hp) || 0), Number(unit.maxHp) || 1);
+    unit.willpower = Math.min(Math.max(0, Number(unit.willpower) || 0), Number(unit.maxWillpower) || 0);
+    unit.willpowerImmune = Number(unit.maxWillpower) === 0;
+    unit.movementUsed = Math.min(Number(unit.movementUsed) || 0, Number(unit.speed) || 1);
+    unit.transform = null;
+    addLog(state, 'transform', `${unit.name} returns to their original form${reason ? ` (${reason})` : ''}.`, unit.id);
+    return true;
+}
+
+export function revertExpiredTransforms(state) {
+    const round = Number(state?.round) || 1;
+    for (const unit of state?.units || []) {
+        if (unit?.transform && !unit.transform.permanent && unit.transform.expiresRound > 0 && round >= unit.transform.expiresRound) {
+            revertTransform(state, unit, 'duration expired');
+        }
+    }
+}
+
+/**
+ * Revert encounter-scoped side changes and temporary transformations after the
+ * outcome has been captured. Called before the deterministic memo sync.
+ * @param {object} state
+ */
+export function restoreCombatScopedState(state) {
+    if (!state || state.finalization?.scopedStateRestored) return false;
+    for (const unit of state.units || []) {
+        if (unit.transform && !unit.transform.permanent) revertTransform(state, unit, 'combat ended');
+        if (unit.sideChanged) {
+            unit.side = unit.originalSide || unit.side;
+            unit.sideChanged = false;
+        }
+    }
+    state.finalization = {
+        ...(state.finalization || {}),
+        scopedStateRestored: true,
+        scopedStateRestoredAt: Date.now(),
+    };
+    return true;
+}
+
 /**
  * Apply a resolved special-ability effect list. This is the only mutation path
  * for `kind: 'special'` skills/items: the combat agent converts a freeform
  * ability description into these primitives, then the engine validates them.
  *
  * Supported effects:
- *   {type:'damage', targetId, amount}
- *   {type:'heal', targetId, amount}
- *   {type:'status', targetId, label, rounds, acBonus, attackBonus, damage}
+ *   {type:'damage', targetId, amount, resource:'hp'|'willpower'|'both', willpowerOutcome?}
+ *   {type:'heal', targetId, amount, resource:'hp'|'willpower'|'both'}
+ *   {type:'status', targetId, label, rounds, acBonus, attackBonus, damage, damageResource?, behavior?, stacks?}
+ *   {type:'defeat', targetId, outcome, reason?}
+ *   {type:'transform', targetId, name?, maxHp?, ac?, ...}
  *   {type:'terrain', cells:[{x,y,terrain}], terrain?}
  *   {type:'summon', name, maxHp, ac, attackBonus, damage, attackRange, skills?}
  *   {type:'log', text}
@@ -1326,13 +1793,26 @@ export function applySpecialEffects(state, effects, options = {}) {
                 rejected.push(`Unknown target "${effect.targetId}".`);
                 continue;
             }
+            const resource = normalizeWillpowerResource(effect.resource ?? effect.stat, 'hp');
             if (type === 'damage') {
-                const damage = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
-                applyDamageToUnit(state, target, damage, label);
-                applied.push({ type, targetId: target.id, amount: damage });
+                const amount = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
+                let hpDamage = 0;
+                let willpowerDamage = 0;
+                if (resource === 'hp' || resource === 'both') hpDamage = applyDamageToUnit(state, target, amount, label);
+                if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
+                    willpowerDamage = applyWillpowerDamageToUnit(state, target, amount, label, {
+                        outcome: effect.willpowerOutcome ?? effect.willOutcome,
+                        casterId: caster.id,
+                    });
+                }
+                applied.push({ type, targetId: target.id, amount: hpDamage || willpowerDamage, resource, hpDamage, willpowerDamage });
             } else if (type === 'heal') {
-                const healed = healUnit(state, target, rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total, label);
-                applied.push({ type, targetId: target.id, amount: healed });
+                const amount = rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total;
+                let hpHealed = 0;
+                let willpowerHealed = 0;
+                if (resource === 'hp' || resource === 'both') hpHealed = healUnit(state, target, amount, label, 'hp');
+                if (resource === 'willpower' || resource === 'both') willpowerHealed = healUnit(state, target, amount, label, 'willpower');
+                applied.push({ type, targetId: target.id, amount: hpHealed || willpowerHealed, resource, hpHealed, willpowerHealed });
             } else if (type === 'cure') {
                 const removed = (target.statuses || []).map(status => status.label);
                 target.statuses = [];
@@ -1345,10 +1825,53 @@ export function applySpecialEffects(state, effects, options = {}) {
                     acBonus: effect.acBonus,
                     attackBonus: effect.attackBonus,
                     damage: effect.damage || '',
+                    damageResource: effect.damageResource ?? effect.resource,
+                    willpowerOutcome: effect.willpowerOutcome ?? effect.willOutcome,
+                    behavior: effect.behavior,
+                    sourceId: effect.sourceId || caster.id,
+                    stacks: effect.stacks,
+                    maxStacks: effect.maxStacks,
                     description: effect.description || '',
                 });
                 applied.push({ type, targetId: target.id, label: effect.label || label });
             }
+            continue;
+        }
+        if (type === 'defeat') {
+            const target = getUnitById(state, effect.targetId);
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${effect.targetId}".`);
+                continue;
+            }
+            if (!target.willpowerBroken && Number(target.willpower) > 0) {
+                rejected.push(`${target.name} still has Willpower; a defeat effect is not legal.`);
+                continue;
+            }
+            if (target.willpowerBroken) {
+                rejected.push(`${target.name} has already been broken.`);
+                continue;
+            }
+            const outcome = normalizeWillpowerOutcome(effect.outcome ?? effect.willpowerOutcome, 'defeat');
+            if (breakWillpower(state, target, { outcome, source: effect.reason || label, casterId: caster.id })) {
+                applied.push({ type, targetId: target.id, outcome });
+            } else {
+                rejected.push(`Could not apply the defeat outcome to ${target.name}.`);
+            }
+            continue;
+        }
+        if (type === 'transform') {
+            const target = getUnitById(state, effect.targetId);
+            if (!target || target.defeated || target.fled) {
+                rejected.push(`Unknown target "${effect.targetId}".`);
+                continue;
+            }
+            if (effect.permanent === true && caster.side !== 'player') {
+                rejected.push('Enemy-authored permanent transformations are disabled.');
+                continue;
+            }
+            const transformed = applyTransform(state, target, effect);
+            if (transformed.ok) applied.push({ type, targetId: target.id, ...transformed });
+            else rejected.push(transformed.error || 'Transform failed.');
             continue;
         }
         if (type === 'terrain') {
@@ -1457,6 +1980,7 @@ function validateActor(state, action, options) {
     if (!unit) return { error: `Unknown unit "${action.unitId}".` };
     if (unit.defeated) return { error: `${unit.name} is defeated.` };
     if (unit.fled) return { error: `${unit.name} has fled.` };
+    if (isStunned(unit)) return { error: `${unit.name} is stunned.` };
     if (unit.doneForRound && !options.ignoreTurn) return { error: `${unit.name} has already finished acting this round.` };
 
     const actorSide = options.actorSide || (unit.side === 'player' ? 'player' : 'agent');
@@ -1496,6 +2020,84 @@ function findSkill(unit, skillId) {
 function findItem(unit, itemId) {
     const needle = String(itemId || '').toLowerCase();
     return (unit.items || []).find(item => item.id.toLowerCase() === needle || item.name.toLowerCase() === needle) || null;
+}
+
+/**
+ * Validate a special skill/item declaration without consuming its action.
+ * Used by the enemy-agent special resolver and the player UI before a resolver
+ * call, so invalid declarations never reach the model.
+ *
+ * @param {object} state
+ * @param {object} action
+ * @param {{ actorSide?: 'player'|'agent', ignoreTurn?: boolean, ignoreRange?: boolean, ignoreDeployment?: boolean }} [options]
+ * @returns {{ ok: boolean, error?: string, unit?: object, skill?: object|null, item?: object|null, target?: object, label?: string }}
+ */
+export function prepareSpecialAction(state, action, options = {}) {
+    if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is over.' };
+    if (state.preparing?.active) return { ok: false, error: 'The encounter is still being prepared.' };
+    if (state.deployment?.active && !options.ignoreDeployment) return { ok: false, error: 'Finish deployment before taking combat actions.' };
+    if (!action || !action.type) return { ok: false, error: 'Invalid action.' };
+    const actorCheck = validateActor(state, action, options);
+    if (actorCheck.error) return { ok: false, error: actorCheck.error };
+    const unit = actorCheck.unit;
+    const skill = action.skillId ? findSkill(unit, action.skillId) : null;
+    const item = action.itemId ? findItem(unit, action.itemId) : null;
+    if (action.skillId && !skill) return { ok: false, error: `Unknown skill "${action.skillId}".` };
+    if (action.itemId && !item) return { ok: false, error: `Unknown item "${action.itemId}".` };
+    const source = skill || item;
+    if (!source) return { ok: false, error: 'Special action needs a skillId or itemId.' };
+    if (source.kind !== 'special') return { ok: false, error: `${source.name} does not require special resolution.` };
+    if (source.uses <= 0) return { ok: false, error: `${source.name} has no uses left.` };
+    const resourceKey = skill?.bonusAction ? 'bonusUsed' : 'actionUsed';
+    if (unit[resourceKey]) {
+        return { ok: false, error: skill?.bonusAction ? `${unit.name} has already used a bonus action.` : `${unit.name} has already used their action.` };
+    }
+    const targetId = String(action.targetId || unit.id).trim();
+    const target = getUnitById(state, targetId);
+    if (!target) return { ok: false, error: `Unknown target "${targetId}".` };
+    if (target.defeated) return { ok: false, error: `${target.name} is already defeated.` };
+    if (target.fled) return { ok: false, error: `${target.name} has fled.` };
+    const charmed = getStatusBehavior(unit, 'charmed');
+    const frightened = getStatusBehavior(unit, 'frightened');
+    if (target.id !== unit.id && ((charmed?.sourceId && charmed.sourceId === target.id)
+        || (frightened?.sourceId && frightened.sourceId === target.id))) {
+        return { ok: false, error: `${unit.name} cannot direct a harmful effect at ${target.name}.` };
+    }
+    const distance = unit.id === target.id ? 0 : chebyshev(unit, target);
+    if (!options.ignoreRange && distance > (Number(source.range) || 0)) {
+        return { ok: false, error: `${target.name} is out of ${source.name}'s range (${distance} cells, range ${source.range}).` };
+    }
+    return {
+        ok: true,
+        unit,
+        skill,
+        item,
+        target,
+        label: source.name,
+    };
+}
+
+/**
+ * Replace $caster / $target placeholders in a pre-authored effect template.
+ * @param {object[]} effects
+ * @param {{ casterId?: string, targetId?: string }} ids
+ * @returns {object[]}
+ */
+export function resolveEffectTemplate(effects, ids = {}) {
+    const source = Array.isArray(effects) ? effects : [];
+    const replace = value => {
+        if (typeof value === 'string') {
+            if (value === '$caster') return ids.casterId || '';
+            if (value === '$target') return ids.targetId || '';
+            return value;
+        }
+        if (Array.isArray(value)) return value.map(replace);
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replace(entry)]));
+        }
+        return value;
+    };
+    return cloneJson(source.map(replace));
 }
 
 function resolveTarget(state, unit, action, options) {
@@ -1580,6 +2182,9 @@ export function applyAction(state, action, options = {}) {
                 source,
                 attackBonus: getEffectiveAttackBonus(state, unit),
                 damage: unit.damage,
+                resource: unit.attackResource,
+                willpowerDamage: unit.willpowerDamage,
+                willpowerOutcome: unit.attackWillpowerOutcome,
                 label: 'attack',
                 consumeAction: true,
             });
@@ -1620,13 +2225,21 @@ export function applyAction(state, action, options = {}) {
                     source,
                     attackBonus: getEffectiveAttackBonus(state, unit, skill.attackBonus),
                     damage: skill.damage || '1d6',
+                    resource: skill.resource,
+                    willpowerDamage: skill.willpowerDamage,
+                    willpowerOutcome: skill.willpowerOutcome,
                     label: skill.name,
                     consumeAction: !skill.bonusAction,
                 });
             }
             if (skill.kind === 'heal') {
                 const heal = rollDice(skill.heal || '1d8+2', rng).total;
-                healUnit(state, target, heal, skill.name);
+                if (skill.resource === 'both') {
+                    healUnit(state, target, heal, skill.name, 'hp');
+                    healUnit(state, target, heal, skill.name, 'willpower');
+                } else {
+                    healUnit(state, target, heal, skill.name, skill.resource);
+                }
                 addLog(state, 'skill', `${unit.name} uses ${skill.name} on ${target.name}.`, unit.id);
             } else {
                 addStatus(target, {
@@ -1654,7 +2267,13 @@ export function applyAction(state, action, options = {}) {
             const targetResult = action.targetId ? resolveTarget(state, unit, action, options) : { target: unit };
             const target = targetResult.target;
             if (!target) return rejectAction(state, action, targetResult.error || 'Item target is invalid.', source);
-            if (!isFriendly(unit.side, target.side)) return rejectAction(state, action, 'Items can only target allies.', source);
+            const itemTarget = item.target || 'ally';
+            if (itemTarget === 'ally' && !isFriendly(unit.side, target.side)) {
+                return rejectAction(state, action, 'This item can only target allies.', source);
+            }
+            if (itemTarget === 'enemy' && !isHostile(unit.side, target.side)) {
+                return rejectAction(state, action, 'This item can only target enemies.', source);
+            }
             const distance = unit.id === target.id ? 0 : chebyshev(unit, target);
             if (distance > (Number(item.range) || 0)) {
                 return rejectAction(state, action, `${target.name} is out of item range.`, source);
@@ -1662,7 +2281,13 @@ export function applyAction(state, action, options = {}) {
             unit.actionUsed = true;
             item.uses = Math.max(0, Number(item.uses) - 1);
             if (item.kind === 'heal') {
-                healUnit(state, target, rollDice(item.amount || '2d4+2', rng).total, item.name);
+                const amount = rollDice(item.amount || '2d4+2', rng).total;
+                if (item.resource === 'both') {
+                    healUnit(state, target, amount, item.name, 'hp');
+                    healUnit(state, target, amount, item.name, 'willpower');
+                } else {
+                    healUnit(state, target, amount, item.name, item.resource);
+                }
             } else {
                 addStatus(target, { id: slug(item.name, 'item'), label: item.name, rounds: 2, description: item.description });
             }
@@ -1924,6 +2549,21 @@ function applyMove(state, unit, path, rng, source) {
     return { ok: true, log: `Moved ${cost} cells.`, ended: false };
 }
 
+function rollDamagePool(expression, critical, rng) {
+    const source = String(expression || '1d6');
+    const base = rollDice(source, rng);
+    let damage = base.total;
+    if (critical) {
+        const diceMatch = source.toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/);
+        if (diceMatch) {
+            damage += rollDice(`${diceMatch[1] || 1}d${diceMatch[2]}`, rng).total;
+        } else {
+            damage *= 2;
+        }
+    }
+    return damage;
+}
+
 function resolveAttack(state, unit, target, options) {
     const rng = options.rng;
     const attackBonus = Number(options.attackBonus) || 0;
@@ -1948,22 +2588,27 @@ function resolveAttack(state, unit, target, options) {
         return { ok: true, log: 'Missed.', ended: state.status !== 'active' };
     }
 
-    const base = rollDice(options.damage || unit.damage || '1d6', rng);
-    let damage = base.total;
-    if (crit) {
-        // Double the dice, not the flat modifier.
-        const diceMatch = String(options.damage || unit.damage || '1d6').toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/);
-        if (diceMatch) {
-            const extra = rollDice(`${diceMatch[1] || 1}d${diceMatch[2]}`, rng);
-            damage += extra.total;
-        } else {
-            damage *= 2;
-        }
+    const resource = normalizeWillpowerResource(options.resource, 'hp');
+    let hpDamage = 0;
+    let willpowerDamage = 0;
+    if (resource === 'hp' || resource === 'both') {
+        hpDamage = rollDamagePool(options.damage || unit.damage || '1d6', crit, rng);
+        applyDamageToUnit(state, target, hpDamage, `${unit.name}'s ${label}`);
     }
-    applyDamageToUnit(state, target, damage, `${unit.name}'s ${label}`);
+    if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
+        const expression = options.willpowerDamage || options.damage || unit.willpowerDamage || '1d6';
+        willpowerDamage = rollDamagePool(expression, crit, rng);
+        applyWillpowerDamageToUnit(state, target, willpowerDamage, `${unit.name}'s ${label}`, {
+            outcome: options.willpowerOutcome,
+            casterId: unit.id,
+        });
+    }
     if (options.consumeAction !== false) unit.actionUsed = true;
     checkEncounterEnd(state);
-    return { ok: true, log: `Hit for ${damage}.`, ended: state.status !== 'active' };
+    const parts = [];
+    if (hpDamage) parts.push(`${hpDamage} HP`);
+    if (willpowerDamage) parts.push(`${willpowerDamage} Willpower`);
+    return { ok: true, log: parts.length ? `Hit for ${parts.join(' and ')}.` : 'Hit.', ended: state.status !== 'active' };
 }
 
 /**
@@ -2015,16 +2660,16 @@ export function describeUnitOptions(state, unit) {
     const reachable = [...computeReachableCells(state, unit).keys()]
         .map(key => key.split(',').map(Number));
     const attackTargets = state.units
-        .filter(target => target.id !== unit.id && !target.defeated && !target.fled && isHostile(unit.side, target.side))
+        .filter(target => target.id !== unit.id && !target.defeated && !target.fled && canTarget(unit, target, 'attack'))
         .filter(target => chebyshev(unit, target) <= (Number(unit.attackRange) || 1))
         .filter(target => (Number(unit.attackRange) || 1) <= 1 || hasLineOfSight(state, unit, target))
         .map(target => target.id);
     const skillTargets = {};
     for (const skill of unit.skills || []) {
-        if (skill.uses <= 0 || skill.kind === 'special') continue;
+        if (skill.uses <= 0) continue;
         const options = state.units
             .filter(target => !target.defeated && !target.fled)
-            .filter(target => canTarget(unit, target, skill.kind))
+            .filter(target => skill.kind === 'special' || canTarget(unit, target, skill.kind))
             .filter(target => (unit.id === target.id ? 0 : chebyshev(unit, target)) <= (Number(skill.range) || 1))
             .filter(target => skill.kind !== 'attack' || (Number(skill.range) || 1) <= 1 || hasLineOfSight(state, unit, target))
             .map(target => target.id);
@@ -2051,13 +2696,17 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
                 id: unit.id,
                 name: unit.name,
                 side: unit.side,
+                originalSide: unit.originalSide || unit.side,
                 classLabel: unit.classLabel,
                 x: unit.x,
                 y: unit.y,
                 hp: unit.hp,
                 maxHp: unit.maxHp,
+                willpower: unit.willpower,
+                maxWillpower: unit.maxWillpower,
+                willpowerBroken: !!unit.willpowerBroken,
                 ac: getEffectiveAc(state, unit),
-                statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds })),
+                statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds, behavior: status.behavior, stacks: status.stacks })),
                 inventory: (unit.inventory || []).slice(0, 20).map(entry => ({
                     name: entry.name,
                     equipped: !!entry.equipped,
@@ -2071,15 +2720,26 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         id: unit.id,
         name: unit.name,
         side: unit.side,
+        originalSide: unit.originalSide || unit.side,
+        sideChanged: !!unit.sideChanged,
         classLabel: unit.classLabel,
         x: unit.x,
         y: unit.y,
         hp: unit.hp,
         maxHp: unit.maxHp,
+        willpower: unit.willpower,
+        maxWillpower: unit.maxWillpower,
+        willpowerSave: unit.willpowerSave,
+        willpowerBroken: !!unit.willpowerBroken,
+        willpowerOutcome: unit.willpowerOutcome || '',
+        defeatedBy: unit.defeatCause || '',
         ac: getEffectiveAc(state, unit),
         attackBonus: getEffectiveAttackBonus(state, unit),
         attackRange: unit.attackRange,
         damage: unit.damage,
+        attackResource: unit.attackResource || 'hp',
+        willpowerDamage: unit.willpowerDamage || '',
+        attackWillpowerOutcome: unit.attackWillpowerOutcome || 'defeat',
         speed: unit.speed,
         movementUsed: unit.movementUsed,
         movementLeft: Math.max(0, (Number(unit.speed) || 0) - (Number(unit.movementUsed) || 0)),
@@ -2088,31 +2748,45 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         defeated: unit.defeated,
         fled: unit.fled,
         defending: !!unit.defending || (unit.statuses || []).some(status => status.id === 'defending'),
-        statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds, acBonus: status.acBonus, attackBonus: status.attackBonus })),
+        statuses: (unit.statuses || []).map(status => ({
+            label: status.label,
+            rounds: status.rounds,
+            acBonus: status.acBonus,
+            attackBonus: status.attackBonus,
+            behavior: status.behavior || '',
+            stacks: status.stacks || 1,
+        })),
         stats: unit.stats,
         initiative: unit.initiative,
-        skills: (unit.skills || []).filter(skill => skill.kind !== 'special' || unit.side === 'player').map(skill => ({
+        skills: (unit.skills || []).map(skill => ({
             id: skill.id,
             name: skill.name,
             kind: skill.kind,
+            resource: skill.resource || 'hp',
             range: skill.range,
             damage: skill.damage,
+            willpowerDamage: skill.willpowerDamage || '',
+            willpowerOutcome: skill.willpowerOutcome || 'defeat',
             heal: skill.heal,
             uses: skill.uses,
             maxUses: skill.maxUses,
             bonusAction: skill.bonusAction,
             description: skill.description,
-            usable: skill.kind !== 'special',
+            usable: true,
+            resolvable: skill.kind === 'special',
         })),
-        items: (unit.items || []).filter(item => item.kind !== 'special' || unit.side === 'player').map(item => ({
+        items: (unit.items || []).map(item => ({
             id: item.id,
             name: item.name,
             kind: item.kind,
+            resource: item.resource || 'hp',
+            target: item.target || 'ally',
             uses: item.uses,
             maxUses: item.maxUses,
             amount: item.amount,
             description: item.description,
-            usable: item.kind !== 'special',
+            usable: true,
+            resolvable: item.kind === 'special',
         })),
         ...(compact ? {} : {
             inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
@@ -2165,6 +2839,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             allowFlee: state.rules?.allowFlee !== false,
             victory: 'Defeat every enemy unit.',
             defeat: 'All player units are defeated.',
+            willpower: 'Willpower is a morale pool. Ordinary attacks target HP only. Skills/items with resource "willpower" or "both" damage it. At 0 Willpower the unit breaks according to willpowerOutcome. Willpower recovers after combat.',
             actions: describeActionCatalog(catalog),
             actionTypes: getEnabledActions(catalog).map(entry => entry.type),
         },
@@ -2314,16 +2989,67 @@ export function getPendingAgentUnitIds(state) {
     if (Array.isArray(state.pendingAgentUnitIds) && state.pendingAgentUnitIds.length) {
         return state.pendingAgentUnitIds.filter(id => {
             const unit = getUnitById(state, id);
-            return unit && !unit.defeated && !unit.fled && !isSurprisedThisRound(state, unit);
+            return unit && !unit.defeated && !unit.fled && !unit.doneForRound && !isStunned(unit) && !isSurprisedThisRound(state, unit);
         });
     }
     if (state.turnStyle === 'phase') {
         return state.phase === 'enemy'
-            ? getAgentControlledUnits(state).filter(unit => !isSurprisedThisRound(state, unit)).map(unit => unit.id)
+            ? getAgentControlledUnits(state)
+                .filter(unit => !isSurprisedThisRound(state, unit) && !unit.doneForRound && !isStunned(unit))
+                .map(unit => unit.id)
             : [];
     }
     if (state.phase === 'enemy') {
         return collectConsecutiveAgentUnits(state);
     }
     return [];
+}
+
+/**
+ * Hydrate a board saved before Willpower existed. Safe to call repeatedly.
+ * @param {object} state
+ * @returns {object}
+ */
+export function hydrateEncounterState(state) {
+    if (!state || !Array.isArray(state.units)) return state;
+    state.version = TC_VERSION;
+    for (const unit of state.units) {
+        unit.stats = unit.stats && typeof unit.stats === 'object' ? unit.stats : {};
+        if (!Number.isFinite(Number(unit.willpowerSave))) {
+            unit.willpowerSave = Number.isFinite(Number(unit.willSave ?? unit.stats.willSave))
+                ? clampInt(unit.willSave ?? unit.stats.willSave, -10, 30)
+                : 0;
+        }
+        if (!Number.isFinite(Number(unit.maxWillpower))) {
+            const explicit = Number(unit.maxWill ?? unit.maxWillpower);
+            unit.maxWillpower = Number.isFinite(explicit)
+                ? clampInt(explicit, 0, 99)
+                : deriveMaxWillpower(unit.maxHp, unit.stats.wisMod, unit.willpowerSave);
+        }
+        if (!Number.isFinite(Number(unit.willpower))) {
+            const explicit = Number(unit.will ?? unit.willpower);
+            unit.willpower = Number.isFinite(explicit) ? clampInt(explicit, 0, unit.maxWillpower) : unit.maxWillpower;
+        }
+        unit.willpowerImmune = Number(unit.maxWillpower) === 0;
+        unit.willpowerBroken = !!unit.willpowerBroken;
+        const storedWillpowerOutcome = unit.willpowerOutcome ?? unit.willOutcome;
+        unit.willpowerOutcome = storedWillpowerOutcome
+            ? normalizeWillpowerOutcome(storedWillpowerOutcome, 'defeat')
+            : '';
+        if (!unit.willpowerOutcome && unit.willpowerBroken) unit.willpowerOutcome = 'defeat';
+        unit.willpowerBreakSource = String(unit.willpowerBreakSource || '');
+        unit.originalSide = unit.originalSide || unit.side;
+        unit.sideChanged = !!unit.sideChanged;
+        unit.defeatCause = unit.defeatCause || '';
+        unit.incapacitated = !!unit.incapacitated;
+        unit.surrendered = !!unit.surrendered;
+        unit.transform = unit.transform && typeof unit.transform === 'object' ? unit.transform : null;
+        unit.attackResource = normalizeWillpowerResource(unit.attackResource, 'hp');
+        unit.willpowerDamage = String(unit.willpowerDamage ?? unit.willDamage ?? '');
+        unit.attackWillpowerOutcome = normalizeWillpowerOutcome(unit.attackWillpowerOutcome ?? unit.willOutcome, 'defeat');
+        unit.statuses = (Array.isArray(unit.statuses) ? unit.statuses : []).map(status => normalizeStatus(status)).filter(Boolean);
+        unit.skills = (Array.isArray(unit.skills) ? unit.skills : []).map((skill, index) => normalizeSkill(skill, index, unit.side)).filter(Boolean);
+        unit.items = (Array.isArray(unit.items) ? unit.items : []).map((item, index) => normalizeItem(item, index)).filter(Boolean);
+    }
+    return state;
 }

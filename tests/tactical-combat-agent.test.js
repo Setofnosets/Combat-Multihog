@@ -225,7 +225,85 @@ describe('tactical encounter architect payloads', () => {
         expect(normalized.log).toContain('Water bursts');
     });
 
+    it('normalizes Willpower, defeat, transform, and status behavior effects', () => {
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-2');
+        enemy.maxWillpower = 5;
+        enemy.willpower = 5;
+        const normalized = normalizeSpecialEffects({
+            effects: [
+                { type: 'damage', targetId: 'enemy-2', amount: '2d6', resource: 'willpower', willpowerOutcome: 'flee' },
+                { type: 'transform', targetId: 'enemy-2', name: 'Stone Statue', skills: [], permanent: false },
+                { type: 'status', targetId: 'enemy-2', label: 'Confused', behavior: 'confused', stacks: 2, maxStacks: 3 },
+                { type: 'defeat', targetId: 'enemy-2', outcome: 'incapacitate' },
+            ],
+        }, state);
+        expect(normalized.effects[0]).toMatchObject({ resource: 'willpower', willpowerOutcome: 'flee' });
+        expect(normalized.effects[1]).toMatchObject({ type: 'transform', name: 'Stone Statue' });
+        expect(normalized.effects[2]).toMatchObject({ behavior: 'confused', stacks: 2 });
+        // Defeat is rejected while the target still has Willpower.
+        expect(normalized.rejected.join(' ')).toMatch(/still has Willpower/);
+    });
+
+    it('normalizes Willpower and special skill metadata from the encounter architect', () => {
+        const normalized = normalizeEncounterPayload({
+            title: 'Wail in the Dark',
+            enemies: [{
+                name: 'Wailing Horror',
+                maxHp: 20,
+                maxWillpower: 8,
+                ac: 12,
+                attackBonus: 4,
+                damage: '1d6+1',
+                skills: [{
+                    name: 'Dread Wail',
+                    kind: 'special',
+                    resource: 'willpower',
+                    range: 6,
+                    damage: '2d6',
+                    willpowerOutcome: 'flee',
+                    maxUses: 1,
+                    effectTemplate: [{ type: 'damage', targetId: '$target', amount: '2d6', resource: 'willpower', willpowerOutcome: 'flee' }],
+                }],
+            }],
+        });
+        expect(normalized.ok).toBe(true);
+        expect(normalized.encounter.enemies[0].maxWillpower).toBe(8);
+        expect(normalized.encounter.enemies[0].skills[0]).toMatchObject({
+            kind: 'special',
+            resource: 'willpower',
+            willpowerOutcome: 'flee',
+        });
+        expect(normalized.encounter.enemies[0].skills[0].effectTemplate[0].targetId).toBe('$target');
+    });
+
+    it('resolves an enemy special skill declaration in the agent turn after the tactical answer', async () => {
+        sendStateRequest.mockReset();
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-2');
+        const aria = getUnitById(state, 'pc-1');
+        enemy.maxWillpower = 4;
+        enemy.willpower = 4;
+        aria.maxWillpower = 4;
+        aria.willpower = 4;
+        enemy.skills = [{ id: 'dread-wail', name: 'Dread Wail', kind: 'special', range: 6, maxUses: 1, uses: 1, description: 'A fearful wail.' }];
+        sendStateRequest
+            .mockResolvedValueOnce('{"actions":[{"type":"skill","unitId":"enemy-2","skillId":"dread-wail","targetId":"pc-1"}]}')
+            .mockResolvedValueOnce(JSON.stringify({
+                log: 'The wail scrapes at Aria’s resolve.',
+                effects: [{ type: 'damage', targetId: 'pc-1', amount: '4', resource: 'willpower', willpowerOutcome: 'flee' }],
+            }));
+        const result = await runAgentTurn(state, ['enemy-2'], SETTINGS, { rng: () => 0.99 });
+        expect(result.source).toBe('agent');
+        expect(result.applied).toHaveLength(1);
+        expect(sendStateRequest).toHaveBeenCalledTimes(2);
+        expect(getUnitById(state, 'pc-1').willpower).toBe(0);
+        expect(getUnitById(state, 'pc-1').fled).toBe(true);
+        expect(enemy.skills[0].uses).toBe(0);
+    });
+
     it('resolves a special ability through the compact resolver call', async () => {
+        sendStateRequest.mockReset();
         const state = makeState();
         sendStateRequest.mockResolvedValue(JSON.stringify({
             log: 'Water bursts from the stones.',

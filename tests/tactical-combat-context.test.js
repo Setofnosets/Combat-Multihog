@@ -434,6 +434,45 @@ Other Items:
         }, { seed: 1 })).toThrow(/No active \[COMBAT\] enemies/i);
     });
 
+    it('parses Willpower separately from the Will saving throw and reads explicit Willpower abilities', () => {
+        const memo = `[CHARACTER]
+Aria (Fighter): 30/40 HP
+Willpower: 9/12
+Saves: Fort +5 | Ref +3 | Will +2
+Abilities: Dread Wail (Will damage 2d6, 6 cells, 1/1; on Willpower break: flee), Psychic Lance (2d6 HP + 1d6 Willpower, 6 cells, 1/1), Mind Ward (Will heal 1d6, self, 1/1)
+Status: Healthy
+[/CHARACTER]`;
+        const party = parsePlayerUnits(memo, { name1: 'Aria', chatId: 'wp' });
+        const aria = party[0];
+        expect(aria.maxWillpower).toBe(12);
+        expect(aria.willpower).toBe(9);
+        expect(aria.willpowerSave).toBe(2);
+        const skills = Object.fromEntries(aria.skills.map(skill => [skill.name, skill]));
+        expect(skills['Dread Wail']).toMatchObject({ resource: 'willpower', damage: '2d6', willpowerOutcome: 'flee' });
+        expect(skills['Psychic Lance']).toMatchObject({ resource: 'both', damage: '2d6', willpowerDamage: '1d6' });
+        expect(skills['Mind Ward']).toMatchObject({ resource: 'willpower', kind: 'heal', heal: '1d6' });
+    });
+
+    it('derives Willpower when the memo has no line and keeps a mindless 0/0 override', () => {
+        const memo = `[CHARACTER]
+Aria (Fighter): 40/40 HP
+Saves: Fort +5 | Ref +3 | Will +2
+Status: Healthy
+[/CHARACTER]
+
+[COMBAT]
+ENEMIES:
+Stone Golem: 30/30 HP
+Willpower: 0/0
+Status: Healthy
+[/COMBAT]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'wp2', chat: [] });
+        expect(context.playerUnits[0].maxWillpower).toBeGreaterThan(0);
+        expect(context.enemies[0].maxWillpower).toBe(0);
+        expect(context.enemies[0].willpowerImmune).toBe(true);
+        expect(context.summary.enemies[0]).toContain('0/0 WP');
+    });
+
     it('provides a usable fallback player', () => {
         const player = buildFallbackPlayer({ name1: 'Rook' }, 5);
         expect(player.name).toBe('Rook');

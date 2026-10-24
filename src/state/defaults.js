@@ -494,6 +494,13 @@ Conditional Buffs: For effects without a set time, use event-based anchors. Exam
 STATUS LABELING: In [CHARACTER], [PARTY], and [COMBAT] blocks, prefix positive status effects (buffs) with \`(+)\` and negative status effects (debuffs) with \`(-)\`. Every status MUST include its effect AND duration in parentheses. Example: \`Status: (+) Heroism (+2 Temp HP per turn, 9 turns), (-) Poisoned (Disadvantage on attacks, 2 turns)\`. Healthy or no effects needs no prefix.
 Equipment Incompatibility: When a character equips an item they cannot properly use (wrong proficiency, insufficient Strength, class restriction, etc.), record it as an event-anchored debuff whose parenthetical MUST name the causing item so removal can be inferred when that item loses its [E] tag. Format: \`(-) [Penalty Label] ([effect(s)], while [Item Name] is equipped)\`. Example: \`(-) Armor Non-Proficiency (Disadvantage on Str/Dex checks, arcane spell failure, while Iron Plate Mail is equipped)\`.
 </buff_debuff_logic>
+<willpower_logic>
+WILLPOWER: [CHARACTER], [PARTY], and [COMBAT] may include a 'Willpower: current/max' line. Willpower is a morale pool, separate from HP and from the 'Saves: ... Will +X' saving throw.
+- Only explicit Willpower-targeting effects change it. Ordinary attacks, ordinary damage, and vague fear/charm narration do not.
+- 'Saves: ... Will +X' is a saving throw bonus, not the Willpower pool. It may be used to derive max Willpower, but never overwrite or confuse the two lines.
+- At 0 Willpower the combatant breaks. Record the source-specific outcome in Status: defeated, fled, surrendered, incapacitated, or turned against former allies.
+- When combat ends, restore current Willpower to max unless a persistent effect explicitly prevents recovery.
+</willpower_logic>
 <progression_logic>
 Update abilities/attributes/HP/etc accordingly, such as an ability's 1d6 bonus increasing to 2d6, etc.
 </progression_logic>
@@ -1632,6 +1639,13 @@ Conditional Buffs: For effects without a set time, use event-based anchors. Exam
 STATUS LABELING: In [CHARACTER], [PARTY], and [COMBAT] blocks, prefix positive status effects (buffs) with \`(+)\` and negative status effects (debuffs) with \`(-)\`. Every status MUST include its effect AND duration in parentheses. Example: \`Status: (+) Heroism (+2 Temp HP per turn, 9 turns), (-) Poisoned (Disadvantage on attacks, 2 turns)\`. Healthy or no effects needs no prefix.
 Equipment Incompatibility: When a character equips an item they cannot properly use (wrong proficiency, insufficient Strength, class restriction, etc.), record it as an event-anchored debuff whose parenthetical MUST name the causing item so removal can be inferred when that item loses its [E] tag. Format: \`(-) [Penalty Label] ([effect(s)], while [Item Name] is equipped)\`. Example: \`(-) Armor Non-Proficiency (Disadvantage on Str/Dex checks, arcane spell failure, while Iron Plate Mail is equipped)\`.
 </buff_debuff_logic>
+<willpower_logic>
+WILLPOWER: [CHARACTER], [PARTY], and [COMBAT] may include a 'Willpower: current/max' line. Willpower is a morale pool, separate from HP and from the 'Saves: ... Will +X' saving throw.
+- Only explicit Willpower-targeting effects change it. Ordinary attacks, ordinary damage, and vague fear/charm narration do not.
+- 'Saves: ... Will +X' is a saving throw bonus, not the Willpower pool. It may be used to derive max Willpower, but never overwrite or confuse the two lines.
+- At 0 Willpower the combatant breaks. Record the source-specific outcome in Status: defeated, fled, surrendered, incapacitated, or turned against former allies.
+- When combat ends, restore current Willpower to max unless a persistent effect explicitly prevents recovery.
+</willpower_logic>
 <progression_logic>
 Update abilities/attributes/HP/etc accordingly, such as an ability's 1d6 bonus increasing to 2d6, etc.
 </progression_logic>

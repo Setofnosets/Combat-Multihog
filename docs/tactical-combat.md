@@ -65,7 +65,9 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 
 ## Combat rules
 
-- **HP / AC / attacks** come from memo stat blocks when available. Missing stats fall back to level-appropriate tabletop defaults instead of failing.
+- **HP / Willpower / AC / attacks** come from memo stat blocks when available. Missing stats fall back to level-appropriate tabletop defaults instead of failing.
+- **Willpower** is a morale pool separate from HP and from the `Saves: ... Will +X` saving throw. Ordinary attacks never touch it. Willpower-targeting skills/items declare `resource: "willpower"` (or `"both"`). At 0 Willpower the unit breaks according to `willpowerOutcome`: `defeat`, `flee`, `switch_side`, `incapacitate`, or `surrender`. Willpower recovers to max when combat ends.
+- **Max Willpower** is deterministic: `2 + 30% of max HP + positive WIS modifier + positive Will save`, capped below HP and at 60. An explicit `Willpower: current/max` line or architect `maxWillpower` overrides it. `maxWillpower: 0` means mindless/immune.
 - **Damage** accepts `XdY+Z` expressions. Natural 20 is a critical (damage dice are doubled, modifier once); natural 1 always misses.
 - **Actions**: Move, Attack, Skill, Item, Defend, Wait, Flee. A unit can move before or after its main action. Bonus-action skills consume the bonus slot instead.
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
@@ -93,10 +95,43 @@ Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra
 
 - Click the skill/item, then a target on the board (self is valid for summons/terrain).
 - One compact resolver call sends only the ability, caster, target, and local battlefield state.
-- The resolver returns a small JSON effect list: `damage`, `heal`, `status`, `terrain`, `summon`, or `log`.
+- The resolver returns a small JSON effect list: `damage`, `heal`, `status`, `terrain`, `summon`, `defeat`, `transform`, `cure`, or `log`.
+- `damage`/`heal` accept `resource: "hp" | "willpower" | "both"`. `damage` with `resource: "willpower"` accepts `willpowerOutcome`.
+- `defeat` is only legal after Willpower reaches 0. Use it for a non-default terminal outcome when another effect has already broken the target.
+- `transform` swaps the target's stats, skills, items, and inventory for the encounter. It is temporary by default and reverts when combat ends; enemy-authored permanent transformations are rejected.
+- `status` accepts `behavior` (`stunned`, `confused`, `frightened`, `charmed`, `berserk`), `stacks`/`maxStacks`, `damageResource`, and `willpowerOutcome` for progressive morale effects.
 - The engine validates and applies those primitives, consumes the action/uses, and writes the combat log.
 
+Enemy special abilities use the same separation: the tactical agent may only **declare** a special skill and target. The framework resolves it separately, validates every effect, and applies it inline in action order. The enemy agent never emits effects or invents outcomes.
+
 This keeps token usage limited to the rare ability that actually needs adjudication; ordinary rounds never call the resolver.
+
+### Willpower abilities
+
+Authoring examples:
+
+```text
+Willpower: 8/8
+Abilities: Dread Wail (Will damage 2d6, 6 cells, 1/1; on Willpower break: flee)
+Abilities: Psychic Lance (2d6 HP + 1d6 Willpower, 8 cells, 1/1)
+Abilities: Mind Ward (Will heal 1d6, self, 1/1)
+```
+
+Mechanical fields:
+
+```json
+{
+  "name": "Dread Wail",
+  "kind": "attack",
+  "resource": "willpower",
+  "damage": "2d6",
+  "willpowerOutcome": "flee",
+  "range": 6,
+  "maxUses": 1
+}
+```
+
+`resource: "both"` uses `damage` for HP and `willpowerDamage` for Willpower. The engine uses one attack roll; a critical doubles each damage pool. Basic attacks use `attackResource` / `willpowerDamage` / `attackWillpowerOutcome`. The agent cannot choose to redirect an ordinary attack into Willpower.
 
 ### Combat override
 
@@ -130,12 +165,23 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
   "items": {
     "usableKeywords": ["potion", "scroll", "bomb"],
     "healingKeywords": ["potion", "heal", "cure"],
+    "willpowerHealingKeywords": ["willpower", "morale", "resolve"],
     "specialItemKeywords": ["scroll", "bomb", "poison"]
+  },
+  "willpower": {
+    "damageKeywords": ["willpower", "morale", "resolve"],
+    "outcomeRules": [
+      { "outcome": "flee", "keywords": ["fear", "terror", "panic"] },
+      { "outcome": "switch_side", "keywords": ["dominate", "charm", "seduce"] },
+      { "outcome": "incapacitate", "keywords": ["sleep", "stun", "paralyze"] },
+      { "outcome": "surrender", "keywords": ["surrender", "yield", "cower"] }
+    ],
+    "complexKeywords": ["summon", "terrain", "transform", "polymorph"]
   }
 }
 ```
 
-`skillRules` are evaluated in order; the first keyword match decides `heal`, `buff`, or `special`, and unmatched abilities become `attack`. The `buff` block sets the actual AC bonus, attack bonus, and duration applied by parsed buffs. Inventory keywords decide which lines become usable healing items versus special items. Invalid JSON falls back to the shipped rules and shows an error in the settings tab. Changes apply to the next encounter.
+`skillRules` are evaluated in order; the first keyword match decides `heal`, `buff`, or `special`, and unmatched abilities become `attack`. The `buff` block sets the actual AC bonus, attack bonus, and duration applied by parsed buffs. Inventory keywords decide which lines become usable healing items versus special items. `willpower` maps mental/morale keywords to break outcomes. Invalid JSON falls back to the shipped rules and shows an error in the settings tab. Changes apply to the next encounter.
 
 ### Narrator tool
 
@@ -195,11 +241,12 @@ The agent never mutates the board. It receives a JSON game state and returns a d
       "side": "enemy",
       "x": 12, "y": 7,
       "hp": 12, "maxHp": 12, "ac": 13,
+      "willpower": 6, "maxWillpower": 6, "willpowerSave": 1,
       "attackBonus": 5, "attackRange": 6, "damage": "1d6+2",
       "speed": 6, "movementUsed": 0, "movementLeft": 6,
       "actionUsed": false, "bonusUsed": false,
       "statuses": [], "stats": { "str": 10, "dex": 14 },
-      "skills": [{ "id": "aimed-shot", "name": "Aimed Shot", "kind": "attack", "range": 6, "damage": "1d8", "uses": 2, "maxUses": 2 }],
+      "skills": [{ "id": "aimed-shot", "name": "Aimed Shot", "kind": "attack", "resource": "hp", "range": 6, "damage": "1d8", "uses": 2, "maxUses": 2 }],
       "items": []
     }
   ],
@@ -306,7 +353,8 @@ When combat ends:
 
 | File | Responsibility |
 |---|---|
-| `src/features/tactical-combat/tactical-combat-constants.js` | Terrain, action types, grid presets, themes, defaults. |
+| `tactical-combat-constants.js` | Terrain, action types, grid presets, themes, defaults. |
+| `tactical-combat-willpower.js` | Willpower vocabulary, derived max values, resource/outcome normalization. |
 | `tactical-combat-prompts.js` | Shipped prompt templates + placeholder renderer. |
 | `tactical-combat-actions.js` | Catalogue validation, response parsing, action normalization/allow-lists. |
 | `tactical-combat-engine.js` | Pure grid/dice/rules engine: terrain, placement, movement, LOS, attacks, skills, items, turn flow, outcomes, agent state. |
@@ -329,7 +377,7 @@ Integration points: `index.js` (init, connection binder, chat switch), `narrativ
 npx vitest run --pool=threads
 ```
 
-The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, and settings/UI contracts.
+The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, settings/UI contracts, Willpower derivation/breaks, side switching, transformations, and enemy special resolution.
 
 > On Android/Termux the default Vitest `forks` pool cannot spawn workers; use `--pool=threads`. The `vitest.config.js` in this fork sets `pool: 'threads'` so `npm test` works there too.
 
@@ -342,3 +390,5 @@ The tactical suites cover terrain/grid generation, placement, movement and diffi
 - The memo parser is tolerant but heuristic; it prioritizes listed totals (`Total AC`, melee/ranged attack values) and falls back to derived values.
 - Enemy `[COMBAT]` skill text is parsed heuristically; ambiguous abilities may become a generic attack or buff.
 - Automatic narration calls the main generation API; if another generation is running, the queued result waits for the next message instead.
+- Willpower transformations and side changes are encounter-scoped and revert after combat by default. Permanent changes must be narrated and applied by the State Tracker.
+- Enemy special resolution is capped at two special abilities per activation batch to keep token usage bounded.

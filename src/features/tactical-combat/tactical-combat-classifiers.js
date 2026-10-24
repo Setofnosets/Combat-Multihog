@@ -5,6 +5,7 @@
  *
  * The config controls:
  *  - skill kind precedence (heal / special / buff / fallback attack)
+ *  - Willpower damage/outcome keywords for mental and morale effects
  *  - buff AC/attack modifiers and duration
  *  - ranged and bonus-action detection
  *  - inventory consumable / healing / special-item keywords
@@ -45,7 +46,18 @@ export const DEFAULT_LOADOUT_CLASSIFIER_CONFIG = {
     items: {
         usableKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'scroll', 'bomb', 'flask', 'powder', 'poison', 'poultice', 'ration', 'food', 'vial', 'restoration', 'curative', 'draught'],
         healingKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'heal', 'cure', 'restore', 'poultice', 'ration', 'food'],
+        willpowerHealingKeywords: ['willpower', 'morale', 'resolve', 'courage', 'spirit'],
         specialItemKeywords: ['scroll', 'bomb', 'flask', 'powder', 'poison', 'vial', 'restoration', 'curative', 'draught', 'curse', 'malady', 'condition'],
+    },
+    willpower: {
+        damageKeywords: ['willpower', 'will damage', 'morale', 'resolve'],
+        outcomeRules: [
+            { outcome: 'flee', keywords: ['fear', 'terror', 'frighten', 'panic', 'dread', 'demoraliz', 'intimidat', 'despair'] },
+            { outcome: 'switch_side', keywords: ['dominate', 'mind control', 'charm', 'seduce', 'possess', 'compel', 'enslave'] },
+            { outcome: 'incapacitate', keywords: ['sleep', 'slumber', 'hypnot', 'stun', 'paralyze', 'daze', 'coma'] },
+            { outcome: 'surrender', keywords: ['surrender', 'yield', 'submit', 'cower'] },
+        ],
+        complexKeywords: ['summon', 'conjure', 'terrain', 'vein', 'teleport', 'banish', 'illusion', 'wall of', 'pillar', 'polymorph', 'transform', 'create'],
     },
 };
 
@@ -121,7 +133,23 @@ export function normalizeClassifierConfig(raw) {
         items: {
             usableKeywords: [...new Set([...keywordList(items.usableKeywords, defaults.items.usableKeywords), ...defaults.items.usableKeywords])],
             healingKeywords: [...new Set([...keywordList(items.healingKeywords, defaults.items.healingKeywords), ...defaults.items.healingKeywords])],
+            willpowerHealingKeywords: [...new Set([...keywordList(items.willpowerHealingKeywords, defaults.items.willpowerHealingKeywords), ...defaults.items.willpowerHealingKeywords])],
             specialItemKeywords: [...new Set([...keywordList(items.specialItemKeywords, defaults.items.specialItemKeywords), ...defaults.items.specialItemKeywords])],
+        },
+        willpower: {
+            damageKeywords: keywordList(value.willpower?.damageKeywords, defaults.willpower.damageKeywords),
+            outcomeRules: Array.isArray(value.willpower?.outcomeRules)
+                ? value.willpower.outcomeRules
+                    .filter(rule => rule && typeof rule === 'object' && keywordList(rule.keywords, []).length)
+                    .slice(0, 8)
+                    .map(rule => ({
+                        outcome: ['defeat', 'flee', 'switch_side', 'incapacitate', 'surrender'].includes(String(rule.outcome || '').toLowerCase())
+                            ? String(rule.outcome).toLowerCase()
+                            : 'defeat',
+                        keywords: keywordList(rule.keywords, []),
+                    }))
+                : defaults.willpower.outcomeRules,
+            complexKeywords: keywordList(value.willpower?.complexKeywords, defaults.willpower.complexKeywords),
         },
     };
     return { ok: true, config, error: '', usingDefault: false };
@@ -172,6 +200,23 @@ export function classifyAbility(name, description, config = DEFAULT_LOADOUT_CLAS
         if (matchesAny(text, rule.keywords)) return rule.kind;
     }
     return 'attack';
+}
+
+/**
+ * Resolve a source's terminal Willpower outcome from explicit text/keywords.
+ * Explicit "on Willpower break: X" syntax is handled by the parser first.
+ * @param {string} name
+ * @param {string} description
+ * @param {object} [config]
+ * @returns {'defeat'|'flee'|'switch_side'|'incapacitate'|'surrender'}
+ */
+export function willpowerOutcomeFor(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
+    const text = `${name || ''} ${description || ''}`;
+    const rules = config?.willpower?.outcomeRules || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.willpower.outcomeRules;
+    for (const rule of rules || []) {
+        if (matchesAny(text, rule.keywords)) return rule.outcome;
+    }
+    return 'defeat';
 }
 
 export function buffModifiers(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {

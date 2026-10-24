@@ -2,6 +2,15 @@
 
 All notable changes to the **Multihog D&D Framework** will be documented in this file.
 
+## [2026.10.2] - 2026-10-23
+
+### Added
+- Tactical Combat now tracks a secondary **Willpower** morale pool, separate from HP and from the `Saves: ... Will +X` saving throw. Max Willpower derives deterministically from HP, WIS, and the Will save, with explicit `Willpower: current/max` and architect overrides; `maxWillpower: 0` marks a mindless/immune combatant.
+- Willpower-targeting skills/items use `resource: "willpower"` or `"both"` with `willpowerOutcome` (`defeat`, `flee`, `switch_side`, `incapacitate`, `surrender`). Ordinary attacks never damage Willpower. Willpower recovers to max when combat ends.
+- The special resolver supports Willpower damage/healing, terminal `defeat` effects, temporary transformations of stats/skills/items/inventory, side switching, progressive status stacks, and mental status behaviors (stunned, confused, frightened, charmed, berserk).
+- Enemy special abilities are declaration-only: the tactical agent selects a skill and target, and the framework resolves and validates the effect separately, inline in action order. Enemy-authored permanent transformations are rejected.
+- The State Tracker prompts, Combat Profile guidance, memo renderer, board tokens/cards, action log, and narration outcome now display and preserve Willpower.
+
 ## [2026.9.25] - 2026-09-27
 
 ### Fixed

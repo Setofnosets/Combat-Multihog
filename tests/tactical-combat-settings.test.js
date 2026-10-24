@@ -202,6 +202,15 @@ describe('Tactical Combat settings tab contract', () => {
         expect(style).toContain('color-mix');
     });
 
+    it('ships Willpower tracker prompts, classifier defaults, and board styles', () => {
+        expect(defaultsSource).toContain('<willpower_logic>');
+        expect(constantsSource).toContain('Willpower: current/max');
+        expect(constantsSource).toContain('WILLPOWER TARGETING');
+        expect(settingsHtml).toContain('willpower');
+        expect(style).toContain('.rt-tc-wpbar');
+        expect(style).toContain('.rt-tc-token-wp');
+    });
+
     it('disables upstream auto-update so the fork is not overwritten', () => {
         expect(manifest.auto_update).toBe(false);
         expect(manifest.display_name).toContain('Tactical Combat');

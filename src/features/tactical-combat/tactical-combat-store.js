@@ -9,6 +9,7 @@
 
 import { saveSettings } from '../../app/runtime-bridge.js';
 import { getActiveChatId } from '../../../state-manager.js';
+import { hydrateEncounterState } from './tactical-combat-engine.js';
 
 export const TC_BY_CHAT_KEY = 'tacticalCombatByChat';
 const MAX_STORED_CHATS = 16;
@@ -54,7 +55,7 @@ export function getEncounterForChat(chatId, settings) {
     const map = ensureMap(settings);
     const state = map[chatId];
     if (!state || typeof state !== 'object' || !state.grid || !Array.isArray(state.units)) return null;
-    return state;
+    return hydrateEncounterState(state);
 }
 
 /**
