@@ -114,19 +114,25 @@ function renderInitiativeRail(state) {
     return `<div class="rt-tc-initiative" aria-label="Initiative order">${items}</div>`;
 }
 
-export function buildCellMarkup(state, unit, x, y, view = {}) {
+export function buildCellMarkup(state, unit, x, y, view = {}, corpse = null) {
     const terrainId = state.terrain?.[y]?.[x] || 'floor';
     const terrain = TC_TERRAIN[terrainId] || TC_TERRAIN.floor;
     const key = `${x},${y}`;
     const reachable = view.reachableCells instanceof Set ? view.reachableCells.has(key) : Array.isArray(view.reachableCells) && view.reachableCells.includes(key);
     const target = view.targetCells instanceof Set ? view.targetCells.has(key) : Array.isArray(view.targetCells) && view.targetCells.includes(key);
-    const occupied = !!unit;
-    const selected = occupied && view.selectedUnitId === unit.id;
-    const active = occupied && view.activeUnitId === unit.id;
+    // A defeated combatant is scenery, not an occupant. Callers may still pass
+    // one as `unit`, so normalize it into the corpse slot defensively.
+    const liveUnit = unit && !unit.defeated && !unit.fled ? unit : null;
+    const corpseUnit = corpse || (unit?.defeated ? unit : null);
+    const occupied = !!liveUnit;
+    const hasCorpse = !occupied && !!corpseUnit;
+    const selected = occupied && view.selectedUnitId === liveUnit.id;
+    const active = occupied && view.activeUnitId === liveUnit.id;
     const classes = [
         'rt-tc-cell',
         `rt-tc-terrain-${terrain.id}`,
         occupied ? 'is-occupied' : '',
+        hasCorpse ? 'has-corpse' : '',
         reachable ? 'is-reachable' : '',
         target ? 'is-target' : '',
         selected ? 'is-selected' : '',
@@ -138,40 +144,43 @@ export function buildCellMarkup(state, unit, x, y, view = {}) {
     if (occupied) {
         const tokenClasses = [
             'rt-tc-token',
-            `rt-tc-side-${unit.side}`,
-            unit.defeated ? 'is-defeated' : '',
-            unit.fled ? 'is-fled' : '',
+            `rt-tc-side-${liveUnit.side}`,
             selected ? 'is-selected' : '',
             active ? 'is-active' : '',
         ].filter(Boolean).join(' ');
-        const hpWidth = pct(unit.hp, unit.maxHp);
-        const wpWidth = unit.maxWillpower ? pct(unit.willpower, unit.maxWillpower) : 0;
-        const tokenTitle = `${unit.name}${unit.classLabel ? ` (${unit.classLabel})` : ''} — ${unit.hp}/${unit.maxHp} HP${unit.maxWillpower ? `, ${unit.willpower}/${unit.maxWillpower} Willpower` : ''}, AC ${unit.ac}${unit.defeated ? unit.defeatCause === 'willpower' ? ', Willpower broken' : ', defeated' : ''}${unit.fled ? ', fled' : ''}`;
-        if (unit.defeated) {
-            const broken = unit.defeatCause === 'willpower';
-            content += `<span class="${broken ? 'rt-tc-broken' : 'rt-tc-corpse'}" title="${escapeHtml(tokenTitle)}" data-tc-select-unit="${escapeHtml(unit.id)}">${broken ? 'z' : '✕'}</span>`;
-        } else if (!unit.fled) {
-            content += `<span class="${tokenClasses}" style="--tc-unit:${escapeHtml(unit.color || TC_SIDE_COLORS[unit.side])}" data-tc-select-unit="${escapeHtml(unit.id)}" title="${escapeHtml(tokenTitle)}">
-                <span class="rt-tc-token-glyph">${escapeHtml(unit.glyph || unit.name.slice(0, 2).toUpperCase())}</span>
-                <span class="rt-tc-token-hp" aria-hidden="true"><i style="width:${hpWidth}%"></i></span>
-                ${unit.maxWillpower ? `<span class="rt-tc-token-wp" aria-hidden="true"><i style="width:${wpWidth}%"></i></span>` : ''}
-                ${(unit.statuses || []).length ? `<span class="rt-tc-token-status" aria-hidden="true">●</span>` : ''}
-            </span>`;
-        }
+        const hpWidth = pct(liveUnit.hp, liveUnit.maxHp);
+        const wpWidth = liveUnit.maxWillpower ? pct(liveUnit.willpower, liveUnit.maxWillpower) : 0;
+        const tokenTitle = `${liveUnit.name}${liveUnit.classLabel ? ` (${liveUnit.classLabel})` : ''} — ${liveUnit.hp}/${liveUnit.maxHp} HP${liveUnit.maxWillpower ? `, ${liveUnit.willpower}/${liveUnit.maxWillpower} Willpower` : ''}, AC ${liveUnit.ac}`;
+        content += `<span class="${tokenClasses}" style="--tc-unit:${escapeHtml(liveUnit.color || TC_SIDE_COLORS[liveUnit.side])}" data-tc-select-unit="${escapeHtml(liveUnit.id)}" title="${escapeHtml(tokenTitle)}">
+            <span class="rt-tc-token-glyph">${escapeHtml(liveUnit.glyph || liveUnit.name.slice(0, 2).toUpperCase())}</span>
+            <span class="rt-tc-token-hp" aria-hidden="true"><i style="width:${hpWidth}%"></i></span>
+            ${liveUnit.maxWillpower ? `<span class="rt-tc-token-wp" aria-hidden="true"><i style="width:${wpWidth}%"></i></span>` : ''}
+            ${(liveUnit.statuses || []).length ? `<span class="rt-tc-token-status" aria-hidden="true">●</span>` : ''}
+        </span>`;
+    } else if (hasCorpse) {
+        const broken = corpseUnit.defeatCause === 'willpower';
+        const corpseTitle = `${corpseUnit.name}${corpseUnit.classLabel ? ` (${corpseUnit.classLabel})` : ''} — ${broken ? 'Willpower broken' : 'defeated'}`;
+        content += `<span class="${broken ? 'rt-tc-broken' : 'rt-tc-corpse'}" title="${escapeHtml(corpseTitle)}" aria-hidden="true">${broken ? 'z' : '✕'}</span>`;
     }
     const coord = view.showCoords ? `<span class="rt-tc-coords">${x},${y}</span>` : '';
-    const label = `${terrain.label} at ${x},${y}${occupied ? `; ${unit.name}` : ''}${reachable ? '; reachable' : ''}${target ? '; targetable' : ''}`;
+    const label = `${terrain.label} at ${x},${y}${occupied ? `; ${liveUnit.name}` : hasCorpse ? `; defeated ${corpseUnit.name}` : ''}${reachable ? '; reachable' : ''}${target ? '; targetable' : ''}`;
     return `<button type="button" class="${classes}" data-tc-cell="${key}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}" style="--tc-terrain:${terrain.color};--tc-terrain-fg:${terrain.textColor}">${content}${coord}</button>`;
 }
 
 function renderGrid(state, view) {
-    const selected = state.units.find(unit => unit.id === view.selectedUnitId) || null;
-    void selected;
-    const byCell = new Map(state.units.filter(unit => !unit.fled).map(unit => [`${unit.x},${unit.y}`, unit]));
+    const liveByCell = new Map();
+    const corpseByCell = new Map();
+    for (const unit of state.units) {
+        if (unit.fled) continue;
+        const key = `${unit.x},${unit.y}`;
+        if (unit.defeated) corpseByCell.set(key, unit);
+        else liveByCell.set(key, unit);
+    }
     const cells = [];
     for (let y = 0; y < state.grid.rows; y += 1) {
         for (let x = 0; x < state.grid.cols; x += 1) {
-            cells.push(buildCellMarkup(state, byCell.get(`${x},${y}`) || null, x, y, view));
+            const key = `${x},${y}`;
+            cells.push(buildCellMarkup(state, liveByCell.get(key) || null, x, y, view, corpseByCell.get(key) || null));
         }
     }
     return `<div class="rt-tc-grid-wrap">
@@ -197,8 +206,8 @@ function renderLegend(state, view = {}) {
 }
 
 function renderUnitCard(state, view) {
-    const unit = state.units.find(candidate => candidate.id === view.selectedUnitId)
-        || state.units.find(candidate => candidate.id === view.activeUnitId)
+    const unit = state.units.find(candidate => candidate.id === view.selectedUnitId && !candidate.defeated && !candidate.fled)
+        || state.units.find(candidate => candidate.id === view.activeUnitId && !candidate.defeated && !candidate.fled)
         || state.units.find(candidate => candidate.side === 'player' && !candidate.defeated && !candidate.fled)
         || null;
     if (!unit) {

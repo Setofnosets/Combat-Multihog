@@ -11501,7 +11501,7 @@ body.rt-tc-modal-open {
     background: rgba(0, 0, 0, 0.28);
     color: rgba(255, 255, 255, 0.38);
     font-size: 12px;
-    cursor: pointer;
+    pointer-events: none;
     z-index: 1;
 }
 
@@ -11517,7 +11517,7 @@ body.rt-tc-modal-open {
     color: #d8c7ff;
     font-size: 12px;
     font-weight: 800;
-    cursor: pointer;
+    pointer-events: none;
     z-index: 1;
 }
 

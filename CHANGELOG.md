@@ -15,6 +15,7 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 
 ### Fixed
 - Dormant and present encounters now close promptly when resolved narratively. The State Tracker combat prompt defines explicit `END_COMBAT` conditions for successful parley, bribery, surrender, withdrawal, and departed combatants; legacy/custom combat prompts receive state and resolution invariants without being overwritten. Merge-time cleanup accepts bare or trailing `END_COMBAT`, closes rosters whose previously active enemies are all resolved, replaces duplicate `[COMBAT]` blocks, and treats stale/no-enemy rosters as ended. Hybrid RNG, Combat API override, and lorebook active-combat context now gate on engaged combat rather than raw `[COMBAT]` presence.
+- Defeated combatants no longer occupy their board tile for interaction. Corpse markers are non-interactive, movement/deployment into a corpse tile follows the engine's non-blocking rules, and a live unit sharing a corpse tile remains visible, selectable, and attackable.
 
 ## [2026.9.25] - 2026-09-27
 
