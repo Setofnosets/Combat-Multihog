@@ -1,6 +1,43 @@
 const COMBATANT_HP_RX = /^(.+?):\s*([+-]?[\d,]+|\?+)(?:\/([\d,]+|\?+))?\s*HP\b(.*)$/i;
 const RESOLVED_STATUS_RX = /(?:^|\|)\s*Status\s*:\s*(?:(?:\(\([^)]*\)\)|\([^)]*\))\s*)*(?:defeated|dead)\b/i;
 const COMBAT_SIDE_HEADER_RX = /^(ENEMIES|(?:NON[-\s]+PARTY\s+)?ALLIES)\s*:?\s*$/i;
+const COMBAT_STATE_RX = /^\s*COMBAT[ _-]?STATE\s*:\s*([A-Za-z_-]+)\s*$/im;
+const COMBAT_ROUND_RX = /^\s*COMBAT ROUND\s+(\d+)\s*$/im;
+
+const DORMANT_COMBAT_STATES = new Set([
+    'dormant', 'parley', 'parle', 'negotiation', 'negotiating', 'standoff',
+    'social', 'noncombat', 'non-combat', 'precombat', 'pre-combat', 'peaceful',
+]);
+
+const ENGAGED_COMBAT_STATES = new Set([
+    'hostile', 'active', 'engaged', 'combat', 'fighting', 'battle',
+]);
+
+/**
+ * Read the explicit engagement state of the memo's [COMBAT] block.
+ * @param {string} memo
+ * @returns {'absent'|'ended'|'dormant'|'engaged'}
+ */
+export function getCombatMemoState(memo) {
+    const match = String(memo || '').match(/\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i);
+    if (!match) return 'absent';
+    const body = String(match[1] || '').trim();
+    if (!body || /^END_COMBAT$/i.test(body)) return 'ended';
+
+    const explicit = body.match(COMBAT_STATE_RX)?.[1]?.toLowerCase();
+    if (explicit) {
+        if (DORMANT_COMBAT_STATES.has(explicit)) return 'dormant';
+        if (ENGAGED_COMBAT_STATES.has(explicit)) return 'engaged';
+        if (explicit === 'ended' || explicit === 'resolved') return 'ended';
+    }
+
+    // Hand-edited / backward-compatible shorthand: round 0 means a staged
+    // roster, not a fight. Legacy blocks without any state header remain
+    // engaged so existing chats keep their current behavior.
+    const round = Number(body.match(COMBAT_ROUND_RX)?.[1]);
+    if (Number.isFinite(round) && round <= 0) return 'dormant';
+    return 'engaged';
+}
 
 /**
  * @param {string} line

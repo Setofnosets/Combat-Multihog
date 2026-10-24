@@ -25,6 +25,7 @@ import {
 } from '../src/features/tactical-combat/tactical-combat-actions.js';
 import {
     applyAction,
+    buildAgentGameState,
     completeAgentTurn,
     createEncounterState,
     endTurn,
@@ -277,6 +278,51 @@ describe('tactical encounter architect payloads', () => {
         expect(normalized.encounter.enemies[0].skills[0].effectTemplate[0].targetId).toBe('$target');
     });
 
+    it('carries architect Willpower metadata end-to-end into the board and agent state', () => {
+        const normalized = normalizeEncounterPayload({
+            title: 'Wail in the Dark',
+            enemies: [{
+                name: 'Wailing Horror',
+                maxHp: 20,
+                maxWillpower: 8,
+                ac: 12,
+                attackBonus: 4,
+                damage: '1d6+1',
+                skills: [{ name: 'Dread Wail', kind: 'attack', resource: 'willpower', range: 6, damage: '2d6', willpowerOutcome: 'flee', maxUses: 1 }],
+            }],
+        });
+        const state = createEncounterState({
+            seed: 1,
+            grid: { rows: 8, cols: 8 },
+            terrainRows: Array.from({ length: 8 }, () => '........'),
+            units: normalized.encounter.enemies,
+        });
+        const enemy = state.units.find(unit => unit.name === 'Wailing Horror');
+        expect(enemy.maxWillpower).toBe(8);
+        expect(enemy.skills[0]).toMatchObject({ resource: 'willpower', willpowerOutcome: 'flee' });
+        const payload = buildAgentGameState(state, [enemy.id]);
+        expect(payload.units.find(unit => unit.id === enemy.id).skills[0]).toMatchObject({
+            resource: 'willpower',
+            willpowerOutcome: 'flee',
+        });
+    });
+
+    it('rejects architect skills that use both pools without a Willpower damage expression', () => {
+        const normalized = normalizeEncounterPayload({
+            title: 'Broken Metadata',
+            enemies: [{
+                name: 'Wailing Horror',
+                maxHp: 20,
+                ac: 12,
+                attackBonus: 4,
+                damage: '1d6',
+                skills: [{ name: 'Psychic Lance', kind: 'attack', resource: 'both', damage: '2d6' }],
+            }],
+        });
+        expect(normalized.ok).toBe(false);
+        expect(normalized.errors.join(' ')).toMatch(/missing willpowerDamage/i);
+    });
+
     it('resolves an enemy special skill declaration in the agent turn after the tactical answer', async () => {
         sendStateRequest.mockReset();
         const state = makeState();
@@ -386,6 +432,17 @@ describe('tactical local AI & agent turn execution', () => {
         expect(completion.phase).toBe('player');
         expect(state.round).toBe(2);
         expect(getUnitById(state, 'pc-1').movementUsed).toBe(0);
+    });
+
+    it('honours the configured special-resolution cap', async () => {
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-2');
+        enemy.skills = [{ id: 'dread-wail', name: 'Dread Wail', kind: 'special', range: 6, maxUses: 1, uses: 1, description: 'A fearful wail.' }];
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValueOnce('{"actions":[{"type":"skill","unitId":"enemy-2","skillId":"dread-wail","targetId":"pc-1"}]}');
+        const result = await runAgentTurn(state, ['enemy-2'], { ...SETTINGS, tacticalCombatMaxSpecialResolutions: 0 }, { rng: () => 0.99 });
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        expect(result.rejected.some(entry => /Special resolution limit/i.test(entry.error))).toBe(true);
     });
 
     it('never lets the agent act for player units', async () => {

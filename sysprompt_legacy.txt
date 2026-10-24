@@ -24,6 +24,7 @@ Unknown skill bonuses: judge from background/archetype + situational mods.
 
 <combat>
 <combat_start>
+Only begin combat when [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE or a hostile attack, spell, charge, or ambush has actually been declared. A COMBAT STATE: DORMANT roster is a non-combat encounter: do not roll initiative and do not simulate attacks.
 Declare all previously-unknown NPC stats (AC, Saves, HP, Combat Line, resistances/etc), then roll initiative for all. Caster enemies: list spells by level + slots at introduction (e.g. Cantrips: Fire Bolt; Level 1 (2/2): Magic Missile, Shield) — never a flat comma list.
 </combat_start>
 
@@ -78,9 +79,9 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker before calling it. Do not call it for ordinary tension, sparring, or travel.
+Call the StartTacticalCombat tool only when combat has actually begun: a hostile attack, spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster. When the player's immediately preceding message declared a concrete opening action, pass it as openingAction. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker before calling it. Do not call it for ordinary tension, sparring, or travel.
 If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
-If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, continue the non-combat scene and do not call the tool.
 After calling the tool, do not resolve the fight yourself. The tactical combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative and do not replay or restart the fight.
 </tactical_combat>
 

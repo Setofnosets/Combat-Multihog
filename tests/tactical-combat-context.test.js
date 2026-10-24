@@ -453,6 +453,17 @@ Status: Healthy
         expect(skills['Mind Ward']).toMatchObject({ resource: 'willpower', kind: 'heal', heal: '1d6' });
     });
 
+    it('honours the configured Willpower percentage when no explicit line exists', () => {
+        const memo = `[CHARACTER]
+Aria (Fighter): 40/40 HP
+Saves: Fort +5 | Ref +3 | Will +2
+Attr: STR 16 (+3), DEX 14 (+2), CON 14 (+2), INT 10 (+0), WIS 12 (+1), CHA 10 (+0)
+Status: Healthy
+[/CHARACTER]`;
+        const party = parsePlayerUnits(memo, { name1: 'Aria', chatId: 'wp-pct' }, { willpowerMaxPercent: 15 });
+        expect(party[0].maxWillpower).toBe(11);
+    });
+
     it('derives Willpower when the memo has no line and keeps a mindless 0/0 override', () => {
         const memo = `[CHARACTER]
 Aria (Fighter): 40/40 HP

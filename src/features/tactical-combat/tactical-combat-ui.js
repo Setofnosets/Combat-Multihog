@@ -799,7 +799,9 @@ async function runCombatFinalization(state, settings, options = {}) {
             setBusy(true, 'Updating the State Tracker with the final combat state…');
             render();
             await globalThis._rpgRunStateModelPass('', false, null, {
-                extraContext: buildCombatTrackerReport(state),
+                extraContext: buildCombatTrackerReport(state, {
+                    recoverWillpower: settings.tacticalCombatWillpowerRecoverAfterCombat !== false,
+                }),
                 extraInstruction: 'The tactical board is authoritative. Apply this final state to the memo, close [COMBAT], and do not re-adjudicate the encounter.',
                 timeoutMs: 30000,
             });

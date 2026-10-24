@@ -10,6 +10,8 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 - The special resolver supports Willpower damage/healing, terminal `defeat` effects, temporary transformations of stats/skills/items/inventory, side switching, progressive status stacks, and mental status behaviors (stunned, confused, frightened, charmed, berserk).
 - Enemy special abilities are declaration-only: the tactical agent selects a skill and target, and the framework resolves and validates the effect separately, inline in action order. Enemy-authored permanent transformations are rejected.
 - The State Tracker prompts, Combat Profile guidance, memo renderer, board tokens/cards, action log, and narration outcome now display and preserve Willpower.
+- Tactical combat now distinguishes an encounter roster from an active fight through `COMBAT STATE: DORMANT/HOSTILE/ACTIVE`. Enemy presence, parley, intimidation, and surrender offers no longer auto-start the board; only an actual hostile action or an engaged state does. Dormant rosters also no longer switch the combat model, suppress dice tools, or pause map evolution.
+- Tactical settings now expose automatic startup on hostile actions, derived Willpower percentage, Willpower recovery after combat, and the maximum number of enemy special resolutions per activation.
 
 ## [2026.9.25] - 2026-09-27
 

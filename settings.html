@@ -2436,6 +2436,41 @@
 
                     <div class="inline-drawer">
                         <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-brain" style="margin-right: 6px; opacity: 0.65;"></i>
+                            <b>Encounter &amp; Willpower</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <label class="checkbox_label" for="rpg_tactical_combat_auto_start_on_hostility">
+                                <input type="checkbox" id="rpg_tactical_combat_auto_start_on_hostility" checked />
+                                <span>Start tactical combat automatically on hostile actions</span>
+                            </label>
+                            <div class="rt-tc-settings-note">When enabled, the narrator opens the board only after a real attack, hostile spell, charge, ambush, or an explicit COMBAT STATE: HOSTILE/ACTIVE. Enemy presence, threats, negotiation, intimidation, and surrender offers stay in normal roleplay. Disable to require the Start encounter button.</div>
+
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_willpower_percent">Derived Willpower as % of max HP</label>
+                                <input type="number" id="rpg_tactical_combat_willpower_percent" class="text_pole" min="10" max="60" step="5" value="30" />
+                                <div class="rt-tc-settings-note">Used only when a character has no explicit <code>Willpower: current/max</code> line or architect <code>maxWillpower</code>. Explicit values always win. The formula also adds positive WIS and Will-save modifiers and keeps Willpower below HP. Applies to newly started encounters.</div>
+                            </div>
+
+                            <label class="checkbox_label" for="rpg_tactical_combat_willpower_recover">
+                                <input type="checkbox" id="rpg_tactical_combat_willpower_recover" checked />
+                                <span>Recover Willpower to full after combat</span>
+                            </label>
+                            <div class="rt-tc-settings-note">Disable to persist current Willpower loss in <code>[CHARACTER]</code>/<code>[PARTY]</code>. The board still keeps its final values for review.</div>
+
+                            <div class="rt-tc-field">
+                                <label for="rpg_tactical_combat_max_special_resolutions">Maximum special resolutions per enemy activation</label>
+                                <input type="number" id="rpg_tactical_combat_max_special_resolutions" class="text_pole" min="0" max="4" step="1" value="2" />
+                                <div class="rt-tc-settings-note">Limits how many unique special abilities an enemy batch may send through the resolver. Deterministic Willpower attacks and pre-authored effect templates do not use a resolution call.</div>
+                            </div>
+
+                            <div class="rt-tc-settings-note">Willpower keyword and break-outcome rules are editable under <b>Loadout classifiers</b> below. Fear, charm, sleep, and morale keywords map to deterministic outcomes there.</div>
+                        </div>
+                    </div>
+
+                    <div class="inline-drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
                             <i class="fa-solid fa-plug-circle-bolt" style="margin-right: 6px; opacity: 0.65;"></i>
                             <b>Combat agent connection</b>
                             <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>

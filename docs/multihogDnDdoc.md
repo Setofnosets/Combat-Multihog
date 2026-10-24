@@ -342,7 +342,7 @@ Benching makes it possible to give "quests" to party members, enabling a kind of
 
 #### `[COMBAT]`
 
-Active enemies, combat round counter, per-combatant HP and Willpower, Att/def, saves, abilities, spells (casters), other traits, status. Martial vs caster layouts must not be mixed on one enemy. Tier bands (Minion → Legendary) guide invented stats. End combat with:
+Active enemies, combat round counter, `COMBAT STATE: DORMANT/HOSTILE/ACTIVE`, per-combatant HP and Willpower, Att/def, saves, abilities, spells (casters), other traits, status. A DORMANT roster is a present encounter, not an active fight. Martial vs caster layouts must not be mixed on one enemy. Tier bands (Minion → Legendary) guide invented stats. End combat with:
 
 ```
 [COMBAT]END_COMBAT[/COMBAT]
