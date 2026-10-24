@@ -13,6 +13,7 @@
 import { parseCombatants } from '../../state/combat-persistence.js';
 
 const COMBAT_BLOCK_RX = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i;
+const COMBAT_BLOCK_RX_GLOBAL = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi;
 const HP_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(.{1,160}?):\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?\s*HP\b(.*)$/i;
 const WP_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(Willpower|Will)\s*:\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?(.*)$/i;
 
@@ -147,7 +148,7 @@ export function replaceCombatBlock(memo, block) {
     const next = String(block || '').trim();
     if (!next) return source;
     if (COMBAT_BLOCK_RX.test(source)) {
-        return source.replace(COMBAT_BLOCK_RX, () => next).replace(/\n{3,}/g, '\n\n').trim();
+        return source.replace(COMBAT_BLOCK_RX_GLOBAL, () => next).replace(/\n{3,}/g, '\n\n').trim();
     }
     return `${source.trimEnd()}${source.trim() ? '\n\n' : ''}${next}`.trim();
 }
@@ -292,7 +293,7 @@ export function clearStaleCombatMemo(previousState, settings) {
     }
     if (!stale) return { removed: false, memo };
 
-    settings.currentMemo = memo.replace(COMBAT_BLOCK_RX, '').replace(/\n{3,}/g, '\n\n').trim();
+    settings.currentMemo = memo.replace(COMBAT_BLOCK_RX_GLOBAL, '').replace(/\n{3,}/g, '\n\n').trim();
     return { removed: true, memo: settings.currentMemo };
 }
 

@@ -1,5 +1,5 @@
 import { getSettings, getActiveChatId, getEffectiveRouterCampaignPrefix, persistWorldProgressionTimer, persistRouterLastRunWatermark, persistRouterLastRunTimestamp, persistMapEvolutionState, getNpcRelationshipMax, clampRelationshipValue, buildRouterRelationshipInstruction, sanitizeRouterState, adjustPromptTimestamps, DEFAULT_NPC_SECTIONS, saveChatState, computeUnpinnedActiveCount, extractCharacterBlock, extractPartyBlock, isPcCoreTarget, isAppearanceField, isEquipmentField, isCombatProfileField, getEligibleCoreFieldNames, patchLabeledSection, mergePreservedColorMarkup, expandLorebookPromptTemplate, resolveRecordCategoryTag, getEnabledRouterCategoryTags, getRouterCategoryBookSuffix, buildRouterCategoryMap } from './state-manager.js';
-import { sendStateRequest, sendAgentTurn } from './llm-client.js';
+import { sendStateRequest, sendAgentTurn, isCombatEngaged } from './llm-client.js';
 import { canCommitPassForChat, createChatCommitGuard, assertChatCommit, chatCommitResult } from './src/state/pass-affinity.js';
 import { getRequestHeaders } from '../../../../script.js';
 import { extractCurrentTimeStr, cleanMessageContent, parseInWorldTime, formatInWorldTime, findNthUserMessageStartIdx, formatAgentChatLogFromIndex, sanitizeLorebookRecordContent, parseJsonWithColorRepair } from './memo-processor.js';
@@ -116,8 +116,9 @@ function isSkeletonEntryId(entryId) {
     return isSkeletonBookName(entryId.split('::')[0]);
 }
 
-/** Extract canonical [COMBAT] block from the current memo, if present. */
+/** Extract the canonical [COMBAT] block only while combat is actually engaged. */
 function extractActiveCombatBlock(memo) {
+    if (!isCombatEngaged(memo)) return null;
     const match = memo?.match(/\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i);
     return match ? `[COMBAT]${match[1].trim()}[/COMBAT]` : null;
 }

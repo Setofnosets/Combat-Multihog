@@ -151,10 +151,11 @@ Willpower: 6/6
 [/COMBAT]
 ```
 
-- `DORMANT` — enemies are present, but no hostile action has occurred. Negotiation, intimidation, surrender, parley, and withdrawal stay here. The board does not open and initiative is not rolled.
+- `DORMANT` — enemies are present and the encounter is still unresolved, but no hostile action has occurred. Negotiation, intimidation, surrender, parley, and withdrawal stay here while the standoff continues. The board does not open and initiative is not rolled. If the encounter ends without combat, the tracker emits `END_COMBAT` and the block is removed.
 - `HOSTILE` — an attack, hostile spell, charge, or ambush was declared, or an enemy attacked. The board starts.
 - `ACTIVE` — the board owns the encounter. Board-generated memo blocks write this automatically.
 - Legacy blocks without a state header are treated as engaged for backward compatibility. `COMBAT ROUND 0` is treated as dormant.
+- A block with no unresolved enemy is treated as ended even if its state line is stale. The tracker also auto-closes a block when a re-output accounts for every previously active enemy and all are resolved. Bare or trailing `END_COMBAT` output is accepted, and duplicate `[COMBAT]` blocks are replaced together.
 
 `StartTacticalCombat` is only called for a real engagement, never for mere enemy presence, threats, standoffs, or a dormant roster. Automatic startup can be disabled in settings; the board can still be opened with **Start encounter**.
 
@@ -163,9 +164,9 @@ Willpower: 6/6
 While Tactical Combat is enabled, ordinary narrative combat is disabled:
 
 - The normal `<combat>` system-prompt section is replaced by a **TACTICAL COMBAT OVERRIDE** that forbids narrating attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-- When a fight actually begins, the narrator calls `StartTacticalCombat` immediately — it no longer waits for `[COMBAT]` to appear. If no roster exists, the encounter architect builds one from the current scene and the board seeds the memo.
+- When a fight actually begins — a hostile action is declared or `[COMBAT]` says `HOSTILE`/`ACTIVE` — the narrator calls `StartTacticalCombat` immediately. If no roster exists, the encounter architect builds one from the current scene and the board seeds the memo. Mere presence, standoffs, negotiation, and `DORMANT` rosters do not start the board.
 - The player's immediately preceding action can be passed through `openingAction` (and `surprise` for an ambush), so the declared spell or attack resolves before normal turns instead of being lost.
-- A runtime `[TACTICAL_COMBAT_OVERRIDE]` block is injected while a board encounter is active, and while `[COMBAT]` exists without a running board, so this also holds for custom sysprompts.
+- A runtime `[TACTICAL_COMBAT_OVERRIDE]` block is injected while a board encounter is active or `[COMBAT]` is engaged. A `[DORMANT_ENCOUNTER]` block is injected while the roster is dormant, telling the narrator to continue the non-combat scene without rolling initiative.
 
 ### Loadout classifiers
 

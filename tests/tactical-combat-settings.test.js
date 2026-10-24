@@ -219,6 +219,13 @@ describe('Tactical Combat settings tab contract', () => {
         expect(style).toContain('.rt-tc-token-wp');
     });
 
+    it('gates hybrid RNG and the tactical override on engaged combat', () => {
+        expect(gameSystemsSource).toContain('isCombatEngaged(settings.currentMemo)');
+        expect(gameSystemsSource).not.toContain('const inCombat = !!combatBody');
+        expect(gameSystemsSource).not.toContain('If [COMBAT] is already present and no tactical encounter is active');
+        expect(gameSystemsSource).toContain('COMBAT STATE: DORMANT roster is not an active fight');
+    });
+
     it('disables upstream auto-update so the fork is not overwritten', () => {
         expect(manifest.auto_update).toBe(false);
         expect(manifest.display_name).toContain('Tactical Combat');

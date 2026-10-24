@@ -131,9 +131,9 @@ Bench ETAs: If it is clearly implied in the narrative when a character may retur
 The ETA must always be an explicit timestamp, e.g. "Day 1, HH:MM", or "17/10/2002, HH:MM." Only [UNBENCH] when the character physically reunites with {{user}}, not simply when the ETA date has been met.
 
 ETA [BENCH] example: Status: Benched (08:08 AM, Day 1, separated to investigate the docks and meet back at Day 1, 12:10 AM)`,
-  combat: `Active enemies and temporary allied NPCs in an encounter. Create this section when a potentially hostile group is actually present in the scene, but distinguish presence from combat with COMBAT STATE. Do not create [COMBAT] for enemies merely mentioned, rumored, seen at a distance, or discussed.
+  combat: `Active enemies and temporary allied NPCs in an imminent or active encounter. Create this section only when a hostile encounter is actually taking shape in the current scene — an armed standoff, a blocking or confrontational group, an ambush about to spring, or an active fight. Do not create [COMBAT] for enemies merely mentioned, rumored, seen at a distance, discussed, or for ordinary conversations, crowds, or allied NPCs. [COMBAT] is a live encounter roster, not a history or relationship list.
 
-Use COMBAT STATE: DORMANT while enemies are present but no attack, hostile spell/ability, charge, or ambush has actually been declared. Do not roll initiative and do not advance COMBAT ROUND while DORMANT. Negotiation, intimidation, surrender, bribery, standoffs, and withdrawal keep the block DORMANT.
+Use COMBAT STATE: DORMANT only while an encounter is still unresolved and its combatants are physically present, but no attack, hostile spell/ability, charge, or ambush has actually been declared. Do not roll initiative and do not advance COMBAT ROUND while DORMANT. Negotiation, intimidation, surrender offers, bribery, and standoffs keep the block DORMANT while the standoff continues. Once the encounter ends without combat — parley or bribe succeeds, combatants leave, the party withdraws, or the scene moves on — output [COMBAT]END_COMBAT[/COMBAT] in that same pass. Never leave a DORMANT block behind after the encounter is over.
 
 Set COMBAT STATE: HOSTILE and COMBAT ROUND 1 in the same pass in which an attack, hostile spell/ability, charge, or ambush is actually declared, or an enemy attacks. Never mark HOSTILE solely because enemies exist or because the party is tense. The tactical board writes COMBAT STATE: ACTIVE when it takes over the encounter; if a tactical-board [COMBAT] block is present, it is authoritative: preserve its roster and stats while the board is active.
 
@@ -215,9 +215,9 @@ Rules:
   Boss: Attack +11–15 | Spell DC 23–28
   Legendary: Attack +16–20+ | Spell DC 28–33+
 - Firearms (new combatant damage — including enemies you invent when the GM didn't supply stats): ~2–3× typical D&D/PF firearm dice for lethality. Reasonable pistol baseline: 2d8+1 (not 1d8+2); rifle/shotgun higher. Attack bonuses stay normal — only damage scales. Never convert mid-fight.
-- DEFEATED COMBATANTS: Mark defeated enemies as Status: Defeated. Do not omit them from the memo.
+- DEFEATED COMBATANTS: While a fight is active, mark defeated enemies as Status: Defeated and do not omit them from the memo. When every enemy is defeated, routed, surrendered, or otherwise out of the fight, close the encounter with END_COMBAT in that same pass; never leave an empty combat block.
 
-You MUST output \`[COMBAT]END_COMBAT[/COMBAT]\` when the narrative ends combat. Do not put members of [PARTY] into [COMBAT]
+COMBAT RESOLUTION: You MUST output \`[COMBAT]END_COMBAT[/COMBAT]\` in the same pass that a fight ends (victory, defeat, rout, surrender, truce, or withdrawal) or a DORMANT encounter ends without combat. Do not put members of [PARTY] into [COMBAT]
 
 WILLPOWER TARGETING: Only abilities whose description explicitly targets Willpower should damage it. Use the form 'Abilities: Dread Wail (Will damage 2d6, 6 cells, 1/1; on Willpower break: flee)'. Valid break outcomes: defeat, flee, switch_side, incapacitate, surrender. Ordinary attacks and ordinary fear/charm narration do not reduce Willpower.
 
@@ -399,6 +399,7 @@ Declare all previously-unknown NPC stats (AC, Saves, HP, Combat Line, resistance
 - Simulate every NPC's actions each round; never {{user}}'s actions. Use spells and abilities intelligently, not just cantrips.
 - Use pre-calculated totals from STATE MEMO ([CHARACTER]/[PARTY]/[COMBAT]) — never re-derive/invent bonuses mid-fight. Martials: Combat line Ranged/Melee (N attacks) values. Casters: listed Spell Atk / Spell DC. Slash-separated values ("+X/+Y") = one roll per value.
 - State remaining HP after every damage/heal.
+- When a fight or standoff ends, state the outcome plainly in the narration (victory, surrender, truce, withdrawal, or successful parley) so the tracker can close [COMBAT].
 - Buffs/debuffs expire on schedule; state initial duration in turns, e.g. Mage Armor (+3 AC, 8h 0m), Heroism (+5 Temp HP, 10 turns), Exhaustion (Disadvantage on Ability Checks, until Long Rest).
 </combat_flow>
 
@@ -786,6 +787,7 @@ Declare all previously-unknown NPC stats (AC, Saves, HP, Combat Line, resistance
 - Simulate every NPC's actions each round; never {{user}}'s actions. Use spells and abilities intelligently, not just cantrips.
 - Use pre-calculated totals from STATE MEMO ([CHARACTER]/[PARTY]/[COMBAT]) — never re-derive/invent bonuses mid-fight. Martials: Combat line Ranged/Melee (N attacks) values. Casters: listed Spell Atk / Spell DC. Slash-separated values ("+X/+Y") = one roll per value.
 - State remaining HP after every damage/heal.
+- When a fight or standoff ends, state the outcome plainly in the narration (victory, surrender, truce, withdrawal, or successful parley) so the tracker can close [COMBAT].
 - Buffs/debuffs expire on schedule; state initial duration in turns, e.g. Mage Armor (+3 AC, 8h 0m), Heroism (+5 Temp HP, 10 turns), Exhaustion (Disadvantage on Ability Checks, until Long Rest).
 </combat_flow>
 

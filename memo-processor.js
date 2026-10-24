@@ -12,12 +12,18 @@
 import { getSettings } from './state-manager.js';
 import { DEFAULT_STOCK_PROMPTS, resolveTimePromptKey } from './constants.js';
 import {
+    isResolvedCombatantStatusLine,
+    parseCombatants,
     partitionResolvedCombatants,
     stripResolvedCombatantsFromMemo,
 } from './src/state/combat-persistence.js';
 
-const DEFEATED_COMBATANTS_PROMPT_RULE = '- DEFEATED COMBATANTS: Mark defeated enemies as Status: Defeated. Do not omit them from the memo.';
+const COMBAT_BLOCK_RX = /\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i;
+
+const DEFEATED_COMBATANTS_PROMPT_RULE = '- DEFEATED COMBATANTS: While a fight is active, mark defeated enemies as Status: Defeated and do not omit them from the memo. When every enemy is defeated, routed, surrendered, or otherwise out of the fight, close the encounter with END_COMBAT in that same pass; never leave an empty combat block.';
 const COMBAT_SIDES_PROMPT_RULE = '- COMBAT SIDES: Group combatants under ENEMIES: and NON-PARTY ALLIES: headers, with enemies first. NON-PARTY ALLIES are allied combatants who are NOT listed in [PARTY]. Never put any [PARTY] member in [COMBAT]. Include both headers when non-party allies are present; otherwise include ENEMIES: only.';
+const COMBAT_STATE_PROMPT_RULE = '- COMBAT STATE: Begin every [COMBAT] block with `COMBAT STATE: DORMANT`, `HOSTILE`, or `ACTIVE`. Use DORMANT only for an unresolved encounter whose combatants are still physically present. Use HOSTILE when a hostile action has actually been declared, and ACTIVE while the tactical board owns the fight. Do not use a DORMANT block as a history list for absent, departed, or resolved enemies.';
+const COMBAT_RESOLUTION_PROMPT_RULE = '- COMBAT RESOLUTION: Close [COMBAT] with `[COMBAT]END_COMBAT[/COMBAT]` in the same pass that a fight ends, or that a DORMANT encounter ends without combat (successful parley, intimidation, bribe, surrender, withdrawal, or the combatants leave the scene). When every enemy is defeated or otherwise out of the fight, close it in that same pass. Never leave a dormant or empty [COMBAT] block in the memo.';
 
 // ── String utilities ──────────────────────────────────────────────────────────
 
@@ -433,6 +439,42 @@ export function deduplicateMemo(memo) {
     return cleanedMemo.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function normalizeCombatantName(name) {
+    return String(name || '').trim().toLocaleLowerCase();
+}
+
+function combatEnemies(content) {
+    return parseCombatants(content).filter(entity => entity.side === 'enemies');
+}
+
+function isResolvedEnemy(entity) {
+    return (entity?.lines || []).some(line => isResolvedCombatantStatusLine(line));
+}
+
+/**
+ * Decide whether a COMBAT update has provably finished the encounter.
+ * Requiring every previously active enemy to be present in the new block
+ * prevents a partial model response from closing a fight early.
+ */
+function shouldCloseResolvedCombat(priorBody, incomingContent) {
+    const priorEnemies = combatEnemies(priorBody).filter(entity => !isResolvedEnemy(entity));
+    const incomingEnemies = combatEnemies(incomingContent);
+    const incomingByName = new Map(incomingEnemies.map(entity => [normalizeCombatantName(entity.name), entity]));
+
+    if (incomingEnemies.length === 0) {
+        return priorEnemies.length === 0
+            || priorEnemies.every(entity => incomingByName.has(normalizeCombatantName(entity.name)));
+    }
+
+    if (incomingEnemies.some(entity => !isResolvedEnemy(entity))) return false;
+    if (priorEnemies.length === 0) return false;
+
+    return priorEnemies.every(entity => {
+        const incoming = incomingByName.get(normalizeCombatantName(entity.name));
+        return !!incoming && isResolvedEnemy(incoming);
+    });
+}
+
 // ── Memo merge ────────────────────────────────────────────────────────────────
 
 /**
@@ -453,14 +495,25 @@ export function mergeMemo(currentMemo, aiOutput) {
     const hasBenchWork = benchCommands.benches.length > 0 || benchCommands.unbenches.length > 0;
 
     if (matches.length === 0) {
+        let baseMemo = currentMemo;
+        let closedCombat = false;
+        if (/^\s*(?:\[COMBAT\]\s*)?END_COMBAT\b/im.test(aiOutput) && COMBAT_BLOCK_RX.test(baseMemo)) {
+            settings.combatDefeatedUi = [];
+            baseMemo = baseMemo.replace(/\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi, '').replace(/\n{3,}/g, '\n\n').trim();
+            closedCombat = true;
+        }
         if (hasBenchWork) {
             if (settings.debugMode) {
                 console.log('[RPG Tracker] mergeMemo: no closed [TAG] blocks but [BENCH]/[UNBENCH] found — applying bench splice');
             }
             return hydratePartyRelocationStats(
                 currentMemo,
-                applyBenchCommands(currentMemo, currentMemo, benchCommands),
+                applyBenchCommands(baseMemo, baseMemo, benchCommands),
             );
+        }
+        if (closedCombat) {
+            if (settings.debugMode) console.log('[RPG Tracker] mergeMemo: bare END_COMBAT closed the combat block.');
+            return baseMemo;
         }
         console.warn("[RPG Tracker] No valid [TAG]...[/TAG] blocks found in model output — treating as no-change. Output was:", aiOutput);
         return currentMemo;
@@ -472,9 +525,10 @@ export function mergeMemo(currentMemo, aiOutput) {
 
     for (const match of matches) {
         const tag = match[1].trim();
+        const tagUpper = tag.toUpperCase();
         const newContent = match[2].trim();
 
-        if (tag.toUpperCase() === 'BENCHED PARTY' && isBenchCommandOnlyContent(newContent)) {
+        if (tagUpper === 'BENCHED PARTY' && isBenchCommandOnlyContent(newContent)) {
             if (settings.debugMode) {
                 console.log(`[RPG Tracker] mergeMemo: [${tag}] command-only — deferring to applyBenchCommands`);
             }
@@ -486,25 +540,37 @@ export function mergeMemo(currentMemo, aiOutput) {
         // persisted memo as literal clutter. This matters most for Full Review Mode, where
         // weaker models sometimes emit a hollow block for a module with nothing to report
         // instead of omitting the section entirely.
-        const isRemoval = newContent === '' || /^(?:REMOVED|EXPIRED|CLEARED|NONE|END_COMBAT)$/i.test(newContent);
+        const isCombat = tagUpper === 'COMBAT';
+        const isRemoval = newContent === ''
+            || /^(?:REMOVED|EXPIRED|CLEARED|NONE)$/i.test(newContent)
+            || (isCombat && /^END_COMBAT\b/i.test(newContent));
 
         const escapedTag = escapeRegex(tag);
         let mergedContent = newContent;
-        if (tag.toUpperCase() === 'COMBAT') {
+        const existingPattern = new RegExp(
+            `\\s*\\[${escapedTag}\\][\\s\\S]*?\\[\\/${escapedTag}\\]`,
+            isCombat ? 'gi' : 'i'
+        );
+
+        if (isCombat) {
             if (isRemoval) {
                 settings.combatDefeatedUi = [];
             } else {
-                const hadActiveCombat = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i.test(memo);
+                const priorMatch = memo.match(COMBAT_BLOCK_RX);
+                const priorBody = priorMatch?.[1] || '';
+                if (shouldCloseResolvedCombat(priorBody, newContent)) {
+                    settings.combatDefeatedUi = [];
+                    memo = memo.replace(existingPattern, '').replace(/\n{3,}/g, '\n\n').trim();
+                    if (settings.debugMode) console.log('[RPG Tracker] mergeMemo: [COMBAT] resolved — block closed.');
+                    continue;
+                }
+                const hadActiveCombat = !!priorMatch;
                 const priorArchive = hadActiveCombat ? settings.combatDefeatedUi : [];
                 const partitioned = partitionResolvedCombatants(newContent, priorArchive);
                 mergedContent = partitioned.activeContent;
                 settings.combatDefeatedUi = partitioned.defeatedCombatants;
             }
         }
-        const existingPattern = new RegExp(
-            `\\s*\\[${escapedTag}\\][\\s\\S]*?\\[\\/${escapedTag}\\]`,
-            'i'
-        );
 
         if (settings.debugMode) {
             console.log(`[RPG Tracker] mergeMemo: processing [${tag}], pattern: ${existingPattern}`);
@@ -1789,6 +1855,12 @@ export function buildModulesInstructionText(settings) {
             }
             if (key === 'combat' && !/\bNON-PARTY\s+ALLIES\b/i.test(p)) {
                 p = `${p}\n${COMBAT_SIDES_PROMPT_RULE}`;
+            }
+            if (key === 'combat' && !/\bCOMBAT[ _-]?STATE\s*:/i.test(p)) {
+                p = `${p}\n${COMBAT_STATE_PROMPT_RULE}`;
+            }
+            if (key === 'combat' && !/\bCOMBAT RESOLUTION\s*:/i.test(p)) {
+                p = `${p}\n${COMBAT_RESOLUTION_PROMPT_RULE}`;
             }
 
             modulesText += `- [${key.toUpperCase()}]: ${p}\n`;
