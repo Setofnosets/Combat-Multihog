@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTacticalCombatMarkup, escapeHtml } from '../src/features/tactical-combat/tactical-combat-markup.js';
+import { buildCellMarkup, buildTacticalCombatMarkup, escapeHtml } from '../src/features/tactical-combat/tactical-combat-markup.js';
 import {
     beginDeployment,
     createEncounterState,
@@ -198,9 +198,36 @@ describe('tactical combat markup', () => {
 
     it('marks a defeated token as a corpse instead of an interactive token', () => {
         const state = makeState();
-        getUnitById(state, 'enemy-3').defeated = true;
-        getUnitById(state, 'enemy-3').hp = 0;
+        const enemy = getUnitById(state, 'enemy-3');
+        enemy.defeated = true;
+        enemy.hp = 0;
+        const cell = buildCellMarkup(state, enemy, enemy.x, enemy.y, { selectedUnitId: 'pc-1' }, enemy);
+        expect(cell).toContain('rt-tc-corpse');
+        expect(cell).not.toContain('data-tc-select-unit="enemy-3"');
+        expect(cell).toContain('data-tc-cell="8,1"');
+        expect(cell).not.toContain('is-occupied');
+
         const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1' });
         expect(html).toContain('rt-tc-corpse');
+    });
+
+    it('keeps a live unit interactive when it shares a cell with a defeated unit', () => {
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-3');
+        const fallen = getUnitById(state, 'pc-2');
+        fallen.defeated = true;
+        fallen.hp = 0;
+        fallen.x = enemy.x;
+        fallen.y = enemy.y;
+
+        const cell = buildCellMarkup(state, enemy, enemy.x, enemy.y, { selectedUnitId: 'pc-1' }, fallen);
+        expect(cell).toContain('Goblin Archer');
+        expect(cell).toContain('data-tc-select-unit="enemy-3"');
+        expect(cell).not.toContain('rt-tc-corpse');
+        expect(cell).toContain('is-occupied');
+
+        const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1' });
+        expect(html).toContain('data-tc-select-unit="enemy-3"');
+        expect(html).toContain('Goblin Archer');
     });
 });

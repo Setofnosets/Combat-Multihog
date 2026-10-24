@@ -122,13 +122,25 @@ function playerUnitById(state, unitId) {
     return state?.units?.find(unit => unit.id === unitId && unit.side === 'player' && !unit.defeated && !unit.fled) || null;
 }
 
+/**
+ * Return the interactable unit on a cell. Defeated combatants are scenery and
+ * must never capture clicks, block movement, or become attack targets.
+ * @param {object} state
+ * @param {number} x
+ * @param {number} y
+ * @returns {object|null}
+ */
+export function liveUnitAtCell(state, x, y) {
+    return state?.units?.find(unit => unit.x === x && unit.y === y && !unit.defeated && !unit.fled) || null;
+}
+
 function pickSelectedUnit(state) {
     const current = state.units.find(unit => unit.id === ui.view.selectedUnitId);
     const initiativeActive = state.turnStyle === 'initiative' && state.phase === 'player'
         ? state.units.find(unit => unit.id === activeUnitId(state))
         : null;
     if (initiativeActive && initiativeActive.side === 'player') return initiativeActive;
-    if (current && !current.fled) return current;
+    if (current && !current.fled && !current.defeated) return current;
     return state.units.find(unit => unit.side === 'player' && !unit.defeated && !unit.fled)
         || state.units.find(unit => !unit.defeated && !unit.fled)
         || null;
@@ -384,7 +396,7 @@ function selectUnit(unitId) {
     const state = getState();
     if (!state || ui.view.busy) return;
     const unit = state.units.find(candidate => candidate.id === unitId);
-    if (!unit || unit.fled) return;
+    if (!unit || unit.fled || unit.defeated) return;
     const view = buildTacticalView(state);
     const key = `${unit.x},${unit.y}`;
     if (view.targetCells instanceof Set && view.targetCells.has(key)) {
@@ -643,7 +655,7 @@ function handleCellClick(x, y) {
     const state = getState();
     if (!state || state.status !== 'active' || ui.view.busy) return;
     const key = `${x},${y}`;
-    const unit = state.units.find(candidate => candidate.x === x && candidate.y === y && !candidate.fled) || null;
+    const unit = liveUnitAtCell(state, x, y);
     const view = buildTacticalView(state);
 
     if (state.deployment?.active) {

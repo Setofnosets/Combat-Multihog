@@ -151,6 +151,20 @@ describe('tactical combat movement & actions', () => {
         expect(unit.movementUsed).toBeLessThanOrEqual(unit.speed);
     });
 
+    it('allows moving onto a tile occupied by a defeated combatant', () => {
+        const state = makeState();
+        const enemy = getUnitById(state, 'enemy-3');
+        enemy.x = 2;
+        enemy.y = 1;
+        enemy.hp = 0;
+        enemy.defeated = true;
+        const unit = getUnitById(state, 'pc-1');
+        const result = applyAction(state, { type: 'move', unitId: 'pc-1', to: { x: 2, y: 1 } }, { actorSide: 'player', rng: midRoll });
+        expect(result.ok).toBe(true);
+        expect(unit.x).toBe(2);
+        expect(unit.y).toBe(1);
+    });
+
     it('rejects walls, water, occupied cells, and over-budget moves', () => {
         const state = makeState();
         state.terrain[1][2] = 'wall';
