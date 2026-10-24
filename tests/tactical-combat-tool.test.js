@@ -6,7 +6,7 @@ vi.mock('../../../../script.js', () => ({
     getRequestHeaders: () => ({}),
 }));
 
-import { isLatestAssistantFromActiveChar, registerTacticalCombatTool } from '../narrative-hooks.js';
+import { buildTacticalCombatRuntimeOverride, isLatestAssistantFromActiveChar, registerTacticalCombatTool } from '../narrative-hooks.js';
 
 const indexSource = readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.url), 'utf8');
@@ -68,6 +68,9 @@ describe('Tactical Combat narrator function tool', () => {
         delete testExtensionSettings.rpg_tracker.tacticalCombatReturn;
         testExtensionSettings.rpg_tracker.syspromptModules = { tactical_combat: false };
         expect(tool.shouldRegister()).toBe(false);
+        testExtensionSettings.rpg_tracker.syspromptModules = { tactical_combat: true };
+        testExtensionSettings.rpg_tracker.tacticalCombatAutoStartOnHostility = false;
+        expect(tool.shouldRegister()).toBe(false);
     });
 
     it('registers during init next to the dice tools, not inside the settings UI setup', () => {
@@ -96,6 +99,27 @@ describe('Tactical Combat narrator function tool', () => {
         expect(settingsStart).toBeGreaterThan(-1);
         expect(settingsEnd).toBeGreaterThan(settingsStart);
         expect(indexSource.slice(settingsStart, settingsEnd)).not.toContain('syncTacticalCombatToolRegistration');
+    });
+
+    it('does not demand the tool for a dormant encounter roster', () => {
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: testExtensionSettings,
+            chatId: 'vitest-chat',
+        });
+        const settings = testExtensionSettings.rpg_tracker;
+        settings.syspromptModules = { tactical_combat: true };
+        settings.currentMemo = '[COMBAT]\nCOMBAT STATE: DORMANT\nENEMIES:\nGoblin: 10/10 HP\n[/COMBAT]';
+        const dormant = buildTacticalCombatRuntimeOverride(settings);
+        expect(dormant).toContain('DORMANT_ENCOUNTER');
+        expect(dormant).not.toContain('Call the StartTacticalCombat function tool exactly once');
+
+        settings.currentMemo = '[COMBAT]\nCOMBAT STATE: HOSTILE\nCOMBAT ROUND 1\nENEMIES:\nGoblin: 10/10 HP\n[/COMBAT]';
+        expect(buildTacticalCombatRuntimeOverride(settings)).toContain('Call the StartTacticalCombat function tool exactly once');
+
+        settings.tacticalCombatAutoStartOnHostility = false;
+        const manual = buildTacticalCombatRuntimeOverride(settings);
+        expect(manual).toContain('Automatic tactical start is disabled');
+        expect(manual).not.toContain('Call the StartTacticalCombat function tool exactly once');
     });
 
     it('find the narrator row through non-stealth tool/system rows', () => {

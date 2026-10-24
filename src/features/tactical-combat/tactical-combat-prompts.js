@@ -67,7 +67,8 @@ Return exactly ONE JSON object and no prose, no markdown fences:
       "attackRange": 1,
       "notes": "One line of tactics or flavour",
       "skills": [
-        {"name": "Dread Wail", "description": "A fear-inducing wail.", "kind": "attack", "resource": "willpower", "range": 6, "damage": "2d6", "willpowerOutcome": "flee", "maxUses": 1}
+        {"name": "Dread Wail", "description": "A fear-inducing wail.", "kind": "attack", "resource": "willpower", "range": 6, "damage": "2d6", "willpowerOutcome": "flee", "maxUses": 1},
+        {"name": "Psychic Lance", "description": "A mental strike that also wounds the body.", "kind": "attack", "resource": "both", "range": 8, "damage": "2d6", "willpowerDamage": "1d6", "willpowerOutcome": "surrender", "maxUses": 1}
       ]
     }
   ]
@@ -81,15 +82,15 @@ Return exactly ONE JSON object and no prose, no markdown fences:
    . floor | , grass | # wall | ~ water | o cover (+2 AC) | ^ high ground (+1 attack) | x hazard (1d4 damage) | * objective | % rubble (difficult terrain)
    Keep spawn areas clear: the left two columns are the player side and the right two columns are the enemy side. If you are unsure, omit terrain and the engine will generate it.
 5. "grid" is optional for a fixed-size setting. For dynamic or custom grids, choose rows/cols between 8 and 24 and make the terrain match.
-6. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Include range in grid cells and maxUses as a number.
+6. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Use "kind":"special" only when the effect genuinely needs freeform adjudication. Include range in grid cells and maxUses as a number.
 7. The description must not dictate player actions, outcomes, or dialogue. It sets the scene only.
 8. Never output player units. The party comes from the state memo, not from you.
 9. The party payload includes abilities, spells, items, and inventory. Treat those as available to the player and design opposition that gives them room to matter. Special/freeform effects are resolved by the framework at cast time; do not try to simulate them in the encounter JSON.
 10. NAMED ENEMIES WIN: If "playerDeclaration" or "enemyNames" names a creature type (goblins, bandits, wolves, etc.), the encounter MUST use that creature type. Do not substitute a generic terrain roster such as Kobolds, Cave Bats, or Skeletons merely because the location is a cave or dungeon. Only invent a different type when the player does not name one.
 11. CURRENT DECLARATION WINS OVER OLD COMBAT: "sceneExcerpt" may include the aftermath of a previous board fight. Do not reuse those old enemies unless they also appear in "existingCombat" or the current player declaration. When "freshStart" is true, treat any prior tactical board as concluded and build the new encounter from the current scene.
 12. Keep the requested enemy type consistent across the whole group. If the player says goblins, use goblins or goblin variants — not a mixed cave ecology unless the narrative explicitly established it.
-13. WILLPOWER: ordinary enemies should have maxWillpower around 25-40% of maxHp and always below maxHp. Do not give every enemy a Willpower attack. Use it only for fear, psychic, charm, domination, sleep, morale, or intimidation concepts. maxWillpower 0 means mindless/immune.
-14. Willpower skills use "resource": "willpower" (or "both" with a separate "willpowerDamage"). Valid "willpowerOutcome" values are defeat, flee, switch_side, incapacitate, and surrender. "switch_side" means the target changes sides; "flee" means it leaves the fight; "incapacitate" means sleep/stun/paralysis. Use "kind": "special" only when the ability needs freeform adjudication.
+13. WILLPOWER: ordinary enemies should have maxWillpower based on the supplied rules.willpowerMaxPercent (default 30%) and always below maxHp. Do not give every enemy a Willpower attack. Use it only for fear, psychic, charm, domination, sleep, morale, or intimidation concepts. maxWillpower 0 means mindless/immune.
+14. Willpower skills use "resource": "willpower" (or "both" with a separate "willpowerDamage"). Valid "willpowerOutcome" values are defeat, flee, switch_side, incapacitate, and surrender. "switch_side" means the target changes sides; "flee" means it leaves the fight; "incapacitate" means sleep/stun/paralysis. Use "kind": "special" only when the ability needs freeform adjudication. When resource is "both", always provide willpowerDamage; never reuse the HP damage expression silently.
 15. Special abilities may optionally include an "effectTemplate" array using the resolver primitives. The tactical agent never sees or emits these effects; the engine applies them after the enemy declares the skill. Prefer deterministic resource/outcome metadata or a template over an open-ended special where possible.`;
 
 export const DEFAULT_TACTICAL_OUTCOME_PROMPT = `[TACTICAL COMBAT RESULT — AUTHORITATIVE]

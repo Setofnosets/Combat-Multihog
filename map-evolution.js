@@ -8,7 +8,7 @@ import { getActiveChatId } from './state-manager.js';
  */
 import { getEffectiveRouterCampaignPrefix, getSettings, hydrateWorldProgressionFromChatState, persistMapEvolutionState } from './state-manager.js';
 import { runtimeState } from './src/app/runtime-state.js';
-import { sendStateRequest, isCombatActive } from './llm-client.js';
+import { sendStateRequest, isCombatEngaged } from './llm-client.js';
 import { extractCurrentTimeStr } from './memo-processor.js';
 import {
     applyDungeonMapTransaction,
@@ -539,7 +539,7 @@ async function evolveOneSite({
 }) {
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId, { signal });
     const partyIsHere = dungeonSiteRootsMatch(site.siteRoot, currentRoot);
-    const combatActive = partyIsHere && isCombatActive(settings.currentMemo);
+    const combatActive = partyIsHere && isCombatEngaged(settings.currentMemo);
     const bubble = partyIsHere
         ? resolvePlayerBubble(site.document, currentLocation, { combatActive })
         : { frozenAreaIds: [], combatActive: false, area: null };

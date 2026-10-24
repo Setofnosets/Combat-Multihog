@@ -562,7 +562,7 @@ export function normalizeUnitSeed(seed, meta) {
     const explicitMaxWillpower = Number(seed?.maxWillpower ?? seed?.maxWill);
     const maxWillpower = hasExplicitMaxWillpower && Number.isFinite(explicitMaxWillpower)
         ? clampInt(explicitMaxWillpower, 0, 99)
-        : deriveMaxWillpower(maxHp, stats.wisMod, willSave);
+        : deriveMaxWillpower(maxHp, stats.wisMod, willSave, meta?.willpowerMaxPercent);
     const explicitWillpower = Number(seed?.willpower ?? seed?.will);
     const willpower = Number.isFinite(explicitWillpower)
         ? clampInt(explicitWillpower, 0, maxWillpower)
@@ -2902,6 +2902,7 @@ export function createEncounterState(options = {}) {
             index,
             side: seedUnit?.side || 'enemy',
             defaultSpeed: options.movement,
+            willpowerMaxPercent: options.willpowerMaxPercent,
         }))
         .filter(Boolean);
 
@@ -2949,6 +2950,7 @@ export function createEncounterState(options = {}) {
         rules: {
             movement: clampIntOr(options.movement, TC_DEFAULT_MOVEMENT, 1, 24),
             allowFlee: options.allowFlee !== false,
+            willpowerMaxPercent: clampIntOr(options.willpowerMaxPercent, 30, 10, 60),
             victory: 'Defeat every enemy unit.',
             defeat: 'All player units are defeated.',
         },
@@ -3024,7 +3026,7 @@ export function hydrateEncounterState(state) {
             const explicit = Number(unit.maxWill ?? unit.maxWillpower);
             unit.maxWillpower = Number.isFinite(explicit)
                 ? clampInt(explicit, 0, 99)
-                : deriveMaxWillpower(unit.maxHp, unit.stats.wisMod, unit.willpowerSave);
+                : deriveMaxWillpower(unit.maxHp, unit.stats.wisMod, unit.willpowerSave, state.rules?.willpowerMaxPercent);
         }
         if (!Number.isFinite(Number(unit.willpower))) {
             const explicit = Number(unit.will ?? unit.willpower);

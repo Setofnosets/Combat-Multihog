@@ -759,7 +759,8 @@ export function openCustomFieldEditor(index) {
 }
 
 const STOCK_MODULE_PREVIEW_SAMPLES = Object.freeze({
-    COMBAT: `COMBAT ROUND 2
+    COMBAT: `COMBAT STATE: HOSTILE
+COMBAT ROUND 2
 ENEMIES:
 Goblin Scout: 8/12 HP
 Willpower: 5/5

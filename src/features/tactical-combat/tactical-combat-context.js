@@ -6,7 +6,7 @@
  * stats fall back to sensible tabletop defaults instead of failing the encounter.
  */
 
-import { parseCombatants, isResolvedCombatantStatusLine } from '../../state/combat-persistence.js';
+import { parseCombatants, isResolvedCombatantStatusLine, getCombatMemoState } from '../../state/combat-persistence.js';
 import { createEncounterState } from './tactical-combat-engine.js';
 import {
     DEFAULT_LOADOUT_CLASSIFIER_CONFIG,
@@ -408,7 +408,7 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
     const explicitWillpower = parseWillpowerLine(sourceLines);
     const maxWillpower = explicitWillpower
         ? explicitWillpower.max
-        : deriveMaxWillpower(maxHpSafe, stats.wisMod, willpowerSave);
+        : deriveMaxWillpower(maxHpSafe, stats.wisMod, willpowerSave, options.willpowerMaxPercent);
     const willpower = explicitWillpower
         ? Math.min(explicitWillpower.current, maxWillpower)
         : maxWillpower;
@@ -496,6 +496,7 @@ function splitPartyEntries(content) {
  */
 export function parsePlayerUnits(memo, ctx = {}, options = {}) {
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
+    const willpowerMaxPercent = options.willpowerMaxPercent;
     const units = [];
     const characterContent = parseMemoBlock(memo, 'CHARACTER');
     if (characterContent) {
@@ -505,7 +506,7 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
             const parsed = parseNameClass(header);
             const fallbackName = ctx.name1 || 'Player';
             const rawName = String(parsed.name || fallbackName).replace(/\{\{user\}\}/gi, fallbackName);
-            const unit = parseStatSheet(rawName || fallbackName, parsed.classLabel, entry.lines, 'player', { classifier });
+            const unit = parseStatSheet(rawName || fallbackName, parsed.classLabel, entry.lines, 'player', { classifier, willpowerMaxPercent });
             if (unit && unit.hp > 0 && !unit._defeated) {
                 unit.isPlayerCharacter = true;
                 units.push(unit);
@@ -518,7 +519,7 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
         for (const entry of splitPartyEntries(partyContent)) {
             const parsed = parseNameClass(entry.lines[0] || '');
             if (!parsed.name) continue;
-            const unit = parseStatSheet(parsed.name, parsed.classLabel, entry.lines, 'player', { classifier });
+            const unit = parseStatSheet(parsed.name, parsed.classLabel, entry.lines, 'player', { classifier, willpowerMaxPercent });
             if (unit && unit.hp > 0 && !unit._defeated) {
                 unit.isPlayerCharacter = false;
                 units.push(unit);
@@ -542,6 +543,7 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
  */
 export function parseCombatUnits(memo, options = {}) {
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
+    const willpowerMaxPercent = options.willpowerMaxPercent;
     const content = parseMemoBlock(memo, 'COMBAT');
     if (!content || /^END_COMBAT$/i.test(content.trim())) return { enemies: [], allies: [] };
     const entities = parseCombatants(content);
@@ -553,7 +555,7 @@ export function parseCombatUnits(memo, options = {}) {
         const parsedHeader = header.match(HP_HEADER_RX);
         const rawName = parsedHeader ? parsedHeader[1].trim() : entity.name;
         const parsed = parseNameClass(rawName);
-        const unit = parseStatSheet(parsed.name, parsed.classLabel, entity.lines, side, { classifier });
+        const unit = parseStatSheet(parsed.name, parsed.classLabel, entity.lines, side, { classifier, willpowerMaxPercent });
         if (!unit) continue;
         if (unit.hp <= 0 || unit._defeated) continue;
         (side === 'ally' ? allies : enemies).push(unit);
@@ -705,7 +707,8 @@ function defaultPotion() {
  * @param {number} movement
  * @returns {object}
  */
-export function buildFallbackPlayer(ctx = {}, movement = 6) {
+export function buildFallbackPlayer(ctx = {}, movement = 6, willpowerMaxPercent = 30) {
+    const maxWillpower = deriveMaxWillpower(26, 1, 0, willpowerMaxPercent);
     return {
         name: cleanText(ctx.name1 || 'Adventurer').slice(0, 80),
         classLabel: 'Adventurer',
@@ -713,8 +716,8 @@ export function buildFallbackPlayer(ctx = {}, movement = 6) {
         isPlayerCharacter: true,
         maxHp: 26,
         hp: 26,
-        willpower: 11,
-        maxWillpower: 11,
+        willpower: maxWillpower,
+        maxWillpower,
         ac: 14,
         attackBonus: 4,
         attackRange: 1,
@@ -832,16 +835,17 @@ export function resolveTerrainTheme(settings, context) {
 export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext() : {}), options = {}) {
     const memo = String(settings?.currentMemo || '');
     const movement = clampIntOr(settings?.tacticalCombatMovement, 6, 1, 24);
+    const willpowerMaxPercent = clampIntOr(settings?.tacticalCombatWillpowerMaxPercent, 30, 10, 60);
     const classifier = getLoadoutClassifier(settings).config;
-    const characterUnits = parsePlayerUnits(memo, ctx, { classifier });
-    const { enemies, allies } = parseCombatUnits(memo, { classifier });
+    const characterUnits = parsePlayerUnits(memo, ctx, { classifier, willpowerMaxPercent });
+    const { enemies, allies } = parseCombatUnits(memo, { classifier, willpowerMaxPercent });
     const { items: inventoryItems, inventory } = parseInventoryLoadout(memo, classifier);
     const standaloneNames = new Set();
     const standaloneSkills = [
         ...parseStandaloneAbilities(memo, standaloneNames, classifier),
         ...parseStandaloneSpells(memo, standaloneNames, classifier),
     ];
-    const playerUnits = characterUnits.length ? characterUnits : [buildFallbackPlayer(ctx, movement)];
+    const playerUnits = characterUnits.length ? characterUnits : [buildFallbackPlayer(ctx, movement, willpowerMaxPercent)];
     // Standalone [ABILITIES]/[SPELLS]/[INVENTORY] blocks belong to the player
     // character. Never attach them to an arbitrary first party member when the
     // [CHARACTER] sheet is missing or unparseable.
@@ -926,9 +930,11 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
         enemies,
         allies,
         existingCombat,
+        combatState: getCombatMemoState(memo),
         partySize: playerUnits.length,
         theme: inferTerrainTheme(location, scene),
         movement,
+        willpowerMaxPercent,
         summary: {
             party: playerUnits.map(unit => `${unit.name} (${unit.classLabel || 'adventurer'}, ${unit.hp}/${unit.maxHp} HP, ${unit.willpower ?? '?'}/${unit.maxWillpower ?? '?'} WP)`),
             enemies: enemies.map(unit => `${unit.name} (${unit.hp}/${unit.maxHp} HP, ${unit.willpower ?? '?'}/${unit.maxWillpower ?? '?'} WP)`),
@@ -981,8 +987,8 @@ export function buildFallbackEnemies(context, seed = 1) {
             side: 'enemy',
             maxHp,
             hp: maxHp,
-            willpower: deriveMaxWillpower(maxHp, 0, 0),
-            maxWillpower: deriveMaxWillpower(maxHp, 0, 0),
+            willpower: deriveMaxWillpower(maxHp, 0, 0, context?.willpowerMaxPercent),
+            maxWillpower: deriveMaxWillpower(maxHp, 0, 0, context?.willpowerMaxPercent),
             ac: 12 + Math.floor(partySize / 2) + (boss ? 1 : 0),
             attackBonus,
             attackRange: ranged ? 6 : 1,
@@ -1078,6 +1084,7 @@ export function buildEncounterFromContext(context, settings, options = {}) {
         units: allUnits,
         turnStyle: settings?.tacticalCombatTurnStyle,
         movement: context.movement,
+        willpowerMaxPercent: context.willpowerMaxPercent,
         density: settings?.tacticalCombatTerrainDensity,
         seed,
         actionCatalog: options.actionCatalog,

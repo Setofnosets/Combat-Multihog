@@ -121,6 +121,27 @@ Unchanged | keep me
         expect(settings.currentMemo).toContain('[COMBAT]END_COMBAT[/COMBAT]');
     });
 
+    it('writes an active combat state into the board-generated memo block', () => {
+        const state = makeState();
+        const block = buildCombatMemoBlock(state);
+        expect(block).toContain('COMBAT STATE: ACTIVE');
+        expect(block).toContain('COMBAT ROUND 1');
+    });
+
+    it('can keep current Willpower when recovery is disabled', () => {
+        const state = makeState();
+        const aria = state.units.find(unit => unit.id === 'pc-1');
+        aria.maxWillpower = 8;
+        aria.willpower = 3;
+        const settings = {
+            currentMemo: '[CHARACTER]\nAria: 14/20 HP\nWillpower: 3/8\n[/CHARACTER]',
+            tacticalCombatWillpowerRecoverAfterCombat: false,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Willpower: 3/8');
+        expect(settings.currentMemo).not.toContain('Willpower: 8/8');
+    });
+
     it('builds a compact tracker final-state report with all sides and resources', () => {
         const state = makeState();
         state.status = 'victory';

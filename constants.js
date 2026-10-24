@@ -131,12 +131,17 @@ Bench ETAs: If it is clearly implied in the narrative when a character may retur
 The ETA must always be an explicit timestamp, e.g. "Day 1, HH:MM", or "17/10/2002, HH:MM." Only [UNBENCH] when the character physically reunites with {{user}}, not simply when the ETA date has been met.
 
 ETA [BENCH] example: Status: Benched (08:08 AM, Day 1, separated to investigate the docks and meet back at Day 1, 12:10 AM)`,
-  combat: `Active enemies and temporary allied NPCs in combat. Create this section in the same pass in which a fight begins, an attack is declared, or an ambush is sprung — do not wait for the first round to resolve. Track the current COMBAT ROUND starting from 1. Decrement buff/debuff durations by 1 each round. If a tactical-board [COMBAT] block is present, it is authoritative: preserve its roster and stats while the board is active.
+  combat: `Active enemies and temporary allied NPCs in an encounter. Create this section when a potentially hostile group is actually present in the scene, but distinguish presence from combat with COMBAT STATE. Do not create [COMBAT] for enemies merely mentioned, rumored, seen at a distance, or discussed.
+
+Use COMBAT STATE: DORMANT while enemies are present but no attack, hostile spell/ability, charge, or ambush has actually been declared. Do not roll initiative and do not advance COMBAT ROUND while DORMANT. Negotiation, intimidation, surrender, bribery, standoffs, and withdrawal keep the block DORMANT.
+
+Set COMBAT STATE: HOSTILE and COMBAT ROUND 1 in the same pass in which an attack, hostile spell/ability, charge, or ambush is actually declared, or an enemy attacks. Never mark HOSTILE solely because enemies exist or because the party is tense. The tactical board writes COMBAT STATE: ACTIVE when it takes over the encounter; if a tactical-board [COMBAT] block is present, it is authoritative: preserve its roster and stats while the board is active.
 
 Group combatants under ENEMIES: and NON-PARTY ALLIES: headers, with ENEMIES first. NON-PARTY ALLIES means exactly that: allied combatants who are NOT listed in [PARTY]. Never put any [PARTY] member in [COMBAT]. Always include both headers when non-party allies are present. If there are no non-party allies, include ENEMIES: only.
 
 Output fields in this exact order for every combatant. Choose MARTIAL or CASTER Att/def + Spells rules below — never mix styles on the same combatant.
 
+COMBAT STATE: DORMANT|HOSTILE|ACTIVE
 COMBAT ROUND X
 ENEMIES:
 Name: current/max HP
@@ -386,6 +391,7 @@ Unknown skill bonuses: judge from background/archetype + situational mods.
 
 <combat>
 <combat_start>
+Only begin combat when [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE or a hostile attack, spell, charge, or ambush has actually been declared. A COMBAT STATE: DORMANT roster is a non-combat encounter: do not roll initiative and do not simulate attacks.
 Declare all previously-unknown NPC stats (AC, Saves, HP, Combat Line, resistances/etc), then roll initiative for all. Caster enemies: list spells by level + slots at introduction (e.g. Cantrips: Fire Bolt; Level 1 (2/2): Magic Missile, Shield) — never a flat comma list.
 </combat_start>
 
@@ -440,9 +446,9 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
+Call the StartTacticalCombat tool only when combat has actually begun: a hostile attack, spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster. When the player's immediately preceding message declared a concrete opening action, pass it as openingAction. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
 If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
-If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, continue the non-combat scene and do not call the tool.
 After calling the tool, do not resolve the fight yourself. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative.
 </tactical_combat>
 
@@ -772,6 +778,7 @@ Unknown skill bonuses: judge from background/archetype + situational mods.
 
 <combat>
 <combat_start>
+Only begin combat when [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE or a hostile attack, spell, charge, or ambush has actually been declared. A COMBAT STATE: DORMANT roster is a non-combat encounter: do not roll initiative and do not simulate attacks.
 Declare all previously-unknown NPC stats (AC, Saves, HP, Combat Line, resistances/etc), then roll initiative for all. Caster enemies: list spells by level + slots at introduction (e.g. Cantrips: Fire Bolt; Level 1 (2/2): Magic Missile, Shield) — never a flat comma list.
 </combat_start>
 
@@ -826,9 +833,9 @@ Custom hybrid: 5e flavor (spells, feats, XP table) + classic d20 mechanics (BAB 
 <tactical_combat>
 TACTICAL COMBAT OVERRIDE
 While this section is enabled, every combat encounter is resolved on the tactical board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-When a fight actually begins, call the StartTacticalCombat tool immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
+Call the StartTacticalCombat tool only when combat has actually begun: a hostile attack, spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster. When the player's immediately preceding message declared a concrete opening action, pass it as openingAction. The tool builds opposition from the current scene and writes the board roster into the State Memo. Do not wait for the State Tracker. Do not call it for ordinary tension, sparring, or travel.
 If the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
-If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, continue the non-combat scene and do not call the tool.
 After calling the tool, do not resolve the fight yourself. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative.
 </tactical_combat>
 

@@ -1496,7 +1496,13 @@ function formatValueToCurrency(totalCp, detectedCurrency) {
                         }
                     }
 
-                    // 1. Combat Round header
+                    // 1. Combat state / round header
+                    if (tag === 'COMBAT' && /^COMBAT[ _-]?STATE\s*:/i.test(line)) {
+                        results.push(`<div class="rt-combat-state">${escapeHtmlWithColor(line)}</div>`);
+                        lastEntityIdx = -1;
+                        currentEntity = '';
+                        continue;
+                    }
                     if (tag === 'COMBAT' && /Combat Round\s*\d+/i.test(line)) {
                         results.push(`<div class="rt-combat-round">${escapeHtmlWithColor(line)}</div>`);
                         lastEntityIdx = -1;

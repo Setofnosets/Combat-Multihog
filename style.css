@@ -3028,6 +3028,17 @@
     margin-bottom: 4px;
 }
 
+.rt-combat-state {
+    font-size: 0.78em;
+    font-weight: 700;
+    color: #c4b5fd;
+    padding: 2px 0 4px;
+    text-align: center;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    opacity: 0.9;
+}
+
 .rt-combat-side-header {
     margin: 10px 0 4px;
     padding: 3px 7px;

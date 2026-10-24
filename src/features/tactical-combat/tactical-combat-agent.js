@@ -53,6 +53,12 @@ import {
 const MAX_CORRECTION_ATTEMPTS = 2;
 const MAX_SPECIAL_RESOLUTIONS_PER_TURN = 2;
 
+function maxSpecialResolutionsFor(settings) {
+    const configured = Number(settings?.tacticalCombatMaxSpecialResolutions);
+    if (!Number.isFinite(configured)) return MAX_SPECIAL_RESOLUTIONS_PER_TURN;
+    return Math.max(0, Math.min(4, Math.round(configured)));
+}
+
 /**
  * Reasoning models often emit prose/thinking before the JSON payload. Prefer the
  * first parsed object containing the expected key, then fall back to the normal
@@ -162,6 +168,7 @@ export function buildEncounterRequestPayload(context, settings) {
         party: (context?.playerUnits || []).map(compactUnitForContext),
         nonPartyAllies: (context?.allies || []).map(compactUnitForContext),
         existingCombat: (context?.enemies || []).map(compactUnitForContext),
+        combatState: String(context?.combatState || 'absent'),
         location: context?.location || '',
         sceneExcerpt: String(context?.sceneExcerpt || '').slice(0, 3500),
         partySummary: context?.summary?.party || [],
@@ -178,7 +185,8 @@ export function buildEncounterRequestPayload(context, settings) {
             enemyCount: '2-6',
             fairFight: 'Routine encounter should be winnable; a boss fight may be deadly.',
             keepSpawnLanesClear: 'Left two columns are the player side; right two columns are the enemy side.',
-            willpower: 'Willpower is a morale pool, normally 25-40% of max HP. Only mental/morale abilities should target it. maxWillpower 0 means immune. At 0 Willpower the target breaks; use willpowerOutcome to say how (defeat, flee, switch_side, incapacitate, surrender).',
+            willpower: 'Willpower is a morale pool, normally the configured % of max HP. Only mental/morale abilities should target it. maxWillpower 0 means immune. At 0 Willpower the target breaks; use willpowerOutcome to say how (defeat, flee, switch_side, incapacitate, surrender).',
+            willpowerMaxPercent: Number(settings?.tacticalCombatWillpowerMaxPercent) || 30,
         },
     };
 }
@@ -276,6 +284,11 @@ export function normalizeEncounterPayload(value, options = {}) {
                     : undefined,
             }))
             : [];
+        for (const skill of skills) {
+            if (skill.resource === 'both' && !skill.willpowerDamage) {
+                errors.push(`enemies[${index}].skills "${skill.name}" uses resource "both" but is missing willpowerDamage.`);
+            }
+        }
         enemies.push({
             name: name.slice(0, 80),
             classLabel: String(raw.classLabel || raw.className || '').slice(0, 80),
@@ -1040,6 +1053,7 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
     const allowed = new Set(ids);
     const applied = [];
     const actedUnitIds = [];
+    const maxSpecialResolutions = maxSpecialResolutionsFor(settings);
     let specialResolutions = 0;
     for (const action of actions) {
         if (state.status !== 'active') break;
@@ -1055,8 +1069,8 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
             ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
             : null;
         const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
-        if (isSpecial && specialResolutions >= MAX_SPECIAL_RESOLUTIONS_PER_TURN) {
-            rejected.push({ action, error: `Special resolution limit reached (${MAX_SPECIAL_RESOLUTIONS_PER_TURN} per activation).` });
+        if (isSpecial && specialResolutions >= maxSpecialResolutions) {
+            rejected.push({ action, error: `Special resolution limit reached (${maxSpecialResolutions} per activation).` });
             continue;
         }
         if (isSpecial) specialResolutions += 1;

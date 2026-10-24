@@ -98,10 +98,11 @@ export function willpowerOutcomeLabel(outcome) {
  * @param {number} willSave
  * @returns {number}
  */
-export function deriveMaxWillpower(maxHp, wisMod = 0, willSave = 0) {
+export function deriveMaxWillpower(maxHp, wisMod = 0, willSave = 0, maxPercent = 30) {
     const hp = Math.max(1, Math.round(Number(maxHp) || 1));
+    const ratio = Math.max(0.05, Math.min(0.9, (Number(maxPercent) || 30) / 100));
     const raw = 2
-        + Math.round(hp * 0.30)
+        + Math.round(hp * ratio)
         + Math.max(0, Math.round(Number(wisMod) || 0))
         + Math.max(0, Math.round(Number(willSave) || 0));
     const cap = Math.max(1, hp - 1);

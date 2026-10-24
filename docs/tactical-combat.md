@@ -28,6 +28,10 @@ Open it from **Settings → Tactical Combat** or the chess-board button in the t
 | **Terrain theme** | Auto (matches location keywords) or Dungeon / Forest / Cave / City / Interior / Plain. |
 | **Terrain density** | 0–100. Higher values add more cover, rubble, hazards, walls, water, and high ground. Deployment lanes stay clear. |
 | **Movement per turn** | Default speed in cells for units without an explicit speed. Diagonals cost 1; difficult terrain costs 2. |
+| **Auto-start on hostile actions** | When enabled, the narrator opens the board only after a real attack, hostile spell, charge, ambush, or `COMBAT STATE: HOSTILE/ACTIVE`. Disable to require the Start encounter button. |
+| **Derived Willpower %** | Percentage of max HP used by the deterministic max Willpower fallback. Default 30%. Explicit `Willpower:`/`maxWillpower` values always win. |
+| **Recover Willpower after combat** | Restores current Willpower to max in `[CHARACTER]`/`[PARTY]` at combat end. Disable to keep persistent Willpower loss. |
+| **Maximum special resolutions** | Maximum unique enemy special abilities sent through the resolver per activation batch. Deterministic Willpower attacks and pre-authored effect templates do not count. |
 | **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
@@ -66,8 +70,8 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 ## Combat rules
 
 - **HP / Willpower / AC / attacks** come from memo stat blocks when available. Missing stats fall back to level-appropriate tabletop defaults instead of failing.
-- **Willpower** is a morale pool separate from HP and from the `Saves: ... Will +X` saving throw. Ordinary attacks never touch it. Willpower-targeting skills/items declare `resource: "willpower"` (or `"both"`). At 0 Willpower the unit breaks according to `willpowerOutcome`: `defeat`, `flee`, `switch_side`, `incapacitate`, or `surrender`. Willpower recovers to max when combat ends.
-- **Max Willpower** is deterministic: `2 + 30% of max HP + positive WIS modifier + positive Will save`, capped below HP and at 60. An explicit `Willpower: current/max` line or architect `maxWillpower` overrides it. `maxWillpower: 0` means mindless/immune.
+- **Willpower** is a morale pool separate from HP and from the `Saves: ... Will +X` saving throw. Ordinary attacks never touch it. Willpower-targeting skills/items declare `resource: "willpower"` (or `"both"`). At 0 Willpower the unit breaks according to `willpowerOutcome`: `defeat`, `flee`, `switch_side`, `incapacitate`, or `surrender`. Willpower recovers to max when combat ends unless recovery is disabled in settings.
+- **Max Willpower** is deterministic: `2 + configured % of max HP (default 30%) + positive WIS modifier + positive Will save`, capped below HP and at 60. An explicit `Willpower: current/max` line or architect `maxWillpower` overrides it. `maxWillpower: 0` means mindless/immune.
 - **Damage** accepts `XdY+Z` expressions. Natural 20 is a critical (damage dice are doubled, modifier once); natural 1 always misses.
 - **Actions**: Move, Attack, Skill, Item, Defend, Wait, Flee. A unit can move before or after its main action. Bonus-action skills consume the bonus slot instead.
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
@@ -132,6 +136,27 @@ Mechanical fields:
 ```
 
 `resource: "both"` uses `damage` for HP and `willpowerDamage` for Willpower. The engine uses one attack roll; a critical doubles each damage pool. Basic attacks use `attackResource` / `willpowerDamage` / `attackWillpowerOutcome`. The agent cannot choose to redirect an ordinary attack into Willpower.
+
+### Combat engagement state
+
+`[COMBAT]` distinguishes an encounter roster from active combat:
+
+```text
+[COMBAT]
+COMBAT STATE: DORMANT
+ENEMIES:
+Goblin: 12/12 HP
+Willpower: 6/6
+...
+[/COMBAT]
+```
+
+- `DORMANT` — enemies are present, but no hostile action has occurred. Negotiation, intimidation, surrender, parley, and withdrawal stay here. The board does not open and initiative is not rolled.
+- `HOSTILE` — an attack, hostile spell, charge, or ambush was declared, or an enemy attacked. The board starts.
+- `ACTIVE` — the board owns the encounter. Board-generated memo blocks write this automatically.
+- Legacy blocks without a state header are treated as engaged for backward compatibility. `COMBAT ROUND 0` is treated as dormant.
+
+`StartTacticalCombat` is only called for a real engagement, never for mere enemy presence, threats, standoffs, or a dormant roster. Automatic startup can be disabled in settings; the board can still be opened with **Start encounter**.
 
 ### Combat override
 
@@ -391,4 +416,4 @@ The tactical suites cover terrain/grid generation, placement, movement and diffi
 - Enemy `[COMBAT]` skill text is parsed heuristically; ambiguous abilities may become a generic attack or buff.
 - Automatic narration calls the main generation API; if another generation is running, the queued result waits for the next message instead.
 - Willpower transformations and side changes are encounter-scoped and revert after combat by default. Permanent changes must be narrated and applied by the State Tracker.
-- Enemy special resolution is capped at two special abilities per activation batch to keep token usage bounded.
+- Enemy special resolution is capped per activation batch (default two; configurable 0–4) to keep token usage bounded.

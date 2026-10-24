@@ -151,6 +151,10 @@ function syncControls(settings) {
     if (densityValue) densityValue.textContent = `${Number(settings.tacticalCombatTerrainDensity ?? 35)}%`;
     setValue(el('rpg_tactical_combat_movement'), settings.tacticalCombatMovement ?? 6);
     setValue(el('rpg_tactical_combat_encounter_source'), settings.tacticalCombatEncounterSource || 'auto');
+    setChecked(el('rpg_tactical_combat_auto_start_on_hostility'), settings.tacticalCombatAutoStartOnHostility !== false);
+    setValue(el('rpg_tactical_combat_willpower_percent'), settings.tacticalCombatWillpowerMaxPercent ?? 30);
+    setChecked(el('rpg_tactical_combat_willpower_recover'), settings.tacticalCombatWillpowerRecoverAfterCombat !== false);
+    setValue(el('rpg_tactical_combat_max_special_resolutions'), settings.tacticalCombatMaxSpecialResolutions ?? 2);
     setChecked(el('rpg_tactical_combat_auto_narrate'), settings.tacticalCombatAutoNarrate !== false);
     setChecked(el('rpg_tactical_combat_opening_actions'), settings.tacticalCombatOpeningActions !== false);
     setChecked(el('rpg_tactical_combat_deployment_phase'), settings.tacticalCombatDeploymentPhase !== false);
@@ -265,8 +269,32 @@ export function bindTacticalCombatSettings(deps) {
         });
     }
 
+    const willpowerPercent = el('rpg_tactical_combat_willpower_percent');
+    if (willpowerPercent) {
+        willpowerPercent.addEventListener('change', () => {
+            const value = Math.max(10, Math.min(60, parseInt(String(willpowerPercent.value), 10) || 30));
+            willpowerPercent.value = value;
+            settings.tacticalCombatWillpowerMaxPercent = value;
+            save();
+            changed();
+        });
+    }
+
+    const maxSpecial = el('rpg_tactical_combat_max_special_resolutions');
+    if (maxSpecial) {
+        maxSpecial.addEventListener('change', () => {
+            const value = Math.max(0, Math.min(4, parseInt(String(maxSpecial.value), 10) || 0));
+            maxSpecial.value = value;
+            settings.tacticalCombatMaxSpecialResolutions = value;
+            save();
+            changed();
+        });
+    }
+
     for (const [id, key] of [
         ['rpg_tactical_combat_auto_narrate', 'tacticalCombatAutoNarrate'],
+        ['rpg_tactical_combat_auto_start_on_hostility', 'tacticalCombatAutoStartOnHostility'],
+        ['rpg_tactical_combat_willpower_recover', 'tacticalCombatWillpowerRecoverAfterCombat'],
         ['rpg_tactical_combat_opening_actions', 'tacticalCombatOpeningActions'],
         ['rpg_tactical_combat_deployment_phase', 'tacticalCombatDeploymentPhase'],
         ['rpg_tactical_combat_sync_tracker_before_narration', 'tacticalCombatSyncTrackerBeforeNarration'],

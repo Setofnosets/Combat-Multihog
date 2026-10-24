@@ -8,6 +8,7 @@
  */
 
 import { getSettings } from './state-manager.js';
+import { getCombatMemoState } from './src/state/combat-persistence.js';
 import { logTransaction } from './debug-viewer.js';
 import { parseJsonWithColorRepair } from './memo-processor.js';
 
@@ -306,6 +307,25 @@ export function isCombatActive(memo) {
     return body.length > 0 && !/^END_COMBAT$/i.test(body);
 }
 
+/**
+ * True only when the [COMBAT] roster represents an actual engagement.
+ * A dormant/parley roster is still "active" for roster parsing, but must not
+ * start tactical combat, switch to the combat model, or disable dice tools.
+ * @param {string} memo
+ * @returns {boolean}
+ */
+export function isCombatEngaged(memo) {
+    return getCombatMemoState(memo) === 'engaged';
+}
+
+/**
+ * @param {string} memo
+ * @returns {'absent'|'ended'|'dormant'|'engaged'}
+ */
+export function getCombatState(memo) {
+    return getCombatMemoState(memo);
+}
+
 function escapeSlashArg(value) {
     return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
@@ -417,7 +437,7 @@ export async function syncCombatProfile(memo, settings) {
     if (!combatProfileName) return;
 
     const combatPresetId = String(settings.combatCompletionPresetId || '').trim();
-    const combatActive = isCombatActive(memo);
+    const combatActive = isCombatEngaged(memo);
 
     await runSerializedCombatSwitch(async () => {
         try {

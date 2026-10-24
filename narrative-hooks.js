@@ -13,7 +13,7 @@
  */
 
 import { getSettings, hydrateWorldProgressionFromChatState, persistWorldProgressionTimer, persistRouterLastRunWatermark, persistMapUpdaterLastRunTimestamp, persistMapUpdaterLastRunWatermark, persistMapUpdaterState, getNpcRelationshipMax, clampRelationshipValue, relationshipBarPct, getFriendshipTier, getAffectionTier, applyRelTierBadgeElement, showRelationshipFloatFeedback, saveChatState, getActiveChatId, getRelationshipUpdateMode, RELATIONSHIP_UPDATE_MODES, shouldProcessRegexRelationshipUpdates, stripCoreMarkersForNarrator } from './state-manager.js';
-import { syncCombatProfile, isCombatActive } from './llm-client.js';
+import { syncCombatProfile, isCombatEngaged, getCombatState } from './llm-client.js';
 import { parseQuestsFromMemo, extractCurrentTimeStr, cleanMessageContent, cleanToolCallMessage, formatInWorldTime, memoForGmContext, stripPromptInjectionsFromUserText, stripCyoaAndPacingInjections, mergeMemo, applyQuestSyncAndStripMemo, computeDelta } from './memo-processor.js';
 import { parseMemoBlocks } from './renderer.js';
 import { runRouterPass, saveSceneToLorebook, scanAssistantOutputForKeywords, parseInWorldMinutes, runWorldProgressionPass, updateLorebookEntry, getLorebookManifest, rollbackRouterPass, isRouterRunning, syncDungeonMapsToLocationLorebook, captureActiveDungeonMapHistory } from './router.js';
@@ -632,7 +632,7 @@ function bindTacticalCombatToolSync() {
 }
 
 /** Runtime prompt override: once [COMBAT] exists, regular combat narration is prohibited. */
-function buildTacticalCombatRuntimeOverride(settings) {
+export function buildTacticalCombatRuntimeOverride(settings) {
     try {
         if (!settings?.tacticalCombatEnabled) return '';
         const chatId = getActiveChatId();
@@ -643,12 +643,17 @@ function buildTacticalCombatRuntimeOverride(settings) {
         if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
             return '';
         }
-        if (!isCombatActive(settings.currentMemo)) return '';
-        const hasTool = isEffectiveSectionEnabled('tactical_combat', settings);
+        const combatState = getCombatState(settings.currentMemo);
+        if (combatState === 'absent' || combatState === 'ended') return '';
+        if (combatState !== 'engaged') {
+            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). Combat has not begun. Do not roll initiative, simulate attacks, or call StartTacticalCombat. The party may negotiate, intimidate, surrender, or leave. Start tactical combat only when a hostile action is actually declared.\n[/DORMANT_ENCOUNTER]\n\n`;
+        }
+        const hasTool = isEffectiveSectionEnabled('tactical_combat', settings)
+            && settings.tacticalCombatAutoStartOnHostility !== false;
         const instruction = hasTool
             ? 'Call the StartTacticalCombat function tool exactly once now. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
-            : 'Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns this fight.';
-        return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is enabled and [COMBAT] is active. ${instruction}\nNever continue a combat scene narratively while this override is present.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
+            : 'Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. Automatic tactical start is disabled or the tool is unavailable; tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns this fight.';
+        return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is enabled and [COMBAT] is engaged. ${instruction}\nNever continue a combat scene narratively while this override is present.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
     } catch (_) {
         return '';
     }
@@ -677,7 +682,11 @@ function tacticalCombatToolAvailable() {
         const board = s.tacticalCombatByChat?.[chatId];
         if (board?.status === 'active' || board?.finalization?.finalizing) return false;
         if (s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId)) return false;
-        if (s.tacticalCombatEncounterSource === 'existing' && !isCombatActive(s.currentMemo)) return false;
+        if (s.tacticalCombatAutoStartOnHostility === false) return false;
+        if (s.tacticalCombatEncounterSource === 'existing') {
+            const rosterState = getCombatState(s.currentMemo);
+            if (rosterState === 'absent' || rosterState === 'ended') return false;
+        }
         return !tacticalCombatToolCoolingDown(chatId);
     } catch (_) {
         return false;
@@ -698,10 +707,12 @@ export function syncTacticalCombatToolRegistration() {
         const board = s.tacticalCombatByChat?.[chatId];
         const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
         const pendingResult = s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId);
+        const rosterState = getCombatState(s.currentMemo);
         const waitingForExistingRoster = s.tacticalCombatEncounterSource === 'existing'
-            && !isCombatActive(s.currentMemo);
+            && (rosterState === 'absent' || rosterState === 'ended');
         const coolingDown = tacticalCombatToolCoolingDown(chatId);
         const shouldExist = tacticalCombatToolConfigured()
+            && s.tacticalCombatAutoStartOnHostility !== false
             && !boardActive
             && !pendingResult
             && !waitingForExistingRoster
@@ -722,7 +733,7 @@ export function registerTacticalCombatTool() {
         registerFunctionTool({
             name: 'StartTacticalCombat',
             displayName: 'Tactical Combat',
-            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this as soon as a real fight begins, even if the State Memo does not contain a [COMBAT] block yet; the tool builds opposition from the scene when needed. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
+            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this only when a real fight begins: a hostile attack, hostile spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -871,7 +882,7 @@ export function registerDiceFunctionTool() {
  * outside combat restore the user's configured dice tools.
  */
 export function syncDiceFunctionToolForRngContext(memo, manageHybrid = false) {
-    if (!manageHybrid || !isCombatActive(memo)) {
+    if (!manageHybrid || !isCombatEngaged(memo)) {
         registerDiceFunctionTool();
         return;
     }
@@ -1635,7 +1646,7 @@ export function installInterceptor() {
                 // while [COMBAT] is active. Queue-only mode continues to inject it for
                 // every response, preserving its existing behavior.
                 const injectRngQueue = settings.rngEnabled
-                    && (!settings.diceFunctionTool || isCombatActive(settings.currentMemo));
+                    && (!settings.diceFunctionTool || isCombatEngaged(settings.currentMemo));
                 if (injectRngQueue) {
                     if (settings.rngQueueD20) {
                         const queue = makeRngQueue(RNG_QUEUE_LEN, false);

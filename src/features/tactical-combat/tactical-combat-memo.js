@@ -124,7 +124,7 @@ export function buildCombatMemoBlock(state) {
     if (!state || !Array.isArray(state.units)) return '[COMBAT]\nEND_COMBAT\n[/COMBAT]';
     const enemies = state.units.filter(unit => unit?.side === 'enemy');
     const allies = state.units.filter(unit => unit?.side === 'ally');
-    const lines = ['[COMBAT]', `COMBAT ROUND ${Number(state.round) || 1}`, 'ENEMIES:'];
+    const lines = ['[COMBAT]', 'COMBAT STATE: ACTIVE', `COMBAT ROUND ${Number(state.round) || 1}`, 'ENEMIES:'];
     if (enemies.length) {
         for (const unit of enemies) lines.push(buildUnitBlock(unit));
     }
@@ -220,17 +220,19 @@ function patchBlockHp(content, units, options = {}) {
     return lines.join('\n');
 }
 
-function patchWillpowerLine(line, unit) {
+function patchWillpowerLine(line, unit, recover = true) {
     const match = String(line || '').match(WP_LINE_RX);
     if (!match || !unit) return line;
     const max = Math.max(0, numberOr(unit.maxWillpower, numberOr(match[4], numberOr(match[3], 0))));
-    return `${match[1]}${match[2]}: ${max}/${max}${match[5] || ''}`;
+    const current = recover ? max : Math.min(max, Math.max(0, numberOr(unit.willpower, numberOr(match[3], 0))));
+    return `${match[1]}${match[2]}: ${current}/${max}${match[5] || ''}`;
 }
 
 function patchBlockWillpower(content, units, options = {}) {
     const lines = String(content || '').split(/\r?\n/);
     const used = new Set();
     let matched = false;
+    const recover = options.recoverWillpower !== false;
     for (let index = 0; index < lines.length; index += 1) {
         const match = lines[index].match(WP_LINE_RX);
         if (!match) continue;
@@ -243,14 +245,14 @@ function patchBlockWillpower(content, units, options = {}) {
         }
         const unit = matchUnitForHeader(units, entityName, used);
         if (unit) {
-            lines[index] = patchWillpowerLine(lines[index], unit);
+            lines[index] = patchWillpowerLine(lines[index], unit, recover);
             used.add(unit.id);
             matched = true;
         }
     }
     if (!matched && options.fallbackUnit) {
         const index = lines.findIndex(line => WP_LINE_RX.test(line));
-        if (index >= 0) lines[index] = patchWillpowerLine(lines[index], options.fallbackUnit);
+        if (index >= 0) lines[index] = patchWillpowerLine(lines[index], options.fallbackUnit, recover);
     }
     return lines.join('\n');
 }
@@ -301,15 +303,15 @@ export function clearStaleCombatMemo(previousState, settings) {
  * @param {object} state
  * @returns {string}
  */
-export function patchPartyMemoFromBoard(memo, state) {
+export function patchPartyMemoFromBoard(memo, state, options = {}) {
     const playerUnits = (state?.units || []).filter(unit => (unit?.originalSide || unit?.side) === 'player' && !unit.summoned);
     if (!playerUnits.length) return String(memo || '');
     let result = String(memo || '');
     const characterUnit = playerUnits[0];
     result = patchNamedBlock(result, 'CHARACTER', playerUnits, { fallbackUnit: characterUnit });
-    result = patchNamedBlock(result, 'CHARACTER', playerUnits, { fallbackUnit: characterUnit, patch: 'willpower' });
+    result = patchNamedBlock(result, 'CHARACTER', playerUnits, { fallbackUnit: characterUnit, patch: 'willpower', recoverWillpower: options.recoverWillpower !== false });
     result = patchNamedBlock(result, 'PARTY', playerUnits);
-    result = patchNamedBlock(result, 'PARTY', playerUnits, { patch: 'willpower' });
+    result = patchNamedBlock(result, 'PARTY', playerUnits, { patch: 'willpower', recoverWillpower: options.recoverWillpower !== false });
     return result;
 }
 
@@ -322,7 +324,9 @@ export function patchPartyMemoFromBoard(memo, state) {
 export function syncCombatResultToMemo(state, settings) {
     if (!state || !settings) return { changed: false, memo: String(settings?.currentMemo || '') };
     const before = String(settings.currentMemo || '');
-    let next = patchPartyMemoFromBoard(before, state);
+    let next = patchPartyMemoFromBoard(before, state, {
+        recoverWillpower: settings.tacticalCombatWillpowerRecoverAfterCombat !== false,
+    });
     if (COMBAT_BLOCK_RX.test(next)) {
         next = replaceCombatBlock(next, '[COMBAT]END_COMBAT[/COMBAT]');
     }
@@ -345,7 +349,7 @@ export function syncCombatResultToMemo(state, settings) {
  * @param {object} state
  * @returns {string}
  */
-export function buildCombatTrackerReport(state) {
+export function buildCombatTrackerReport(state, options = {}) {
     if (!state) return '';
     const outcome = state.outcome || {};
     const lines = [
@@ -411,7 +415,11 @@ export function buildCombatTrackerReport(state) {
         lines.push('', 'Highlights:');
         for (const entry of outcome.highlights.slice(0, 10)) lines.push(`- ${entry}`);
     }
-    lines.push('', 'Willpower is restored to max for all survivors after combat. Do not persist current Willpower loss.');
+    if (options.recoverWillpower === false) {
+        lines.push('', 'Willpower is persistent for this campaign. Patch current Willpower, do not restore it to max.');
+    } else {
+        lines.push('', 'Willpower is restored to max for all survivors after combat. Do not persist current Willpower loss.');
+    }
     lines.push('Apply this report to [CHARACTER]/[PARTY], close [COMBAT], and record only the macro-level result. Do not re-adjudicate the fight.');
     return lines.join('\n');
 }
