@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────
 
 import { getSettings, getNpcRelationshipMax, buildRelationshipTrackingSysprompt, recordDeletedCustomTags, clearDeletedCustomTagTombstones, removeChatSetupCatalogEntries, getChatSetupItemScope, setChatSetupItemScope, setChatSetupItemEnabled } from './state-manager.js';
-import { sendStateRequest, restoreUserMacro } from './llm-client.js';
+import { sendStateRequest, restoreUserMacro, isCombatEngaged } from './llm-client.js';
 import { escapeHtml, memoForGmContext } from './memo-processor.js';
 import { renderMemoAsCards } from './renderer.js';
 import { refreshOrderList } from './ui-editors.js';
@@ -314,15 +314,17 @@ export function extractTopLevelSections(rawText) {
 export const TACTICAL_COMBAT_COMBAT_OVERRIDE = `<combat>
 TACTICAL COMBAT OVERRIDE
 All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-When a fight actually begins, call StartTacticalCombat immediately — even if [COMBAT] is not present yet. The tool builds opposition from the current scene and seeds the State Memo. Do not wait for the State Tracker to add [COMBAT].
+When combat actually begins — a hostile attack, hostile spell, charge, or ambush is declared, an enemy attacks, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE — call StartTacticalCombat immediately (once). The tool builds opposition from the current scene and seeds the State Memo; do not wait for the State Tracker.
+Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster. If the encounter is dormant, continue the non-combat scene normally and do not treat it as an active fight.
 If the player's immediately preceding message declared a concrete opening action (spell, ambush, charge, or attack), copy it into openingAction and set surprise=true for an ambush. The board resolves it before Round 1; do not resolve it yourself.
-If [COMBAT] is already present and no tactical encounter is active, call StartTacticalCombat immediately (once) and do not continue combat narration.
+After calling the tool, do not resolve the fight yourself. The tactical result is authoritative.
 </combat>`;
 
 export const TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL = `<combat>
 TACTICAL COMBAT OVERRIDE
 All combat encounters are resolved on the tactical combat board while Tactical Combat is enabled. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
-If a fight begins, narrate only the opening preamble and stop before resolving any combat action. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns the fight and will seed the roster.
+When combat actually begins, narrate only the opening preamble and stop before resolving any combat action. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns the fight and will seed the roster.
+A COMBAT STATE: DORMANT roster is not an active fight. Continue the non-combat scene and do not treat mere enemy presence, threats, standoffs, or negotiation as combat.
 </combat>`;
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -465,9 +467,7 @@ export function transformBaseSectionContent(tag, innerContent, settings) {
     // [COMBAT]. Keep only the active mechanic in the narrator's prompt: live tool
     // rolls outside combat, then the pre-seeded queue during combat.
     if (tag === 'rng_system' && settings.rngEnabled && settings.diceFunctionTool) {
-        const combatMatch = (settings.currentMemo || '').match(/\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i);
-        const combatBody = combatMatch?.[1]?.trim() || '';
-        const inCombat = !!combatBody && !/^END_COMBAT$/i.test(combatBody);
+        const inCombat = isCombatEngaged(settings.currentMemo);
         const dieWord = d100Mode ? 'd100' : 'd20';
         const toolName = d100Mode ? 'RollTheDiceD100' : 'RollTheDice';
         if (!inCombat) {
@@ -501,9 +501,7 @@ export function transformBaseSectionContent(tag, innerContent, settings) {
             const queueName = d100Mode ? '[RNG_QUEUE_d100 v7.0]' : '[RNG_QUEUE v7.0]';
             const dieWord = d100Mode ? 'd100' : 'd20';
             const toolName = d100Mode ? 'RollTheDiceD100' : 'RollTheDice';
-            const combatMatch = (settings.currentMemo || '').match(/\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i);
-            const combatBody = combatMatch?.[1]?.trim() || '';
-            const inCombat = !!combatBody && !/^END_COMBAT$/i.test(combatBody);
+            const inCombat = isCombatEngaged(settings.currentMemo);
             const useQueue = !settings.diceFunctionTool || inCombat;
             const benchEta = useQueue
                 ? `On benching, estimate a return ETA. Just before return (never once already in-scene), pop a ${dieWord} from ${queueName} to resolve task success/failure — DC by task difficulty + character suitability. Critical failure = injured return, no return, or similarly severe outcome. This pop is mandatory, always pre-return.`

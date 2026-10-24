@@ -20,4 +20,17 @@ describe('combat engagement state', () => {
         expect(getCombatMemoState(memo('COMBAT ROUND 1\nENEMIES:\nGoblin: 8/8 HP'))).toBe('engaged');
         expect(getCombatMemoState(memo('ENEMIES:\nGoblin: 8/8 HP'))).toBe('engaged');
     });
+
+    it('treats resolved or empty rosters as ended even when the state line is stale', () => {
+        expect(getCombatMemoState(memo('COMBAT STATE: HOSTILE\nCOMBAT ROUND 3\nENEMIES:\nGoblin: 0/8 HP\nStatus: Defeated'))).toBe('ended');
+        expect(getCombatMemoState(memo('COMBAT STATE: ACTIVE\nCOMBAT ROUND 3\nENEMIES:'))).toBe('ended');
+        expect(getCombatMemoState(memo('COMBAT ROUND 2\nENEMIES:'))).toBe('ended');
+        expect(getCombatMemoState(memo('COMBAT STATE: DORMANT\nENEMIES:\nGoblin: 0/8 HP\nStatus: Dead'))).toBe('ended');
+    });
+
+    it('recognizes terminal and idle state synonyms', () => {
+        expect(getCombatMemoState(memo('COMBAT STATE: NONE\nENEMIES:\nGoblin: 8/8 HP'))).toBe('ended');
+        expect(getCombatMemoState(memo('COMBAT STATE: CLEARED\nENEMIES:\nGoblin: 8/8 HP'))).toBe('ended');
+        expect(getCombatMemoState(memo('COMBAT STATE: IDLE\nENEMIES:\nGoblin: 8/8 HP'))).toBe('dormant');
+    });
 });

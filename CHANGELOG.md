@@ -13,6 +13,9 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 - Tactical combat now distinguishes an encounter roster from an active fight through `COMBAT STATE: DORMANT/HOSTILE/ACTIVE`. Enemy presence, parley, intimidation, and surrender offers no longer auto-start the board; only an actual hostile action or an engaged state does. Dormant rosters also no longer switch the combat model, suppress dice tools, or pause map evolution.
 - Tactical settings now expose automatic startup on hostile actions, derived Willpower percentage, Willpower recovery after combat, and the maximum number of enemy special resolutions per activation.
 
+### Fixed
+- Dormant and present encounters now close promptly when resolved narratively. The State Tracker combat prompt defines explicit `END_COMBAT` conditions for successful parley, bribery, surrender, withdrawal, and departed combatants; legacy/custom combat prompts receive state and resolution invariants without being overwritten. Merge-time cleanup accepts bare or trailing `END_COMBAT`, closes rosters whose previously active enemies are all resolved, replaces duplicate `[COMBAT]` blocks, and treats stale/no-enemy rosters as ended. Hybrid RNG, Combat API override, and lorebook active-combat context now gate on engaged combat rather than raw `[COMBAT]` presence.
+
 ## [2026.9.25] - 2026-09-27
 
 ### Fixed

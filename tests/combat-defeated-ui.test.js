@@ -197,8 +197,10 @@ Status: Dead
         const instructions = buildModulesInstructionText(settings);
         expect(settings.stockPrompts.combat).toBe(customCombatPrompt);
         expect(instructions).toContain(customCombatPrompt);
-        expect(instructions).toContain('DEFEATED COMBATANTS: Mark defeated enemies as Status: Defeated. Do not omit them from the memo.');
+        expect(instructions).toContain('DEFEATED COMBATANTS: While a fight is active, mark defeated enemies as Status: Defeated');
         expect(instructions).toContain('COMBAT SIDES: Group combatants under ENEMIES: and NON-PARTY ALLIES: headers');
+        expect(instructions).toContain('COMBAT STATE: Begin every [COMBAT] block');
+        expect(instructions).toContain('COMBAT RESOLUTION: Close [COMBAT]');
         expect(instructions).toContain('Never put any [PARTY] member in [COMBAT].');
 
         settings.stockPrompts.combat = 'Group combatants under ENEMIES: and ALLIES:.';

@@ -7,11 +7,26 @@ const COMBAT_ROUND_RX = /^\s*COMBAT ROUND\s+(\d+)\s*$/im;
 const DORMANT_COMBAT_STATES = new Set([
     'dormant', 'parley', 'parle', 'negotiation', 'negotiating', 'standoff',
     'social', 'noncombat', 'non-combat', 'precombat', 'pre-combat', 'peaceful',
+    'inactive', 'idle', 'staged',
 ]);
 
 const ENGAGED_COMBAT_STATES = new Set([
     'hostile', 'active', 'engaged', 'combat', 'fighting', 'battle',
 ]);
+
+const ENDED_COMBAT_STATES = new Set([
+    'ended', 'resolved', 'over', 'complete', 'completed', 'closed', 'cleared',
+    'none', 'no-combat', 'no_combat', 'victory', 'defeat', 'retreat', 'routed',
+]);
+
+/**
+ * @param {string} body
+ * @returns {boolean}
+ */
+function hasActiveEnemyCombatant(body) {
+    return parseCombatants(body).some(entity =>
+        entity.side === 'enemies' && !entity.lines.some(line => isResolvedCombatantStatusLine(line)));
+}
 
 /**
  * Read the explicit engagement state of the memo's [COMBAT] block.
@@ -26,17 +41,22 @@ export function getCombatMemoState(memo) {
 
     const explicit = body.match(COMBAT_STATE_RX)?.[1]?.toLowerCase();
     if (explicit) {
-        if (DORMANT_COMBAT_STATES.has(explicit)) return 'dormant';
-        if (ENGAGED_COMBAT_STATES.has(explicit)) return 'engaged';
-        if (explicit === 'ended' || explicit === 'resolved') return 'ended';
+        if (DORMANT_COMBAT_STATES.has(explicit)) {
+            return hasActiveEnemyCombatant(body) ? 'dormant' : 'ended';
+        }
+        if (ENDED_COMBAT_STATES.has(explicit)) return 'ended';
+        if (ENGAGED_COMBAT_STATES.has(explicit)) {
+            return hasActiveEnemyCombatant(body) ? 'engaged' : 'ended';
+        }
     }
 
     // Hand-edited / backward-compatible shorthand: round 0 means a staged
     // roster, not a fight. Legacy blocks without any state header remain
-    // engaged so existing chats keep their current behavior.
+    // engaged while they still contain an active enemy, so existing chats keep
+    // their current behavior without letting stale rosters keep combat mode on.
     const round = Number(body.match(COMBAT_ROUND_RX)?.[1]);
     if (Number.isFinite(round) && round <= 0) return 'dormant';
-    return 'engaged';
+    return hasActiveEnemyCombatant(body) ? 'engaged' : 'ended';
 }
 
 /**
