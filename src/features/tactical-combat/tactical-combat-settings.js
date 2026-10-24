@@ -94,7 +94,8 @@ function classifierStatus(settings) {
     if (parsed.ok) {
         const ruleCount = parsed.config.skillRules.length;
         const buff = parsed.config.buff;
-        node.textContent = `Valid classifier · ${ruleCount} skill rule${ruleCount === 1 ? '' : 's'} · buffs: +${buff.acBonus} AC / +${buff.attackBonus} ATK for ${buff.rounds} round${buff.rounds === 1 ? '' : 's'}.`;
+        const willCount = parsed.config.willpower?.outcomeRules?.length || 0;
+        node.textContent = `Valid classifier · ${ruleCount} skill rule${ruleCount === 1 ? '' : 's'} · ${willCount} Willpower outcome rule${willCount === 1 ? '' : 's'} · buffs: +${buff.acBonus} AC / +${buff.attackBonus} ATK for ${buff.rounds} round${buff.rounds === 1 ? '' : 's'}.`;
         node.className = 'rt-tc-setting-status rt-tc-ok';
     } else {
         node.textContent = `Invalid classifier: ${parsed.error} The shipped rules are used until this is fixed.`;

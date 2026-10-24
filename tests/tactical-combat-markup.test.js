@@ -180,6 +180,22 @@ describe('tactical combat markup', () => {
         expect(html).toContain('Initiative');
     });
 
+    it('renders a Willpower bar and broken token state', () => {
+        const state = makeState();
+        state.units[0].maxWillpower = 10;
+        state.units[0].willpower = 4;
+        let html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1' });
+        expect(html).toContain('rt-tc-wpbar');
+        expect(html).toContain('WP 4/10');
+        expect(html).toContain('rt-tc-token-wp');
+        state.units[2].willpowerBroken = true;
+        state.units[2].defeatCause = 'willpower';
+        state.units[2].defeated = true;
+        html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1' });
+        expect(html).toContain('rt-tc-broken');
+        expect(html).toContain('Willpower broken');
+    });
+
     it('marks a defeated token as a corpse instead of an interactive token', () => {
         const state = makeState();
         getUnitById(state, 'enemy-3').defeated = true;

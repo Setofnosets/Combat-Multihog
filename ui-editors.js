@@ -762,17 +762,20 @@ const STOCK_MODULE_PREVIEW_SAMPLES = Object.freeze({
     COMBAT: `COMBAT ROUND 2
 ENEMIES:
 Goblin Scout: 8/12 HP
+Willpower: 5/5
 Att/def: Shortsword (1 attack, +4 / 1d6+2 Piercing) | Leather Armor (AC: 13)
 Saves: Fort +2, Ref +4, Will +0
 Abilities: Nimble Escape
 Other: Minion Tier
 Status: Wounded`,
     CHARACTER: `Adventurer (Ranger): 28/36 HP
+Willpower: 11/11
 Combat: BAB: +4 | Ranged (1 attack): +7 | Melee (1 attack): +5 | Base AC: 13 | Total AC: 15
 Gear: Longbow (1d8 Piercing) | Leather Armor (+2 AC)
 Attr: STR 12 (+1), DEX 16 (+3), CON 14 (+2), INT 10 (+0), WIS 15 (+2), CHA 10 (+0)
 Status: Healthy`,
     PARTY: `Elara (Cleric): 24/30 HP
+Willpower: 9/9
 Combat: BAB: +3 | Ranged (1 attack): +3 | Melee (1 attack): +5 | Base AC: 10 | Total AC: 16
 Gear: Mace (1d6+2 Bludgeoning) | Chain Shirt (+4 AC) | Shield (+2 AC)
 Abilities: Channel Divinity (1/1)
@@ -801,6 +804,7 @@ Current Time: 08:35 AM, Day 3`,
   REWARD: 100 GP
   OBJ_ACTIVE: Find the missing sheep`,
     'BENCHED PARTY': `Gareth (Fighter): 30/38 HP
+Willpower: 10/10
 Status: Benched (08:08 AM, Day 1, investigating the docks)`,
 });
 

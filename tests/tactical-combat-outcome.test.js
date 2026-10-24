@@ -132,6 +132,28 @@ describe('tactical combat outcome handoff', () => {
         expect(block).toContain('RESULT=Victory {{unknown}}');
     });
 
+    it('reports Willpower breaks, side changes, and transformations', () => {
+        const state = makeState();
+        const settings = { tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT };
+        settings.tacticalCombatReturn = {
+            chatId: 'chat-A',
+            title: 'The Sunken Keep',
+            location: 'Gatehouse',
+            outcome: {
+                ...state.outcome,
+                willpowerBreaks: [{ name: 'Goblin Archer', outcome: 'flee', source: 'Dread Wail' }],
+                sideChanges: [{ name: 'Aria', originalSide: 'player', side: 'enemy' }],
+                transformations: [{ name: 'Stone Statue', originalName: 'Cultist', permanent: false }],
+                finalUnits: [{ name: 'Aria', side: 'player', originalSide: 'player', hp: 14, maxHp: 20, willpower: 3, maxWillpower: 8 }],
+            },
+        };
+        const block = buildNarrationBlock(settings, 'chat-A');
+        expect(block).toContain('Willpower breaks: Goblin Archer (flee; Dread Wail)');
+        expect(block).toContain('Side changes: Aria (player → enemy)');
+        expect(block).toContain('Transformations: Cultist (temporary)');
+        expect(block).toContain('3/8 WP');
+    });
+
     it('clears the queued block only after injection and only for the matching chat', () => {
         const settings = {
             tacticalCombatReturn: {

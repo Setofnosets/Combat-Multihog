@@ -126,7 +126,7 @@ DUAL-WIELDING (the ONLY path to a 3rd attack): wielding two light/one-handed mel
 </attacks_per_round>
 
 <saving_throws>
-Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions).
+Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions). In tactical combat, the Willpower pool replaces rolled Will saves: do not roll a Will save for fear, charm, domination, or similar effects unless the tactical engine explicitly asks for one.
 Tier ranges: Minion +0–2 flat | Soldier +2–4 (one elevated) | Elite +3–6 (two elevated, one weak) | Boss +5–8 (thematic high, off-theme low). Assign by narrative role; deviate when it makes sense.
 
 PARTY SAVES: On joining, derive Fort/Ref/Will from CON/DEX/WIS mods + a +2 to +4 proficiency bonus on two role-appropriate saves. Keep consistent; update on attribute changes.
@@ -223,6 +223,7 @@ Context includes "World Progression" reports (background/off-screen macro events
 On joining: state *(Name joins the party)* and declare their profile:
 [PARTY]
 Name (Class): current/max HP
+Willpower: current/max
 Combat: BAB: +X | Ranged (1 attack / 2 attacks / 3 attacks): +X or +C/+D | Melee (1 attack / 2 attacks / 3 attacks): +X, +A/+B, or +A/+B/+C | Base AC: X | Total AC: Z
 (Melee = BAB + STR mod + weapon enhancement; Ranged = BAB + DEX mod + weapon enhancement; use singular "attack" when N=1, plural "attacks" when N≥2 — never "1 attacks"; N=1 below BAB +8 with no offhand, N=2 at BAB +8+ or dual-wielding below +8, N=3 at BAB +8+ with dual-wielding)
 Gear: Primary_Weapon (Damage_Die + Mod / Type) | Armor_Name (+Y AC)

@@ -638,7 +638,7 @@ function buildTacticalCombatRuntimeOverride(settings) {
         const chatId = getActiveChatId();
         const board = settings.tacticalCombatByChat?.[chatId];
         if (board?.status === 'active') {
-            return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is currently being resolved on the board. Do not narrate attacks, damage, initiative, saves, enemy turns, or the outcome. Do not call StartTacticalCombat again. If the player writes in chat, acknowledge that the fight is paused on the tactical board and wait for its result.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
+            return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is currently being resolved on the board. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or the outcome. Do not call StartTacticalCombat again. If the player writes in chat, acknowledge that the fight is paused on the tactical board and wait for its result.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
         }
         if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
             return '';
@@ -646,8 +646,8 @@ function buildTacticalCombatRuntimeOverride(settings) {
         if (!isCombatActive(settings.currentMemo)) return '';
         const hasTool = isEffectiveSectionEnabled('tactical_combat', settings);
         const instruction = hasTool
-            ? 'Call the StartTacticalCombat function tool exactly once now. Do not narrate attacks, damage, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
-            : 'Do not narrate attacks, damage, initiative, saves, enemy turns, or any combat resolution. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns this fight.';
+            ? 'Call the StartTacticalCombat function tool exactly once now. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
+            : 'Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. Tell the player to open the Tactical Combat board from the tracker header or Settings; the board owns this fight.';
         return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is enabled and [COMBAT] is active. ${instruction}\nNever continue a combat scene narratively while this override is present.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
     } catch (_) {
         return '';

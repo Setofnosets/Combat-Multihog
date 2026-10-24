@@ -44,6 +44,7 @@ export const DEFAULT_STOCK_PROMPTS = {
   character: `Main character's core stats. MECHANICS ONLY: Never include Identity, Background, Appearance, personality, biography, or other narrative/lore fields in [CHARACTER]. Use this format:
 [CHARACTER]
 {{user}} (Class): current/max HP
+Willpower: current/max
 Combat: BAB: +X | Ranged (1 attack / 2 attacks / 3 attacks): +X or +C/+D | Melee (1 attack / 2 attacks / 3 attacks): +X, +A/+B, or +A/+B/+C | Base AC: X | Total AC: Z
 Gear: Weapon1 (stats) | Weapon2, if exists, (stats) | Armor Name (+Y AC)
 Proficiencies: Category1, Category2
@@ -60,6 +61,7 @@ ${ATTACK_TOTAL_FORMULA_HINT}
 Upon LEVEL UP, incorporate attribute changes.`,
   party: `Companion/Party members. MECHANICS ONLY: Never include Identity, Background, Appearance, personality, biography, or other narrative/lore fields in [PARTY]. Use this format for each member:
 Name (Class): current/max HP
+Willpower: current/max
 Combat: BAB: +X | Ranged (1 attack / 2 attacks / 3 attacks): +X or +C/+D | Melee (1 attack / 2 attacks / 3 attacks): +X, +A/+B, or +A/+B/+C | Base AC: X | Total AC: Z
 Gear: Weapon (stats) | Armor Name (+Y AC)
 Proficiencies: Category1, Category2
@@ -86,6 +88,7 @@ TRIGGERS:
 PERSISTENCE: If [PARTY] changes, you MUST output the ENTIRE block (all remaining members), per standard BLOCK PERSISTENCE rules. If it had no changes this turn, omit it entirely from your output.
 
 Example: [PARTY]Elara (Ranger): 26/45 HP
+Willpower: 13/13
 Combat: BAB: +3 | Ranged (1 attack): +6 | Melee (1 attack): +4 | Base AC: 13 | Total AC: 15
 Gear: Shortbow (1d6+3 Piercing) | Leather Armor (+2 AC)
 Proficiencies: Simple Weapons, Martial Weapons
@@ -137,6 +140,7 @@ Output fields in this exact order for every combatant. Choose MARTIAL or CASTER 
 COMBAT ROUND X
 ENEMIES:
 Name: current/max HP
+Willpower: current/max
 Att/def: (see MARTIAL or CASTER)
 Saves: Fort +X, Ref +X, Will +X
 Abilities: Ability1 (effect), Ability2 (effect)
@@ -152,6 +156,7 @@ MARTIAL (fighters, beasts, thugs — omit Spells: entirely):
 Att/def: Weapon (1 attack / 2 attacks / 3 attacks, +X / damage) | Armor (AC: Z)
 Example:
 Bandit: 18/18 HP
+Willpower: 7/7
 Att/def: Longsword (1 attack, +5 / 1d8+2 Slashing) | Scale Mail (AC: 15)
 Saves: Fort +4, Ref +2, Will +1
 Abilities: Pack Tactics
@@ -164,6 +169,7 @@ Spells: Cantrips: Spell1, Spell2
 Spells: Level N (avail/max): Spell1, Spell2
 Example:
 Cultist Acolyte: 15/15 HP
+Willpower: 7/7
 Att/def: Spell Atk +4 | Spell DC 14 | Dagger (1 attack, +1 / 1d4-1 Piercing) | Robes (AC: 11)
 Saves: Fort +1, Ref +2, Will +3
 Abilities: Spellcasting
@@ -174,6 +180,7 @@ Status: Healthy
 
 Example (Elite tier, demonstrating the 2-attack case):
 Elite Enforcer: 42/42 HP
+Willpower: 15/15
 Att/def: Warhammer (2 attacks, +9/+4 / 1d10+4 Bludgeoning) | Plate Armor (AC: 17)
 Saves: Fort +5, Ref +3, Will +4
 Abilities: Brutal Strike (On a Warhammer hit, deal +1d10 Bludgeoning damage and force a Fort DC 16 save or knock the target prone; 2/2)
@@ -182,6 +189,7 @@ Status: Healthy
 
 Example (Elite dual-wielder, showing the 3-attack case):
 Elite Duelist: 40/40 HP
+Willpower: 14/14
 Att/def: Twin Shortswords (3 attacks, +9/+4/+4 / 1d6+3 Piercing) | Studded Leather (AC: 16)
 Saves: Fort +4, Ref +6, Will +3
 Abilities: Dual Strike (When both a primary-hand and offhand attack hit the same target in one turn, deal +1d6 Piercing damage; 2/2)
@@ -205,6 +213,8 @@ Rules:
 - DEFEATED COMBATANTS: Mark defeated enemies as Status: Defeated. Do not omit them from the memo.
 
 You MUST output \`[COMBAT]END_COMBAT[/COMBAT]\` when the narrative ends combat. Do not put members of [PARTY] into [COMBAT]
+
+WILLPOWER TARGETING: Only abilities whose description explicitly targets Willpower should damage it. Use the form 'Abilities: Dread Wail (Will damage 2d6, 6 cells, 1/1; on Willpower break: flee)'. Valid break outcomes: defeat, flee, switch_side, incapacitate, surrender. Ordinary attacks and ordinary fear/charm narration do not reduce Willpower.
 
 SPELL AND ABILITY USE: track COMBAT spell slots and ability use accurately.`,
   inventory: `Items, loot, equipment, and wealth. You MAY create this section if loot is found and it doesn't currently exist.
@@ -478,7 +488,7 @@ DUAL-WIELDING (the ONLY path to a 3rd attack): wielding two light/one-handed mel
 </attacks_per_round>
 
 <saving_throws>
-Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions).
+Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions). In tactical combat, the Willpower pool replaces rolled Will saves: do not roll a Will save for fear, charm, domination, or similar effects unless the tactical engine explicitly asks for one.
 Tier ranges: Minion +0–2 flat | Soldier +2–4 (one elevated) | Elite +3–6 (two elevated, one weak) | Boss +5–8 (thematic high, off-theme low). Assign by narrative role; deviate when it makes sense.
 
 PARTY SAVES: On joining, derive Fort/Ref/Will from CON/DEX/WIS mods + a +2 to +4 proficiency bonus on two role-appropriate saves. Keep consistent; update on attribute changes.
@@ -574,6 +584,7 @@ Context includes "World Progression" reports (background/off-screen macro events
 On joining: state *(Name joins the party)* and declare their profile:
 [PARTY]
 Name (Class): current/max HP
+Willpower: current/max
 Combat: BAB: +X | Ranged (1 attack / 2 attacks / 3 attacks): +X or +C/+D | Melee (1 attack / 2 attacks / 3 attacks): +X, +A/+B, or +A/+B/+C | Base AC: X | Total AC: Z
 (Melee = BAB + STR mod + weapon enhancement; Ranged = BAB + DEX mod + weapon enhancement; use singular "attack" when N=1, plural "attacks" when N≥2 — never "1 attacks"; N=1 below BAB +8 with no offhand, N=2 at BAB +8+ or dual-wielding below +8, N=3 at BAB +8+ with dual-wielding)
 Gear: Primary_Weapon (Damage_Die + Mod / Type) | Armor_Name (+Y AC)
@@ -863,7 +874,7 @@ DUAL-WIELDING (the ONLY path to a 3rd attack): wielding two light/one-handed mel
 </attacks_per_round>
 
 <saving_throws>
-Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions).
+Three NPC saves, assigned thematically: Fortitude (physical force, poison, disease, exhaustion) / Reflex (dodging, AoE, traps) / Will (fear, charm, domination, illusions). In tactical combat, the Willpower pool replaces rolled Will saves: do not roll a Will save for fear, charm, domination, or similar effects unless the tactical engine explicitly asks for one.
 Tier ranges: Minion +0–2 flat | Soldier +2–4 (one elevated) | Elite +3–6 (two elevated, one weak) | Boss +5–8 (thematic high, off-theme low). Assign by narrative role; deviate when it makes sense.
 
 PARTY SAVES: On joining, derive Fort/Ref/Will from CON/DEX/WIS mods + a +2 to +4 proficiency bonus on two role-appropriate saves. Keep consistent; update on attribute changes.
@@ -959,6 +970,7 @@ Context includes "World Progression" reports (background/off-screen macro events
 On joining: state *(Name joins the party)* and declare their profile:
 [PARTY]
 Name (Class): current/max HP
+Willpower: current/max
 Combat: BAB: +X | Ranged (1 attack / 2 attacks / 3 attacks): +X or +C/+D | Melee (1 attack / 2 attacks / 3 attacks): +X, +A/+B, or +A/+B/+C | Base AC: X | Total AC: Z
 (Melee = BAB + STR mod + weapon enhancement; Ranged = BAB + DEX mod + weapon enhancement; use singular "attack" when N=1, plural "attacks" when N≥2 — never "1 attacks"; N=1 below BAB +8 with no offhand, N=2 at BAB +8+ or dual-wielding below +8, N=3 at BAB +8+ with dual-wielding)
 Gear: Primary_Weapon (Damage_Die + Mod / Type) | Armor_Name (+Y AC)

@@ -14,6 +14,7 @@ import { parseCombatants } from '../../state/combat-persistence.js';
 
 const COMBAT_BLOCK_RX = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i;
 const HP_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(.{1,160}?):\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?\s*HP\b(.*)$/i;
+const WP_LINE_RX = /^(\s*(?:[-*+•]\s*)?)(Willpower|Will)\s*:\s*([+-]?[\d,]+|\?+)(?:\s*\/\s*([\d,]+|\?+))?(.*)$/i;
 
 function cleanText(value) {
     return String(value ?? '').replace(/\s+/g, ' ').trim();
@@ -41,15 +42,25 @@ function numberOr(value, fallback = 0) {
 }
 
 function statusLine(unit) {
-    if (unit?.defeated) return 'Defeated';
-    if (unit?.fled) return 'Fled';
+    if (unit?.defeated) {
+        if (unit.defeatCause === 'willpower') {
+            if (unit.surrendered) return 'Defeated (Willpower broken — surrendered)';
+            if (unit.incapacitated) return 'Defeated (Willpower broken — incapacitated)';
+            return 'Defeated (Willpower broken)';
+        }
+        return 'Defeated';
+    }
+    if (unit?.fled) return unit.willpowerBroken ? 'Fled (Willpower broken)' : 'Fled';
+    if (unit?.willpowerBroken) return 'Willpower broken';
     const statuses = Array.isArray(unit?.statuses) ? unit.statuses : [];
     if (!statuses.length) return 'Healthy';
     return statuses
         .map(status => {
             const label = cleanText(status?.label || status?.name || 'Afflicted');
             const rounds = Number(status?.rounds) || 0;
-            return rounds > 0 ? `${label} (${rounds} round${rounds === 1 ? '' : 's'})` : label;
+            const stacks = Number(status?.stacks) || 1;
+            const stackLabel = stacks > 1 ? ` x${stacks}` : '';
+            return rounds > 0 ? `${label}${stackLabel} (${rounds} round${rounds === 1 ? '' : 's'})` : `${label}${stackLabel}`;
         })
         .join(', ');
 }
@@ -63,7 +74,18 @@ function abilityLine(unit) {
         const usage = Number.isFinite(uses) && Number.isFinite(maxUses) && maxUses > 0
             ? `; ${Math.max(0, uses)}/${maxUses}`
             : '';
-        const description = cleanText(skill?.description || skill?.name || '');
+        let description = cleanText(skill?.description || skill?.name || '');
+        if (skill?.resource === 'willpower' || skill?.resource === 'both') {
+            if (!/\bwillpower\b/i.test(description)) {
+                const wp = skill?.resource === 'both'
+                    ? `Willpower ${skill?.willpowerDamage || skill?.damage || '1d6'}`
+                    : `Willpower ${skill?.damage || skill?.willpowerDamage || '1d6'}`;
+                description = `${wp}${description ? `; ${description}` : ''}`;
+            }
+            if (skill?.willpowerOutcome && skill.willpowerOutcome !== 'defeat' && !/willpower break/i.test(description)) {
+                description = `${description}${description ? '; ' : ''}on Willpower break: ${skill.willpowerOutcome}`;
+            }
+        }
         return `${cleanText(skill?.name || 'Ability')} (${description}${usage})`;
     }).join(', ');
 }
@@ -72,13 +94,19 @@ function buildUnitBlock(unit) {
     const name = cleanText(unit?.name || 'Combatant').slice(0, 80);
     const hp = Math.max(0, numberOr(unit?.hp, 0));
     const maxHp = Math.max(1, numberOr(unit?.maxHp, hp || 1));
+    const willpower = Math.max(0, numberOr(unit?.willpower, 0));
+    const maxWillpower = Math.max(0, numberOr(unit?.maxWillpower, willpower || 0));
     const ac = Math.max(1, numberOr(unit?.ac, 12));
     const attackBonus = numberOr(unit?.attackBonus, 0);
     const damage = cleanText(unit?.damage || '1d6');
     const damageType = cleanText(unit?.damageType || '');
+    const attackSuffix = unit?.attackResource === 'willpower'
+        ? ' [Willpower]'
+        : unit?.attackResource === 'both' ? ' [HP+Willpower]' : '';
     const lines = [
         `${name}: ${hp}/${maxHp} HP`,
-        `Att/def: Attack (1 attack, ${attackBonus >= 0 ? '+' : ''}${attackBonus} / ${damage}${damageType ? ` ${damageType}` : ''}) | Armor (AC: ${ac})`,
+        `Willpower: ${willpower}/${maxWillpower}`,
+        `Att/def: Attack (1 attack, ${attackBonus >= 0 ? '+' : ''}${attackBonus} / ${damage}${damageType ? ` ${damageType}` : ''}${attackSuffix}) | Armor (AC: ${ac})`,
     ];
     const abilities = abilityLine(unit);
     if (abilities) lines.push(`Abilities: ${abilities}`);
@@ -192,11 +220,49 @@ function patchBlockHp(content, units, options = {}) {
     return lines.join('\n');
 }
 
+function patchWillpowerLine(line, unit) {
+    const match = String(line || '').match(WP_LINE_RX);
+    if (!match || !unit) return line;
+    const max = Math.max(0, numberOr(unit.maxWillpower, numberOr(match[4], numberOr(match[3], 0))));
+    return `${match[1]}${match[2]}: ${max}/${max}${match[5] || ''}`;
+}
+
+function patchBlockWillpower(content, units, options = {}) {
+    const lines = String(content || '').split(/\r?\n/);
+    const used = new Set();
+    let matched = false;
+    for (let index = 0; index < lines.length; index += 1) {
+        const match = lines[index].match(WP_LINE_RX);
+        if (!match) continue;
+        // Associate the Willpower line with the most recent HP header, not with
+        // the line's own label (all characters use "Willpower:").
+        let entityName = '';
+        for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+            const hp = lines[cursor].match(HP_LINE_RX);
+            if (hp) { entityName = hp[2]; break; }
+        }
+        const unit = matchUnitForHeader(units, entityName, used);
+        if (unit) {
+            lines[index] = patchWillpowerLine(lines[index], unit);
+            used.add(unit.id);
+            matched = true;
+        }
+    }
+    if (!matched && options.fallbackUnit) {
+        const index = lines.findIndex(line => WP_LINE_RX.test(line));
+        if (index >= 0) lines[index] = patchWillpowerLine(lines[index], options.fallbackUnit);
+    }
+    return lines.join('\n');
+}
+
 function patchNamedBlock(memo, tag, units, options = {}) {
     const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rx = new RegExp(`(\\[${escaped}\\])([\\s\\S]*?)(\\[\\/${escaped}\\])`, 'i');
     return String(memo || '').replace(rx, (full, open, content, close) => {
-        return `${open}${patchBlockHp(content, units, options)}${close}`;
+        const patched = options.patch === 'willpower'
+            ? patchBlockWillpower(content, units, options)
+            : patchBlockHp(content, units, options);
+        return `${open}${patched}${close}`;
     });
 }
 
@@ -236,12 +302,14 @@ export function clearStaleCombatMemo(previousState, settings) {
  * @returns {string}
  */
 export function patchPartyMemoFromBoard(memo, state) {
-    const playerUnits = (state?.units || []).filter(unit => unit?.side === 'player' && !unit.summoned);
+    const playerUnits = (state?.units || []).filter(unit => (unit?.originalSide || unit?.side) === 'player' && !unit.summoned);
     if (!playerUnits.length) return String(memo || '');
     let result = String(memo || '');
     const characterUnit = playerUnits[0];
     result = patchNamedBlock(result, 'CHARACTER', playerUnits, { fallbackUnit: characterUnit });
+    result = patchNamedBlock(result, 'CHARACTER', playerUnits, { fallbackUnit: characterUnit, patch: 'willpower' });
     result = patchNamedBlock(result, 'PARTY', playerUnits);
+    result = patchNamedBlock(result, 'PARTY', playerUnits, { patch: 'willpower' });
     return result;
 }
 
@@ -298,7 +366,7 @@ export function buildCombatTrackerReport(state) {
             unit.fled ? 'fled' : '',
         ].filter(Boolean).join(', ');
         const status = statusLine(unit);
-        lines.push(`- [${side}] ${cleanText(unit.name)}: ${Math.max(0, numberOr(unit.hp))}/${Math.max(1, numberOr(unit.maxHp, 1))} HP; Status: ${status}${flags ? `; ${flags}` : ''}`);
+        lines.push(`- [${side}] ${cleanText(unit.name)}: ${Math.max(0, numberOr(unit.hp))}/${Math.max(1, numberOr(unit.maxHp, 1))} HP; ${Math.max(0, numberOr(unit.willpower))}/${Math.max(0, numberOr(unit.maxWillpower))} WP; Status: ${status}${flags ? `; ${flags}` : ''}`);
     }
     const spent = [];
     for (const unit of state.units || []) {
@@ -321,10 +389,29 @@ export function buildCombatTrackerReport(state) {
         lines.push('', 'Consumed resources:');
         for (const entry of spent.slice(0, 24)) lines.push(`- ${entry}`);
     }
+    if (outcome.willpowerBreaks?.length) {
+        lines.push('', 'Willpower breaks:');
+        for (const entry of outcome.willpowerBreaks.slice(0, 12)) {
+            lines.push(`- ${entry.name}: ${entry.outcome}${entry.source ? ` (${entry.source})` : ''}`);
+        }
+    }
+    if (outcome.sideChanges?.length) {
+        lines.push('', 'Side changes (encounter-scoped, reverted after combat):');
+        for (const entry of outcome.sideChanges.slice(0, 12)) {
+            lines.push(`- ${entry.name}: ${entry.originalSide} → ${entry.side}`);
+        }
+    }
+    if (outcome.transformations?.length) {
+        lines.push('', 'Transformations:');
+        for (const entry of outcome.transformations.slice(0, 12)) {
+            lines.push(`- ${entry.originalName || entry.name}${entry.permanent ? ' (permanent)' : ' (temporary)'}`);
+        }
+    }
     if (outcome.highlights?.length) {
         lines.push('', 'Highlights:');
         for (const entry of outcome.highlights.slice(0, 10)) lines.push(`- ${entry}`);
     }
-    lines.push('', 'Apply this report to [CHARACTER]/[PARTY], close [COMBAT], and record only the macro-level result. Do not re-adjudicate the fight.');
+    lines.push('', 'Willpower is restored to max for all survivors after combat. Do not persist current Willpower loss.');
+    lines.push('Apply this report to [CHARACTER]/[PARTY], close [COMBAT], and record only the macro-level result. Do not re-adjudicate the fight.');
     return lines.join('\n');
 }

@@ -47,7 +47,9 @@ function unitClass(unit) {
 
 function statusChips(unit) {
     const chips = (unit.statuses || []).map(status => {
-        const label = status.rounds ? `${status.label} (${status.rounds})` : status.label;
+        const stacks = Number(status.stacks) || 1;
+        const stackLabel = stacks > 1 ? ` x${stacks}` : '';
+        const label = status.rounds ? `${status.label}${stackLabel} (${status.rounds})` : `${status.label}${stackLabel}`;
         return `<span class="rt-tc-chip rt-tc-chip-status">${escapeHtml(label)}</span>`;
     });
     if (unit.defending) chips.push('<span class="rt-tc-chip rt-tc-chip-status">Defending (+4 AC)</span>');
@@ -143,13 +145,16 @@ export function buildCellMarkup(state, unit, x, y, view = {}) {
             active ? 'is-active' : '',
         ].filter(Boolean).join(' ');
         const hpWidth = pct(unit.hp, unit.maxHp);
-        const tokenTitle = `${unit.name}${unit.classLabel ? ` (${unit.classLabel})` : ''} — ${unit.hp}/${unit.maxHp} HP, AC ${unit.ac}${unit.defeated ? ', defeated' : ''}${unit.fled ? ', fled' : ''}`;
+        const wpWidth = unit.maxWillpower ? pct(unit.willpower, unit.maxWillpower) : 0;
+        const tokenTitle = `${unit.name}${unit.classLabel ? ` (${unit.classLabel})` : ''} — ${unit.hp}/${unit.maxHp} HP${unit.maxWillpower ? `, ${unit.willpower}/${unit.maxWillpower} Willpower` : ''}, AC ${unit.ac}${unit.defeated ? unit.defeatCause === 'willpower' ? ', Willpower broken' : ', defeated' : ''}${unit.fled ? ', fled' : ''}`;
         if (unit.defeated) {
-            content += `<span class="rt-tc-corpse" title="${escapeHtml(tokenTitle)}" data-tc-select-unit="${escapeHtml(unit.id)}">✕</span>`;
+            const broken = unit.defeatCause === 'willpower';
+            content += `<span class="${broken ? 'rt-tc-broken' : 'rt-tc-corpse'}" title="${escapeHtml(tokenTitle)}" data-tc-select-unit="${escapeHtml(unit.id)}">${broken ? 'z' : '✕'}</span>`;
         } else if (!unit.fled) {
             content += `<span class="${tokenClasses}" style="--tc-unit:${escapeHtml(unit.color || TC_SIDE_COLORS[unit.side])}" data-tc-select-unit="${escapeHtml(unit.id)}" title="${escapeHtml(tokenTitle)}">
                 <span class="rt-tc-token-glyph">${escapeHtml(unit.glyph || unit.name.slice(0, 2).toUpperCase())}</span>
                 <span class="rt-tc-token-hp" aria-hidden="true"><i style="width:${hpWidth}%"></i></span>
+                ${unit.maxWillpower ? `<span class="rt-tc-token-wp" aria-hidden="true"><i style="width:${wpWidth}%"></i></span>` : ''}
                 ${(unit.statuses || []).length ? `<span class="rt-tc-token-status" aria-hidden="true">●</span>` : ''}
             </span>`;
         }
@@ -204,6 +209,7 @@ function renderUnitCard(state, view) {
     const canAct = state.status === 'active' && !state.deployment?.active && state.phase === 'player' && isPlayer
         && isActiveTurn && !unit.defeated && !unit.fled && !unit.doneForRound && !view.busy;
     const hpPct = pct(unit.hp, unit.maxHp);
+    const wpPct = unit.maxWillpower ? pct(unit.willpower, unit.maxWillpower) : 0;
     const movementLeft = Math.max(0, (Number(unit.speed) || 0) - (Number(unit.movementUsed) || 0));
     const skills = unit.skills || [];
     const items = unit.items || [];
@@ -238,7 +244,7 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-skill-list">${skills.map(skill => `
             <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" ${!canAct || skill.uses <= 0 ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `ATK ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${skill.bonusAction ? ' · bonus' : ''}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${skill.bonusAction ? ' · bonus' : ''}</span>
                 <span class="rt-tc-skill-uses">${Number(skill.uses) || 0}/${Number(skill.maxUses) || 0}</span>
             </button>`).join('')}</div>
     </div>` : '';
@@ -264,7 +270,15 @@ function renderUnitCard(state, view) {
     </details>` : '';
 
     const sideBadge = `<span class="rt-tc-side-badge rt-tc-side-${unit.side}">${escapeHtml(TC_SIDE_LABELS[unit.side] || unit.side)}</span>`;
-    const dead = unit.defeated ? '<span class="rt-tc-chip rt-tc-chip-danger">Defeated</span>' : unit.fled ? '<span class="rt-tc-chip">Fled</span>' : '';
+    const dead = unit.defeated
+        ? (unit.defeatCause === 'willpower'
+            ? `<span class="rt-tc-chip rt-tc-chip-danger">${unit.surrendered ? 'Surrendered' : unit.incapacitated ? 'Incapacitated' : 'Willpower broken'}</span>`
+            : '<span class="rt-tc-chip rt-tc-chip-danger">Defeated</span>')
+        : unit.fled
+            ? `<span class="rt-tc-chip">${unit.willpowerBroken ? 'Fled (Willpower)' : 'Fled'}</span>`
+            : unit.willpowerBroken ? '<span class="rt-tc-chip rt-tc-chip-danger">Willpower broken</span>' : '';
+    const sideChangeChip = unit.sideChanged ? '<span class="rt-tc-chip rt-tc-chip-wp">Changed sides</span>' : '';
+    const transformChip = unit.transform ? '<span class="rt-tc-chip rt-tc-chip-wp">Transformed</span>' : '';
     const canEndUnit = state.status === 'active' && state.turnStyle === 'initiative' && state.phase === 'player' && view.activeUnitId === unit.id && isPlayer;
     const endUnit = canEndUnit
         ? `<button type="button" class="rt-tc-end-unit" data-tc-action="end-turn" ${view.busy ? 'disabled' : ''}>End ${escapeHtml(unit.name)}'s turn</button>`
@@ -276,15 +290,22 @@ function renderUnitCard(state, view) {
                 <div class="rt-tc-unit-name">${escapeHtml(unit.name)} ${sideBadge}</div>
                 <div class="rt-tc-unit-class">${escapeHtml(unitClass(unit) || 'Combatant')}</div>
             </div>
-            <div class="rt-tc-unit-hp">${Number(unit.hp)}<span>/${Number(unit.maxHp)}</span></div>
+            <div class="rt-tc-unit-vitals">
+                <div class="rt-tc-unit-hp">${Number(unit.hp)}<span>/${Number(unit.maxHp)}</span></div>
+                ${unit.maxWillpower ? `<div class="rt-tc-unit-wp">${Number(unit.willpower)}<span>/${Number(unit.maxWillpower)} WP</span></div>` : '<div class="rt-tc-unit-wp is-immune">Mindless</div>'}
+            </div>
         </div>
         <div class="rt-tc-hpbar" aria-label="${Number(unit.hp)} of ${Number(unit.maxHp)} HP"><i style="width:${hpPct}%"></i></div>
+        ${unit.maxWillpower ? `<div class="rt-tc-wpbar" aria-label="${Number(unit.willpower)} of ${Number(unit.maxWillpower)} Willpower"><i style="width:${wpPct}%"></i></div>` : ''}
         <div class="rt-tc-chip-row">
             <span class="rt-tc-chip">AC ${getEffectiveAcDisplay(state, unit)}</span>
             <span class="rt-tc-chip">ATK ${formatMod(getEffectiveAttackDisplay(state, unit))}</span>
             <span class="rt-tc-chip">MOV ${movementLeft}/${unit.speed}</span>
             <span class="rt-tc-chip">INIT ${Number(unit.initiative) || 0}</span>
+            ${unit.maxWillpower ? `<span class="rt-tc-chip rt-tc-chip-wp">WP ${Number(unit.willpower)}/${Number(unit.maxWillpower)}</span>` : '<span class="rt-tc-chip">WP —</span>'}
             ${dead}
+            ${sideChangeChip}
+            ${transformChip}
             ${statusChips(unit)}
         </div>
         <div class="rt-tc-resource-row">

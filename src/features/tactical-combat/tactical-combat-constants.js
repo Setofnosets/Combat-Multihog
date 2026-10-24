@@ -6,7 +6,7 @@
  * action definitions without pulling in SillyTavern state.
  */
 
-export const TC_VERSION = 1;
+export const TC_VERSION = 2;
 export const TC_STATE_FORMAT = 'multihog-tactical-combat';
 export const TC_MAX_LOG_ENTRIES = 240;
 

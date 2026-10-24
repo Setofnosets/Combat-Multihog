@@ -15,7 +15,7 @@ import { getActiveChatId } from '../../../state-manager.js';
 import { mergeMemo } from '../../../memo-processor.js';
 import { refreshRenderedView, saveSettings, syncMemoView } from '../../app/runtime-bridge.js';
 import { DEFAULT_TACTICAL_OUTCOME_PROMPT, renderTacticalTemplate } from './tactical-combat-prompts.js';
-import { buildOutcomeSummary } from './tactical-combat-engine.js';
+import { buildOutcomeSummary, restoreCombatScopedState } from './tactical-combat-engine.js';
 import { syncCombatResultToMemo } from './tactical-combat-memo.js';
 import { clearPendingNarration, getPendingNarration, setPendingNarration } from './tactical-combat-store.js';
 
@@ -84,6 +84,10 @@ export function queueCombatOutcome(state, settings, options = {}) {
     const payload = buildOutcomePayload(state);
     if (state.finalization?.narrationQueued) return state.finalization.payload || payload;
 
+    // Capture the outcome first, then revert encounter-scoped side changes and
+    // temporary transformations before the deterministic memo sync.
+    restoreCombatScopedState(state);
+
     // Board state wins over prose. This is the machinery that updates the
     // tracker state before the narrator ever sees the result block.
     syncCombatResultToMemo(state, settings);
@@ -117,7 +121,10 @@ export function queueCombatOutcome(state, settings, options = {}) {
 function describeUnitList(units, empty = 'None') {
     const list = Array.isArray(units) ? units : [];
     if (!list.length) return empty;
-    return list.map(unit => `${unit.name}${unit.hp != null ? ` (${unit.hp}/${unit.maxHp} HP)` : ''}`).join(', ');
+    return list.map(unit => {
+        const hp = unit.hp != null ? ` (${unit.hp}/${unit.maxHp} HP${unit.maxWillpower ? `, ${unit.willpower ?? 0}/${unit.maxWillpower} WP` : ''})` : '';
+        return `${unit.name}${hp}`;
+    }).join(', ');
 }
 
 function describeHighlights(outcome) {
@@ -129,8 +136,17 @@ function describeFinalUnits(outcome) {
     const list = Array.isArray(outcome.finalUnits) ? outcome.finalUnits : [];
     if (!list.length) return 'None recorded.';
     return list.map(unit => {
-        const flags = [unit.defeated ? 'defeated' : '', unit.fled ? 'fled' : ''].filter(Boolean).join(', ');
-        return `- ${unit.name} [${unit.side}]: ${unit.hp}/${unit.maxHp} HP${flags ? ` (${flags})` : ''}`;
+        const flags = [
+            unit.defeated ? (unit.defeatCause === 'willpower' ? 'willpower-broken' : 'defeated') : '',
+            unit.willpowerBroken && !unit.defeated ? 'willpower-broken' : '',
+            unit.fled ? 'fled' : '',
+            unit.surrendered ? 'surrendered' : '',
+            unit.incapacitated ? 'incapacitated' : '',
+            unit.sideChanged ? `changed side (${unit.originalSide} → ${unit.side})` : '',
+            unit.transformed ? 'transformed' : '',
+        ].filter(Boolean).join(', ');
+        const wp = unit.maxWillpower ? `, ${unit.willpower ?? 0}/${unit.maxWillpower} WP` : '';
+        return `- ${unit.name} [${unit.side}]: ${unit.hp}/${unit.maxHp} HP${wp}${flags ? ` (${flags})` : ''}`;
     }).join('\n');
 }
 
@@ -156,6 +172,15 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         (outcome.allyFled || []).length ? `Withdrawn: ${(outcome.allyFled || []).map(unit => unit.name).join(', ')}` : '',
     ].filter(Boolean).join('; ') || 'None';
     const trigger = pending.trigger || outcome.opening?.text || 'The player triggered the encounter.';
+    const willpowerBreaks = (outcome.willpowerBreaks || []).length
+        ? outcome.willpowerBreaks.map(entry => `${entry.name} (${String(entry.outcome || 'broken').replace(/_/g, ' ')}${entry.source ? `; ${entry.source}` : ''})`).join(', ')
+        : 'None';
+    const sideChanges = (outcome.sideChanges || []).length
+        ? outcome.sideChanges.map(entry => `${entry.name} (${entry.originalSide} → ${entry.side})`).join(', ')
+        : 'None';
+    const transformations = (outcome.transformations || []).length
+        ? outcome.transformations.map(entry => `${entry.originalName || entry.name}${entry.permanent ? ' (permanent)' : ' (temporary)'}`).join(', ')
+        : 'None';
     const rendered = renderTacticalTemplate(template, {
         title: pending.title || outcome.title || 'Tactical encounter',
         location: pending.location || outcome.location || 'the battlefield',
@@ -170,6 +195,9 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         partyState,
         allyState,
         trigger,
+        willpowerBreaks,
+        sideChanges,
+        transformations,
         highlights: describeHighlights(outcome),
         finalState: describeFinalUnits(outcome),
         details,
