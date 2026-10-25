@@ -25,6 +25,13 @@ import {
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from '../features/tactical-combat/tactical-combat-prompts.js';
 import { DEFAULT_TACTICAL_ACTION_CATALOG_JSON } from '../features/tactical-combat/tactical-combat-constants.js';
+import {
+    DEFAULT_TRADITIONAL_COMBAT_AGENT_PROMPT,
+    DEFAULT_TRADITIONAL_ENCOUNTER_SYSTEM_PROMPT,
+    DEFAULT_TRADITIONAL_OUTCOME_PROMPT,
+    DEFAULT_TRADITIONAL_SPECIAL_RESOLUTION_PROMPT,
+} from '../features/traditional-combat/traditional-combat-prompts.js';
+import { DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON } from '../features/traditional-combat/traditional-combat-constants.js';
 import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tactical-combat-classifiers.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
@@ -186,6 +193,9 @@ export function buildDefaultSettings() {
         // ── Tactical Combat ────────────────────────────────────────────────
         // Per-chat encounters live in tacticalCombatByChat keyed by chat id. The
         // transient outcome block is consumed by the narrator interceptor.
+        // Empty combatStyle is a migration sentinel: old settings resolve to
+        // tactical when tacticalCombatEnabled is true, otherwise narrative.
+        combatStyle: "",
         tacticalCombatEnabled: false,
         tacticalCombatGridPreset: "15x15",
         tacticalCombatGridRows: 15,
@@ -221,6 +231,32 @@ export function buildDefaultSettings() {
         tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON,
         tacticalCombatByChat: {},
         tacticalCombatReturn: null,
+
+        // ── Traditional Combat ────────────────────────────────────────────
+        // No-grid turn-based mode. Shares the Willpower/classifier settings and
+        // the pending outcome slot with tactical combat.
+        traditionalCombatTurnStyle: "initiative",
+        traditionalCombatEncounterSource: "auto",
+        traditionalCombatAutoStartOnHostility: true,
+        traditionalCombatAutoNarrate: true,
+        traditionalCombatOpeningActions: true,
+        traditionalCombatSyncTrackerBeforeNarration: true,
+        traditionalCombatMaxSpecialResolutions: 2,
+        traditionalCombatMaxTokens: 6000,
+        traditionalCombatConnectionSource: "default",
+        traditionalCombatConnectionProfileId: "",
+        traditionalCombatCompletionPresetId: "",
+        traditionalCombatOllamaUrl: "http://localhost:11434",
+        traditionalCombatOllamaModel: "",
+        traditionalCombatOpenaiUrl: "",
+        traditionalCombatOpenaiKey: "",
+        traditionalCombatOpenaiModel: "",
+        traditionalCombatAgentPrompt: DEFAULT_TRADITIONAL_COMBAT_AGENT_PROMPT,
+        traditionalCombatEncounterPrompt: DEFAULT_TRADITIONAL_ENCOUNTER_SYSTEM_PROMPT,
+        traditionalCombatOutcomePrompt: DEFAULT_TRADITIONAL_OUTCOME_PROMPT,
+        traditionalCombatSpecialPrompt: DEFAULT_TRADITIONAL_SPECIAL_RESOLUTION_PROMPT,
+        traditionalCombatActionCatalogJson: DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON,
+        traditionalCombatByChat: {},
 
         renderedViewActive: true,
 
@@ -705,6 +741,8 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
             CYOA_mode: true,
 
             tactical_combat: true,
+
+            traditional_combat: true,
 
             dungeon_reality_and_hidden_mapping: true,
 

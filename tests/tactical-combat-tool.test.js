@@ -91,7 +91,7 @@ describe('Tactical Combat narrator function tool', () => {
         expect(uiSource).toContain('state.preparing');
         expect(uiSource).toContain('clearEndedEncounterForFreshStart');
 
-        const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*syncTacticalCombatToolRegistration\(\);\s*syncLocationMappingRuntime\(\);/);
+        const toolBlock = indexSource.match(/\/\/ ─── Dice System ───[\s\S]*?registerDiceFunctionTool\(\);\s*syncTacticalCombatToolRegistration\(\);\s*syncTraditionalCombatToolRegistration\(\);\s*syncLocationMappingRuntime\(\);/);
         expect(toolBlock).not.toBeNull();
 
         const settingsStart = indexSource.indexOf('initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });');

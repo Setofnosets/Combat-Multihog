@@ -7,6 +7,7 @@
  */
 
 import { getActiveChatId, getSettings } from '../../../state-manager.js';
+import { isTacticalCombatMode } from '../combat/combat-mode.js';
 import {
     addLog,
     applyAction,
@@ -356,7 +357,7 @@ function closeBoard() {
 
 function openSettingsTab() {
     try {
-        document.dispatchEvent(new CustomEvent('rt_open_settings_overlay', { detail: { tab: 'tactical' } }));
+        document.dispatchEvent(new CustomEvent('rt_open_settings_overlay', { detail: { tab: 'combat' } }));
     } catch (_) { /* no-op */ }
 }
 
@@ -1381,8 +1382,8 @@ function scheduleDeferredEncounterArchitect(provisional, settings, options = {})
 
 async function startEncounterFlow(options = {}) {
     const settings = getSettings();
-    if (!settings.tacticalCombatEnabled) {
-        toast('warning', 'Enable Tactical Combat in Settings → Tactical Combat first.');
+    if (!isTacticalCombatMode(settings)) {
+        toast('warning', 'Select Tactical Combat in Settings → Combat first.');
         openSettingsTab();
         return { ok: false, error: 'Tactical Combat is disabled.' };
     }
@@ -1693,7 +1694,7 @@ function onOverlayClick(event) {
 }
 
 function onDocumentClick(event) {
-    const trigger = event.target.closest?.('#rt-tactical-combat-btn, [data-tc-open-board]');
+    const trigger = event.target.closest?.('[data-tc-open-board], [data-tactical-open-board]');
     if (!trigger) return;
     event.preventDefault();
     openBoard();
@@ -1767,10 +1768,10 @@ export function startTacticalCombatFlow(options = {}) {
  */
 export async function startTacticalCombatFromNarrator(args = {}, options = {}) {
     const settings = getSettings();
-    if (!settings.tacticalCombatEnabled) {
+    if (!isTacticalCombatMode(settings)) {
         return {
             ok: false,
-            message: 'Tactical Combat is disabled. Ask the player to enable it in Settings → Tactical Combat.',
+            message: 'Tactical Combat is not selected. Ask the player to choose it in Settings → Combat.',
         };
     }
     const result = await startEncounterFlow({

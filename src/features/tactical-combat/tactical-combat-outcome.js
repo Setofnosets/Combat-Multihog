@@ -15,6 +15,7 @@ import { getActiveChatId } from '../../../state-manager.js';
 import { mergeMemo } from '../../../memo-processor.js';
 import { refreshRenderedView, saveSettings, syncMemoView } from '../../app/runtime-bridge.js';
 import { DEFAULT_TACTICAL_OUTCOME_PROMPT, renderTacticalTemplate } from './tactical-combat-prompts.js';
+import { DEFAULT_TRADITIONAL_OUTCOME_PROMPT } from '../traditional-combat/traditional-combat-prompts.js';
 import { buildOutcomeSummary, restoreCombatScopedState } from './tactical-combat-engine.js';
 import { syncCombatResultToMemo } from './tactical-combat-memo.js';
 import { clearPendingNarration, getPendingNarration, setPendingNarration } from './tactical-combat-store.js';
@@ -60,6 +61,7 @@ export function buildOutcomePayload(state, options = {}) {
     return {
         chatId: String(state.chatId || getActiveChatId() || ''),
         stateId: state.id,
+        kind: state.mode === 'traditional' || state.format === 'multihog-traditional-combat' ? 'traditional' : 'tactical',
         title: state.title,
         location: state.location,
         outcome,
@@ -156,7 +158,10 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     if (!pending || !pending.outcome) return '';
     if (chatId && pending.chatId && String(pending.chatId) !== String(chatId)) return '';
     const outcome = pending.outcome;
-    const template = String(settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT);
+    const isTraditional = pending.kind === 'traditional' || outcome.mode === 'traditional';
+    const template = String(isTraditional
+        ? (settings.traditionalCombatOutcomePrompt || DEFAULT_TRADITIONAL_OUTCOME_PROMPT)
+        : (settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT));
     const details = Array.isArray(outcome.details) && outcome.details.length
         ? `Details:\n${outcome.details.map(item => `- ${item}`).join('\n')}`
         : '';
@@ -182,7 +187,7 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         ? outcome.transformations.map(entry => `${entry.originalName || entry.name}${entry.permanent ? ' (permanent)' : ' (temporary)'}`).join(', ')
         : 'None';
     const rendered = renderTacticalTemplate(template, {
-        title: pending.title || outcome.title || 'Tactical encounter',
+        title: pending.title || outcome.title || (isTraditional ? 'Traditional encounter' : 'Tactical encounter'),
         location: pending.location || outcome.location || 'the battlefield',
         outcome: outcome.label || outcome.status || 'Ended',
         rounds: outcome.rounds || 0,
@@ -204,7 +209,8 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         summary: outcome.summary || '',
     }).trim();
     if (!rendered) return '';
-    const bridge = `[TACTICAL_COMBAT_CONTEXT]\nA tactical encounter triggered by the player's previous message has just been resolved on the board. That previous message is not a new action and must not be replayed. Treat the result below as authoritative over stale State Memo or chat-history assumptions. The fight is over unless the result explicitly leaves enemies standing.\n[/TACTICAL_COMBAT_CONTEXT]\n\n`;
+    const label = isTraditional ? 'TRADITIONAL_COMBAT_CONTEXT' : 'TACTICAL_COMBAT_CONTEXT';
+    const bridge = `[${label}]\nA ${isTraditional ? 'traditional turn-based' : 'tactical'} encounter triggered by the player's previous message has just been resolved on the board. That previous message is not a new action and must not be replayed. Treat the result below as authoritative over stale State Memo or chat-history assumptions. The fight is over unless the result explicitly leaves enemies standing.\n[/${label}]\n\n`;
     return `${bridge}${rendered}\n\n`;
 }
 

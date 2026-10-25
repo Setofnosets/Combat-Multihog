@@ -10,9 +10,15 @@
 import { saveSettings } from '../../app/runtime-bridge.js';
 import { getActiveChatId } from '../../../state-manager.js';
 import { hydrateEncounterState } from './tactical-combat-engine.js';
+import { TRADITIONAL_STATE_FORMAT } from '../traditional-combat/traditional-combat-constants.js';
 
 export const TC_BY_CHAT_KEY = 'tacticalCombatByChat';
+export const TRADITIONAL_BY_CHAT_KEY = 'traditionalCombatByChat';
 const MAX_STORED_CHATS = 16;
+
+function storeKey(value, fallback = TC_BY_CHAT_KEY) {
+    return String(value || fallback);
+}
 
 function persist() {
     try {
@@ -24,11 +30,12 @@ function persist() {
     }
 }
 
-function ensureMap(settings) {
-    if (!settings[TC_BY_CHAT_KEY] || typeof settings[TC_BY_CHAT_KEY] !== 'object' || Array.isArray(settings[TC_BY_CHAT_KEY])) {
-        settings[TC_BY_CHAT_KEY] = {};
+function ensureMap(settings, key = TC_BY_CHAT_KEY) {
+    const storageKey = storeKey(key);
+    if (!settings[storageKey] || typeof settings[storageKey] !== 'object' || Array.isArray(settings[storageKey])) {
+        settings[storageKey] = {};
     }
-    return settings[TC_BY_CHAT_KEY];
+    return settings[storageKey];
 }
 
 function pruneOldEncounters(map) {
@@ -48,13 +55,16 @@ export function getActiveTacticalChatId() {
 /**
  * @param {string} chatId
  * @param {Record<string, any>} settings
+ * @param {{ key?: string }} [options]
  * @returns {object|null}
  */
-export function getEncounterForChat(chatId, settings) {
+export function getEncounterForChat(chatId, settings, options = {}) {
     if (!chatId || !settings) return null;
-    const map = ensureMap(settings);
+    const map = ensureMap(settings, options.key);
     const state = map[chatId];
-    if (!state || typeof state !== 'object' || !state.grid || !Array.isArray(state.units)) return null;
+    if (!state || typeof state !== 'object' || !Array.isArray(state.units)) return null;
+    const traditional = state.mode === 'traditional' || state.format === TRADITIONAL_STATE_FORMAT;
+    if (!traditional && !state.grid) return null;
     return hydrateEncounterState(state);
 }
 
@@ -62,11 +72,11 @@ export function getEncounterForChat(chatId, settings) {
  * @param {string} chatId
  * @param {object} state
  * @param {Record<string, any>} settings
- * @param {{ persist?: boolean }} [options]
+ * @param {{ persist?: boolean, key?: string }} [options]
  */
 export function setEncounterForChat(chatId, state, settings, options = {}) {
     if (!chatId || !settings || !state) return;
-    const map = ensureMap(settings);
+    const map = ensureMap(settings, options.key);
     state.chatId = String(chatId);
     state.updatedAt = Date.now();
     map[chatId] = state;
@@ -77,11 +87,11 @@ export function setEncounterForChat(chatId, state, settings, options = {}) {
 /**
  * @param {string} chatId
  * @param {Record<string, any>} settings
- * @param {{ persist?: boolean }} [options]
+ * @param {{ persist?: boolean, key?: string }} [options]
  */
 export function removeEncounterForChat(chatId, settings, options = {}) {
     if (!chatId || !settings) return;
-    const map = ensureMap(settings);
+    const map = ensureMap(settings, options.key);
     if (Object.prototype.hasOwnProperty.call(map, chatId)) {
         delete map[chatId];
         if (options.persist !== false) persist();
@@ -90,7 +100,7 @@ export function removeEncounterForChat(chatId, settings, options = {}) {
 
 /**
  * @param {Record<string, any>} settings
- * @param {{ chatId?: string }} [options]
+ * @param {{ chatId?: string, key?: string }} [options]
  */
 export function removeAllEncounters(settings, options = {}) {
     if (!settings) return;
@@ -98,12 +108,12 @@ export function removeAllEncounters(settings, options = {}) {
         removeEncounterForChat(options.chatId, settings, options);
         return;
     }
-    settings[TC_BY_CHAT_KEY] = {};
+    settings[storeKey(options.key)] = {};
     if (options.persist !== false) persist();
 }
 
-export function hasActiveEncounter(settings, chatId = getActiveChatId()) {
-    const state = getEncounterForChat(chatId, settings);
+export function hasActiveEncounter(settings, chatId = getActiveChatId(), options = {}) {
+    const state = getEncounterForChat(chatId, settings, options);
     return !!state && state.status === 'active';
 }
 

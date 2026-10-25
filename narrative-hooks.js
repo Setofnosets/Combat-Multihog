@@ -30,6 +30,7 @@ import { runtimeState } from './src/app/runtime-state.js';
 import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.js';
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
+import { isTacticalCombatMode, isTraditionalCombatMode } from './src/features/combat/combat-mode.js';
 import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
 import {
@@ -625,16 +626,27 @@ const _tacticalCombatToolFailureUntil = new Map();
 let _tacticalCombatToolSyncBound = false;
 let _tacticalCombatToolRegistered = false;
 
+const TRADITIONAL_COMBAT_FAILURE_COOLDOWN_MS = 30 * 1000;
+const _traditionalCombatToolFailureUntil = new Map();
+let _traditionalCombatToolSyncBound = false;
+let _traditionalCombatToolRegistered = false;
+
 function bindTacticalCombatToolSync() {
     if (_tacticalCombatToolSyncBound || typeof document === 'undefined') return;
     _tacticalCombatToolSyncBound = true;
     document.addEventListener('rt_tactical_combat_changed', () => syncTacticalCombatToolRegistration());
 }
 
+function bindTraditionalCombatToolSync() {
+    if (_traditionalCombatToolSyncBound || typeof document === 'undefined') return;
+    _traditionalCombatToolSyncBound = true;
+    document.addEventListener('rt_traditional_combat_changed', () => syncTraditionalCombatToolRegistration());
+}
+
 /** Runtime prompt override: once [COMBAT] exists, regular combat narration is prohibited. */
 export function buildTacticalCombatRuntimeOverride(settings) {
     try {
-        if (!settings?.tacticalCombatEnabled) return '';
+        if (!isTacticalCombatMode(settings)) return '';
         const chatId = getActiveChatId();
         const board = settings.tacticalCombatByChat?.[chatId];
         if (board?.status === 'active') {
@@ -659,10 +671,39 @@ export function buildTacticalCombatRuntimeOverride(settings) {
     }
 }
 
+/** Runtime prompt override for the no-grid traditional board. */
+export function buildTraditionalCombatRuntimeOverride(settings) {
+    try {
+        if (!isTraditionalCombatMode(settings)) return '';
+        const chatId = getActiveChatId();
+        const board = settings.traditionalCombatByChat?.[chatId];
+        if (board?.status === 'active') {
+            return `[TRADITIONAL_COMBAT_OVERRIDE]\nTraditional Combat is currently being resolved on the board. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or the outcome. Do not call StartTraditionalCombat again. If the player writes in chat, acknowledge that the fight is paused on the traditional board and wait for its result.\n[/TRADITIONAL_COMBAT_OVERRIDE]\n\n`;
+        }
+        if (board?.finalization?.finalizing) return '';
+        if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
+            return '';
+        }
+        const combatState = getCombatState(settings.currentMemo);
+        if (combatState === 'absent' || combatState === 'ended') return '';
+        if (combatState !== 'engaged') {
+            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). Combat has not begun. Do not roll initiative, simulate attacks, or call StartTraditionalCombat. The party may negotiate, intimidate, surrender, or leave. Start traditional combat only when a hostile action is actually declared.\n[/DORMANT_ENCOUNTER]\n\n`;
+        }
+        const hasTool = isEffectiveSectionEnabled('traditional_combat', settings)
+            && settings.traditionalCombatAutoStartOnHostility !== false;
+        const instruction = hasTool
+            ? 'Call the StartTraditionalCombat function tool exactly once now. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. After the tool opens the board, wait for the player.'
+            : 'Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or any combat resolution. Automatic traditional start is disabled or the tool is unavailable; tell the player to open the Traditional Combat board from the tracker header or Settings; the board owns this fight.';
+        return `[TRADITIONAL_COMBAT_OVERRIDE]\nTraditional Combat is selected and [COMBAT] is engaged. ${instruction}\nNever continue a combat scene narratively while this override is present.\n[/TRADITIONAL_COMBAT_OVERRIDE]\n\n`;
+    } catch (_) {
+        return '';
+    }
+}
+
 function tacticalCombatToolConfigured() {
     try {
         const s = getSettings();
-        return !!s?.tacticalCombatEnabled && isEffectiveSectionEnabled('tactical_combat', s);
+        return isTacticalCombatMode(s) && isEffectiveSectionEnabled('tactical_combat', s);
     } catch (_) {
         return false;
     }
@@ -788,6 +829,131 @@ export function unregisterTacticalCombatTool() {
         console.warn('[RPG Tracker] Could not unregister Tactical Combat tool:', error);
     }
     _tacticalCombatToolRegistered = false;
+}
+
+function traditionalCombatToolConfigured() {
+    try {
+        const s = getSettings();
+        return isTraditionalCombatMode(s) && isEffectiveSectionEnabled('traditional_combat', s);
+    } catch (_) {
+        return false;
+    }
+}
+
+function traditionalCombatToolCoolingDown(chatId) {
+    const until = Number(_traditionalCombatToolFailureUntil.get(String(chatId || '')) || 0);
+    return Date.now() < until;
+}
+
+function traditionalCombatToolAvailable() {
+    try {
+        if (!traditionalCombatToolConfigured()) return false;
+        const s = getSettings();
+        const chatId = getActiveChatId();
+        if (!chatId) return false;
+        const board = s.traditionalCombatByChat?.[chatId];
+        if (board?.status === 'active' || board?.finalization?.finalizing) return false;
+        if (s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId)) return false;
+        if (s.traditionalCombatAutoStartOnHostility === false) return false;
+        if (s.traditionalCombatEncounterSource === 'existing') {
+            const rosterState = getCombatState(s.currentMemo);
+            if (rosterState === 'absent' || rosterState === 'ended') return false;
+        }
+        return !traditionalCombatToolCoolingDown(chatId);
+    } catch (_) {
+        return false;
+    }
+}
+
+export function syncTraditionalCombatToolRegistration() {
+    bindTraditionalCombatToolSync();
+    try {
+        const s = getSettings();
+        const chatId = getActiveChatId();
+        const board = s.traditionalCombatByChat?.[chatId];
+        const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
+        const pendingResult = s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId);
+        const rosterState = getCombatState(s.currentMemo);
+        const waitingForExistingRoster = s.traditionalCombatEncounterSource === 'existing'
+            && (rosterState === 'absent' || rosterState === 'ended');
+        const coolingDown = traditionalCombatToolCoolingDown(chatId);
+        const shouldExist = traditionalCombatToolConfigured()
+            && s.traditionalCombatAutoStartOnHostility !== false
+            && !boardActive
+            && !pendingResult
+            && !waitingForExistingRoster
+            && !coolingDown;
+        if (shouldExist && !_traditionalCombatToolRegistered) registerTraditionalCombatTool();
+        else if (!shouldExist) unregisterTraditionalCombatTool();
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not sync Traditional Combat tool registration:', error);
+    }
+}
+
+export function registerTraditionalCombatTool() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const { registerFunctionTool, unregisterFunctionTool } = ctx;
+        if (!registerFunctionTool || !unregisterFunctionTool) return;
+        unregisterFunctionTool('StartTraditionalCombat');
+        registerFunctionTool({
+            name: 'StartTraditionalCombat',
+            displayName: 'Traditional Combat',
+            description: 'Open the traditional turn-based combat board and begin an encounter for the current scene. Call this only when a real fight begins: a hostile attack, hostile spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action, copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
+            parameters: {
+                $schema: 'http://json-schema.org/draft-04/schema#',
+                type: 'object',
+                properties: {
+                    title: { type: 'string', description: 'Optional short encounter title, e.g. "Ambush at the Gatehouse".' },
+                    location: { type: 'string', description: 'Optional exact current location, if the footer/memo is ambiguous.' },
+                    description: { type: 'string', description: 'Optional 1–3 sentence setup for the encounter brief.' },
+                    reason: { type: 'string', description: 'Optional short reason the fight started, used as extra context for the encounter architect.' },
+                    openingAction: { type: 'string', description: 'If the player’s immediately preceding message declared a concrete opening action, copy it verbatim here. The board resolves it before normal turns. Do not resolve it yourself.' },
+                    openingTarget: { type: 'string', description: 'Optional exact target name or id for the opening action.' },
+                    openingSkill: { type: 'string', description: 'Optional exact spell, skill, or item name used in the opening action.' },
+                    surprise: { type: 'boolean', description: 'True when the player’s opening action catches the enemy off guard (ambush, sneak attack, sudden assault). The enemy loses its first activation.' },
+                    enemyNames: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional exact enemy types named or clearly established in the current scene, e.g. ["Goblin", "Goblin Archer"].',
+                    },
+                },
+                required: [],
+            },
+            shouldRegister: traditionalCombatToolAvailable,
+            stealth: false,
+            action: async args => {
+                const chatId = getActiveChatId();
+                unregisterTraditionalCombatTool();
+                try {
+                    const { startTraditionalCombatFromNarrator } = await import('./src/features/traditional-combat/traditional-combat-ui.js');
+                    const result = await startTraditionalCombatFromNarrator(args || {}, { source: getSettings().traditionalCombatEncounterSource || 'auto' });
+                    if (!result?.ok) {
+                        _traditionalCombatToolFailureUntil.set(String(chatId || ''), Date.now() + TRADITIONAL_COMBAT_FAILURE_COOLDOWN_MS);
+                    } else {
+                        _traditionalCombatToolFailureUntil.delete(String(chatId || ''));
+                    }
+                    return result.message;
+                } catch (error) {
+                    _traditionalCombatToolFailureUntil.set(String(chatId || ''), Date.now() + TRADITIONAL_COMBAT_FAILURE_COOLDOWN_MS);
+                    return `Traditional Combat could not start: ${error?.message || error}`;
+                }
+            },
+            formatMessage: () => 'Traditional Combat: the board is open. Choose actions and targets; the result will return to the narrator when combat ends.',
+        });
+        _traditionalCombatToolRegistered = true;
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not register Traditional Combat tool:', error);
+    }
+}
+
+export function unregisterTraditionalCombatTool() {
+    try {
+        SillyTavern.getContext().unregisterFunctionTool?.('StartTraditionalCombat');
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not unregister Traditional Combat tool:', error);
+    }
+    _traditionalCombatToolRegistered = false;
 }
 
 export function registerDiceFunctionTool() {
@@ -1592,21 +1758,28 @@ export function installInterceptor() {
 
         // Core user-message injection every turn: PC / relations / pacing / CYOA / RNG / memo / quests.
         // CYOA / pacing follow the State Tracker master toggle (same as Persistent Maps).
-        const hasTacticalWork = !!settings.tacticalCombatEnabled || !!settings.tacticalCombatReturn;
+        const hasTacticalWork = isTacticalCombatMode(settings)
+            || isTraditionalCombatMode(settings)
+            || !!settings.tacticalCombatReturn;
         if (!skipInjection && (settings.enabled || cyoaActive || pacingInject || hasTacticalWork)) {
             // Hard override: while a board fight is active, or while [COMBAT]
             // exists and no board is running, the narrator must not resolve the
             // fight itself.
             const tacticalOverride = buildTacticalCombatRuntimeOverride(settings);
             if (tacticalOverride) injections += tacticalOverride;
+            const traditionalOverride = buildTraditionalCombatRuntimeOverride(settings);
+            if (traditionalOverride) injections += traditionalOverride;
 
-            // [TACTICAL COMBAT RESULT] — authoritative aftermath from the board.
+            // [BOARD COMBAT RESULT] — authoritative aftermath from the board.
             // Injected as a dedicated system/narrator message below, not as part
             // of the player's own message. One-shot: onGenerationEnded clears it.
             const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
             if (tacticalBlock) {
                 tacticalNarrationBlock = tacticalBlock;
-                injections += `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
+                const traditionalResult = settings.tacticalCombatReturn?.kind === 'traditional';
+                injections += traditionalResult
+                    ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
+                    : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
             }
 
             if (settings.enabled) {
@@ -1959,25 +2132,26 @@ export function installInterceptor() {
             }
         }
 
-        // ── 4. Tactical Combat result → dedicated system/narrator message ───────
+        // ── 4. Board-combat result → dedicated system/narrator message ───────
         // The result is never part of the player's message. It is appended at the
         // end of the prompt so the narrator sees the aftermath as authoritative
         // context immediately before generating.
         if (tacticalNarrationBlock) {
             const pending = settings.tacticalCombatReturn;
             const resultId = String(pending?.stateId || '');
+            const isTraditional = pending?.kind === 'traditional';
             const alreadyInjected = chat.some(message => message?.extra?.tcResultId
                 && String(message.extra.tcResultId) === resultId);
             markNarrationInjected(settings, getActiveChatId());
             if (!alreadyInjected) {
                 chat.push({
-                    name: 'Tactical Combat',
+                    name: isTraditional ? 'Traditional Combat' : 'Tactical Combat',
                     mes: tacticalNarrationBlock,
                     is_user: false,
                     extra: { type: 'narrator', tcResultId: resultId, tcResultAt: Date.now() },
                 });
                 if (settings.debugMode) {
-                    console.log('[Multihog Framework] Tactical Combat result injected as a narrator message.');
+                    console.log(`[Multihog Framework] ${isTraditional ? 'Traditional' : 'Tactical'} Combat result injected as a narrator message.`);
                 }
             }
         }

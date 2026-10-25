@@ -30,6 +30,7 @@ import {
 } from './src/app/runtime-bridge.js';
 import { findActiveUnlockedBaseOverride, isBaseSectionEnabled, isEffectiveSectionEnabled, setLocationMappingEnabled, LOCATION_MAPPING_SECTION_TAG } from './src/state/section-enabled.js';
 import { isMapArchitectTextOpener, MAP_ARCHITECT_TEXT_OPENER_RULES, syncMapArchitectOpenerNestedVisibility } from './map-architect-opener.js';
+import { isTacticalCombatMode, isTraditionalCombatMode } from './src/features/combat/combat-mode.js';
 import { normalizeGmContent, unwrapManagedSectionContent } from './src/state/sysprompt-content.js';
 import { buildNarrativePacingSection } from './src/state/narrative-pacing.js';
 import {
@@ -327,6 +328,22 @@ When combat actually begins, narrate only the opening preamble and stop before r
 A COMBAT STATE: DORMANT roster is not an active fight. Continue the non-combat scene and do not treat mere enemy presence, threats, standoffs, or negotiation as combat.
 </combat>`;
 
+export const TRADITIONAL_COMBAT_COMBAT_OVERRIDE = `<combat>
+TRADITIONAL COMBAT OVERRIDE
+All combat encounters are resolved on the traditional turn-based board while Traditional Combat is selected. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+When combat actually begins — a hostile attack, hostile spell, charge, or ambush is declared, an enemy attacks, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE — call StartTraditionalCombat immediately (once). The tool builds opposition from the current scene and seeds the State Memo; do not wait for the State Tracker.
+Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster. If the encounter is dormant, continue the non-combat scene normally.
+If the player's immediately preceding message declared a concrete opening action (spell, ambush, charge, or attack), copy it into openingAction and set surprise=true for an ambush. The board resolves it before Round 1; do not resolve it yourself.
+After calling the tool, do not resolve the fight yourself. The traditional result is authoritative.
+</combat>`;
+
+export const TRADITIONAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL = `<combat>
+TRADITIONAL COMBAT OVERRIDE
+All combat encounters are resolved on the traditional turn-based board while Traditional Combat is selected. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+When combat actually begins, narrate only the opening preamble and stop before resolving any combat action. Tell the player to open the Traditional Combat board from the tracker header or Settings; the board owns the fight and will seed the roster.
+A COMBAT STATE: DORMANT roster is not an active fight. Continue the non-combat scene and do not treat mere enemy presence, threats, standoffs, or negotiation as combat.
+</combat>`;
+
 // ─────────────────────────────────────────────────────────────────────────
 // System Prompt Control Room — ordering + row-resolution helpers.
 // ─────────────────────────────────────────────────────────────────────────
@@ -354,6 +371,7 @@ const KNOWN_TOGGLE_DEFAULTS = {
     quests: true,
     CYOA_mode: false,
     tactical_combat: true,
+    traditional_combat: true,
     dungeon_reality_and_hidden_mapping: true,
 };
 
@@ -367,6 +385,7 @@ const NARRATOR_TOGGLE_IDS = {
     CYOA_mode: 'rpg_sysprompt_mod_cyoa_mode',
     relationship_tracking: 'rpg_sysprompt_mod_npc_rel_bars',
     tactical_combat: 'rpg_sysprompt_mod_tactical_combat',
+    traditional_combat: 'rpg_sysprompt_mod_traditional_combat',
     dungeon_reality_and_hidden_mapping: 'rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping',
 };
 
@@ -436,8 +455,12 @@ export function transformBaseSectionContent(tag, innerContent, settings) {
         return '';
     }
 
-    if (tag === 'tactical_combat' && !settings.tacticalCombatEnabled) {
+    if (tag === 'tactical_combat' && !isTacticalCombatMode(settings)) {
         // Do not tell the narrator to call a tool that is unavailable.
+        return '';
+    }
+
+    if (tag === 'traditional_combat' && !isTraditionalCombatMode(settings)) {
         return '';
     }
 
@@ -667,7 +690,9 @@ export function getSectionRowDescriptor(key, settings, baseSectionMap) {
             label: `<${tag}>`,
             description: tag === 'tactical_combat'
                 ? 'Narrator instruction: call the StartTacticalCombat function tool once when a set-piece fight begins. Does not run a battle by itself.'
-                : '',
+                : tag === 'traditional_combat'
+                    ? 'Narrator instruction: call the StartTraditionalCombat function tool once when a turn-based fight begins. Does not run a battle by itself.'
+                    : '',
             enabled: isBaseSectionEnabled(tag, settings),
             content: baseSectionMap.get(tag) ?? '',
         };

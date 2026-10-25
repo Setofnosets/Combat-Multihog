@@ -347,6 +347,34 @@ export const AGENT_CONNECTION_SETUPS = [
             openaiGroup: '#rpg_tactical_combat_openai_group',
         },
     },
+    {
+        key: 'traditional_combat',
+        label: 'Traditional Combat Agent',
+        settingsKeys: {
+            connectionSource: 'traditionalCombatConnectionSource',
+            connectionProfileId: 'traditionalCombatConnectionProfileId',
+            completionPresetId: 'traditionalCombatCompletionPresetId',
+            ollamaUrl: 'traditionalCombatOllamaUrl',
+            ollamaModel: 'traditionalCombatOllamaModel',
+            openaiUrl: 'traditionalCombatOpenaiUrl',
+            openaiKey: 'traditionalCombatOpenaiKey',
+            openaiModel: 'traditionalCombatOpenaiModel',
+        },
+        ui: {
+            source: '#rpg_traditional_combat_connection_source',
+            profile: '#rpg_traditional_combat_connection_profile',
+            preset: '#rpg_traditional_combat_completion_preset',
+            ollamaUrl: '#rpg_traditional_combat_ollama_url',
+            ollamaModel: '#rpg_traditional_combat_ollama_model',
+            openaiUrl: '#rpg_traditional_combat_openai_url',
+            openaiKey: '#rpg_traditional_combat_openai_key',
+            openaiModel: '#rpg_traditional_combat_openai_model',
+            openaiManual: '#rpg_traditional_combat_openai_model_manual',
+            profileGroup: '#rpg_traditional_combat_profile_group',
+            ollamaGroup: '#rpg_traditional_combat_ollama_group',
+            openaiGroup: '#rpg_traditional_combat_openai_group',
+        },
+    },
 ];
 
 /** @param {string} key */

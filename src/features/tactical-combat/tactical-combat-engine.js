@@ -127,8 +127,12 @@ export function cellKey(x, y) {
 }
 
 export function inBounds(state, x, y) {
-    return Number.isInteger(x) && Number.isInteger(y)
-        && x >= 0 && y >= 0 && x < state.grid.cols && y < state.grid.rows;
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0) return false;
+    // Theater combat (the traditional turn-based mode) has no grid. Units all
+    // live at an abstract (0,0) position, so coordinates are always "in bounds"
+    // for the shared attack/status/special-effect paths.
+    if (!state?.grid) return true;
+    return x < state.grid.cols && y < state.grid.rows;
 }
 
 export function getTerrain(state, x, y) {
@@ -1875,6 +1879,10 @@ export function applySpecialEffects(state, effects, options = {}) {
             continue;
         }
         if (type === 'terrain') {
+            if (state.theater || !Array.isArray(state.terrain)) {
+                rejected.push('Terrain effects are not supported in traditional combat.');
+                continue;
+            }
             const cells = Array.isArray(effect.cells) ? effect.cells
                 : Array.isArray(effect.tiles) ? effect.tiles
                     : effect.x != null && effect.y != null ? [effect] : [];
@@ -1920,14 +1928,21 @@ export function applySpecialEffects(state, effects, options = {}) {
                 suffix += 1;
             }
             summon.id = summonId;
-            const occupied = new Set(state.units.filter(unit => !unit.defeated && !unit.fled).map(unit => cellKey(unit.x, unit.y)));
-            const spot = findFreeCell(state, caster.x, caster.y, occupied);
-            if (!spot) {
-                rejected.push(`No free cell for ${summon.name}.`);
-                continue;
+            if (state.theater) {
+                // No grid in traditional combat; every unit shares the abstract
+                // theater position. The UI never renders coordinates.
+                summon.x = 0;
+                summon.y = 0;
+            } else {
+                const occupied = new Set(state.units.filter(unit => !unit.defeated && !unit.fled).map(unit => cellKey(unit.x, unit.y)));
+                const spot = findFreeCell(state, caster.x, caster.y, occupied);
+                if (!spot) {
+                    rejected.push(`No free cell for ${summon.name}.`);
+                    continue;
+                }
+                summon.x = spot.x;
+                summon.y = spot.y;
             }
-            summon.x = spot.x;
-            summon.y = spot.y;
             state.units.push(summon);
             if (state.turnStyle === 'initiative' && Array.isArray(state.initiativeOrder) && !state.initiativeOrder.includes(summon.id)) {
                 state.initiativeOrder.push(summon.id);

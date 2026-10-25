@@ -1601,8 +1601,9 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'mapEvolutionCompressThreshold',
     'mapEvolutionNarratorCommitTokens',
     'mapEvolutionCompressSystemPrompt',
-    // Tactical Combat is global configuration + per-chat boards. None of it may
-    // be projected from/into a chatStates partition.
+    // Combat is global configuration + per-chat boards. None of it may be
+    // projected from/into a chatStates partition.
+    'combatStyle',
     'tacticalCombatEnabled',
     'tacticalCombatGridPreset',
     'tacticalCombatGridRows',
@@ -1634,6 +1635,28 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'tacticalCombatClassifierJson',
     'tacticalCombatByChat',
     'tacticalCombatReturn',
+    'traditionalCombatTurnStyle',
+    'traditionalCombatEncounterSource',
+    'traditionalCombatAutoStartOnHostility',
+    'traditionalCombatAutoNarrate',
+    'traditionalCombatOpeningActions',
+    'traditionalCombatSyncTrackerBeforeNarration',
+    'traditionalCombatMaxSpecialResolutions',
+    'traditionalCombatMaxTokens',
+    'traditionalCombatConnectionSource',
+    'traditionalCombatConnectionProfileId',
+    'traditionalCombatCompletionPresetId',
+    'traditionalCombatOllamaUrl',
+    'traditionalCombatOllamaModel',
+    'traditionalCombatOpenaiUrl',
+    'traditionalCombatOpenaiKey',
+    'traditionalCombatOpenaiModel',
+    'traditionalCombatAgentPrompt',
+    'traditionalCombatEncounterPrompt',
+    'traditionalCombatOutcomePrompt',
+    'traditionalCombatSpecialPrompt',
+    'traditionalCombatActionCatalogJson',
+    'traditionalCombatByChat',
     // Tick targeting is operational campaign state: mapped roots differ by chat.
     // Keep these fields in chatStates so reload restores the active campaign's choices.
     'mapEvolutionSystemPrompt',

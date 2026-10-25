@@ -82,10 +82,11 @@ export function parseActionCatalog(raw) {
  * combat: the shipped catalogue is used and the error is surfaced in settings.
  *
  * @param {Record<string, any>} settings
+ * @param {string} [field] settings key holding the catalogue JSON
  * @returns {{ catalog: object[], error: string, usingDefault: boolean }}
  */
-export function getActionCatalog(settings) {
-    const raw = settings?.tacticalCombatActionCatalogJson;
+export function getActionCatalog(settings, field = 'tacticalCombatActionCatalogJson') {
+    const raw = settings?.[field];
     if (raw == null || String(raw).trim() === '') {
         const parsed = parseActionCatalog(DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
         return { catalog: parsed.catalog || clone(DEFAULT_TACTICAL_ACTION_CATALOG), error: '', usingDefault: true };

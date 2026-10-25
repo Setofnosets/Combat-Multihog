@@ -37,6 +37,12 @@ import {
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
 } from './tactical-combat-prompts.js';
 import {
+    DEFAULT_TRADITIONAL_COMBAT_AGENT_PROMPT,
+    DEFAULT_TRADITIONAL_ENCOUNTER_SYSTEM_PROMPT,
+    DEFAULT_TRADITIONAL_SPECIAL_RESOLUTION_PROMPT,
+} from '../traditional-combat/traditional-combat-prompts.js';
+import { buildTraditionalAgentGameState } from '../traditional-combat/traditional-combat-engine.js';
+import {
     applyAction,
     applySpecialEffects,
     buildAgentGameState,
@@ -53,8 +59,10 @@ import {
 const MAX_CORRECTION_ATTEMPTS = 2;
 const MAX_SPECIAL_RESOLUTIONS_PER_TURN = 2;
 
-function maxSpecialResolutionsFor(settings) {
-    const configured = Number(settings?.tacticalCombatMaxSpecialResolutions);
+function maxSpecialResolutionsFor(settings, mode = 'tactical') {
+    const configured = Number(mode === 'traditional'
+        ? settings?.traditionalCombatMaxSpecialResolutions
+        : settings?.tacticalCombatMaxSpecialResolutions);
     if (!Number.isFinite(configured)) return MAX_SPECIAL_RESOLUTIONS_PER_TURN;
     return Math.max(0, Math.min(4, Math.round(configured)));
 }
@@ -96,6 +104,30 @@ export function tacticalRequestSettings(settings) {
         maxTokens: Math.max(1000, Number(settings?.tacticalCombatMaxTokens) || 6000),
         debugMode: !!settings?.debugMode,
     };
+}
+
+/**
+ * Connection settings for the traditional turn-based agent.
+ * @param {Record<string, any>} settings
+ * @returns {object}
+ */
+export function traditionalRequestSettings(settings) {
+    return {
+        connectionSource: settings?.traditionalCombatConnectionSource || 'default',
+        connectionProfileId: settings?.traditionalCombatConnectionProfileId || '',
+        completionPresetId: settings?.traditionalCombatCompletionPresetId || '',
+        ollamaUrl: settings?.traditionalCombatOllamaUrl || 'http://localhost:11434',
+        ollamaModel: settings?.traditionalCombatOllamaModel || '',
+        openaiUrl: settings?.traditionalCombatOpenaiUrl || '',
+        openaiKey: settings?.traditionalCombatOpenaiKey || '',
+        openaiModel: settings?.traditionalCombatOpenaiModel || '',
+        maxTokens: Math.max(1000, Number(settings?.traditionalCombatMaxTokens) || 6000),
+        debugMode: !!settings?.debugMode,
+    };
+}
+
+function requestSettingsFor(settings, mode) {
+    return mode === 'traditional' ? traditionalRequestSettings(settings) : tacticalRequestSettings(settings);
 }
 
 function compactUnitForContext(unit) {
@@ -155,13 +187,17 @@ function compactUnitForContext(unit) {
  * Context JSON for the Encounter Architect.
  * @param {object} context
  * @param {Record<string, any>} settings
+ * @param {{ mode?: 'tactical'|'traditional' }} [options]
  * @returns {object}
  */
-export function buildEncounterRequestPayload(context, settings) {
+export function buildEncounterRequestPayload(context, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const unitCount = (context?.playerUnits?.length || 1) + (context?.allies?.length || 0) + 4;
-    const grid = resolveGridDimensions(settings, unitCount);
-    return {
-        request: 'Design one tactical encounter that fits the current scene and the player declaration below.',
+    const payload = {
+        mode,
+        request: mode === 'traditional'
+            ? 'Design one turn-based encounter that fits the current scene and the player declaration below.'
+            : 'Design one tactical encounter that fits the current scene and the player declaration below.',
         playerDeclaration: String(context?.playerDeclaration || '').slice(0, 1200),
         enemyNames: Array.isArray(context?.enemyNames) ? context.enemyNames.slice(0, 6) : [],
         freshStart: context?.freshStart === true,
@@ -172,32 +208,42 @@ export function buildEncounterRequestPayload(context, settings) {
         location: context?.location || '',
         sceneExcerpt: String(context?.sceneExcerpt || '').slice(0, 3500),
         partySummary: context?.summary?.party || [],
-        requestedGrid: {
-            mode: grid.mode,
-            rows: grid.rows,
-            cols: grid.cols,
-            note: grid.mode === 'dynamic' ? `Choose rows/cols between ${TC_DYNAMIC_MIN} and ${TC_DYNAMIC_MAX}.` : 'Use the configured grid dimensions.',
-        },
-        terrainLegend: Object.fromEntries(
-            Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [char, TC_TERRAIN[id].label]),
-        ),
         rules: {
             enemyCount: '2-6',
             fairFight: 'Routine encounter should be winnable; a boss fight may be deadly.',
-            keepSpawnLanesClear: 'Left two columns are the player side; right two columns are the enemy side.',
             willpower: 'Willpower is a morale pool, normally the configured % of max HP. Only mental/morale abilities should target it. maxWillpower 0 means immune. At 0 Willpower the target breaks; use willpowerOutcome to say how (defeat, flee, switch_side, incapacitate, surrender).',
             willpowerMaxPercent: Number(settings?.tacticalCombatWillpowerMaxPercent) || 30,
         },
     };
+    if (mode === 'traditional') {
+        payload.rules.grid = 'none';
+        payload.rules.terrain = 'none';
+        payload.rules.movement = 'none';
+        payload.rules.targeting = 'All living units on the opposing side are legal attack targets. Range and line of sight are ignored.';
+        return payload;
+    }
+    const grid = resolveGridDimensions(settings, unitCount);
+    payload.requestedGrid = {
+        mode: grid.mode,
+        rows: grid.rows,
+        cols: grid.cols,
+        note: grid.mode === 'dynamic' ? `Choose rows/cols between ${TC_DYNAMIC_MIN} and ${TC_DYNAMIC_MAX}.` : 'Use the configured grid dimensions.',
+    };
+    payload.terrainLegend = Object.fromEntries(
+        Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [char, TC_TERRAIN[id].label]),
+    );
+    payload.rules.keepSpawnLanesClear = 'Left two columns are the player side; right two columns are the enemy side.';
+    return payload;
 }
 
 /**
  * @param {object} context
  * @param {Record<string, any>} settings
+ * @param {{ mode?: 'tactical'|'traditional' }} [options]
  * @returns {string}
  */
-export function buildEncounterUserPrompt(context, settings) {
-    const payload = buildEncounterRequestPayload(context, settings);
+export function buildEncounterUserPrompt(context, settings, options = {}) {
+    const payload = buildEncounterRequestPayload(context, settings, options);
     return `## ENCOUNTER REQUEST\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\`\n\nReturn exactly one JSON encounter object. No prose, no markdown fences.`;
 }
 
@@ -448,11 +494,14 @@ const ACTIONS_JSON_SCHEMA = {
  * @returns {Promise<{ ok: boolean, encounter?: object, error?: string, attempts: number, raw?: string }>}
  */
 export async function generateEncounterWithAgent(context, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const chatId = getActiveChatId();
     const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
-    const system = String(settings?.tacticalCombatEncounterPrompt || DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT);
-    const request = tacticalRequestSettings(settings);
-    let userPrompt = buildEncounterUserPrompt(context, settings);
+    const system = String(mode === 'traditional'
+        ? (settings?.traditionalCombatEncounterPrompt || DEFAULT_TRADITIONAL_ENCOUNTER_SYSTEM_PROMPT)
+        : (settings?.tacticalCombatEncounterPrompt || DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT));
+    const request = requestSettingsFor(settings, mode);
+    let userPrompt = buildEncounterUserPrompt(context, settings, { mode });
     let lastError = '';
     let attempts = 0;
 
@@ -466,7 +515,7 @@ export async function generateEncounterWithAgent(context, settings, options = {}
                     ? userPrompt
                     : `${userPrompt}\n\n## CORRECTION\nYour previous response could not be used: ${lastError}\nReturn only the corrected JSON object.`,
                 options.signal || null,
-                { stream: false, debugSource: 'Tactical Combat Encounter', jsonSchema: ENCOUNTER_JSON_SCHEMA },
+                { stream: false, debugSource: mode === 'traditional' ? 'Traditional Combat Encounter' : 'Tactical Combat Encounter', jsonSchema: ENCOUNTER_JSON_SCHEMA },
             );
             if (!ownsChat()) return { ok: false, error: 'The active chat changed before the encounter was ready.', attempts };
             const parsed = parseTacticalResponse(raw, 'enemies');
@@ -499,13 +548,19 @@ export async function generateEncounterWithAgent(context, settings, options = {}
  * @param {string[]} unitIds
  * @param {Record<string, any>} settings
  * @param {object[]} catalog
+ * @param {{ mode?: 'tactical'|'traditional' }} [options]
  * @returns {{ system: string, user: string, payload: object }}
  */
-export function buildAgentPrompts(state, unitIds, settings, catalog) {
+export function buildAgentPrompts(state, unitIds, settings, catalog, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     // Compact player summaries keep the prompt small enough for reasoning models
     // (DeepSeek etc.) without losing any unit the agent is allowed to control.
-    const payload = buildAgentGameState(state, unitIds, catalog, { compact: true });
-    const system = String(settings?.tacticalCombatAgentPrompt || DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT);
+    const payload = mode === 'traditional'
+        ? buildTraditionalAgentGameState(state, unitIds, catalog, { compact: true })
+        : buildAgentGameState(state, unitIds, catalog, { compact: true });
+    const system = String(mode === 'traditional'
+        ? (settings?.traditionalCombatAgentPrompt || DEFAULT_TRADITIONAL_COMBAT_AGENT_PROMPT)
+        : (settings?.tacticalCombatAgentPrompt || DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT));
     const user = `## GAME STATE\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nAct for these units in this order: ${unitIds.join(', ')}.\nReturn exactly one JSON object of the form {"actions":[...]} and nothing else.`;
     return { system, user, payload };
 }
@@ -528,16 +583,17 @@ export function parseAgentActionResponse(text, options = {}) {
  * @param {object} state
  * @param {string[]} unitIds
  * @param {Record<string, any>} settings
- * @param {{ signal?: AbortSignal, catalog?: object[] }} [options]
+ * @param {{ signal?: AbortSignal, catalog?: object[], mode?: 'tactical'|'traditional', prompts?: { system: string, user: string, payload?: object } }} [options]
  * @returns {Promise<{ ok: boolean, actions: object[], rejected: { action: any, error: string }[], error?: string, attempts: number, raw?: string }>}
  */
 export async function requestAgentActions(state, unitIds, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const chatId = getActiveChatId();
     const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
-    const catalogResult = getActionCatalog(settings);
+    const catalogResult = getActionCatalog(settings, mode === 'traditional' ? 'traditionalCombatActionCatalogJson' : 'tacticalCombatActionCatalogJson');
     const catalog = options.catalog || catalogResult.catalog;
-    const request = tacticalRequestSettings(settings);
-    const prompts = buildAgentPrompts(state, unitIds, settings, catalog);
+    const request = requestSettingsFor(settings, mode);
+    const prompts = options.prompts || buildAgentPrompts(state, unitIds, settings, catalog, { mode });
     let lastError = '';
     let attempts = 0;
 
@@ -551,7 +607,7 @@ export async function requestAgentActions(state, unitIds, settings, options = {}
                     ? prompts.user
                     : `${prompts.user}\n\n## CORRECTION\nYour previous response was invalid: ${lastError}\nReturn only a corrected JSON object with an "actions" array.`,
                 options.signal || null,
-                { stream: false, debugSource: 'Tactical Combat Agent', jsonSchema: ACTIONS_JSON_SCHEMA },
+                { stream: false, debugSource: mode === 'traditional' ? 'Traditional Combat Agent' : 'Tactical Combat Agent', jsonSchema: ACTIONS_JSON_SCHEMA },
             );
             if (!ownsChat()) return { ok: false, actions: [], rejected: [], error: 'The active chat changed.', attempts };
             const parsed = parseAgentActionResponse(raw, { unitIds, catalog });
@@ -600,9 +656,10 @@ function compactSpecialUnit(unit) {
  * Validate the effect list returned by the special-ability resolver.
  * @param {any} value
  * @param {object} state
+ * @param {{ theater?: boolean }} [options]
  * @returns {{ effects: object[], log: string, rejected: string[] }}
  */
-export function normalizeSpecialEffects(value, state) {
+export function normalizeSpecialEffects(value, state, options = {}) {
     let payload = value;
     if (payload && !Array.isArray(payload) && Array.isArray(payload.effects)) payload = payload.effects;
     const effects = [];
@@ -718,6 +775,10 @@ export function normalizeSpecialEffects(value, state) {
             continue;
         }
         if (type === 'terrain') {
+            if (options.theater) {
+                rejected.push('Terrain effects are not supported in traditional combat.');
+                continue;
+            }
             const cells = Array.isArray(raw.cells) ? raw.cells : Array.isArray(raw.tiles) ? raw.tiles : [];
             const cleaned = cells.slice(0, 24).filter(cell => {
                 const x = Number(cell?.x);
@@ -770,11 +831,12 @@ export function normalizeSpecialEffects(value, state) {
  * @param {{ kind: 'skill'|'item', name: string, description: string }} source
  * @param {object|null} target
  * @param {Record<string, any>} settings
- * @param {{ signal?: AbortSignal }} [options]
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional' }} [options]
  * @returns {Promise<{ ok: boolean, effects?: object[], log?: string, error?: string }>}
  */
 export async function resolveSpecialEffectWithAgent(state, caster, source, target, settings, options = {}) {
     if (!state || !caster || !source) return { ok: false, error: 'Missing special ability context.' };
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const chatId = getActiveChatId();
     const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
     const payload = {
@@ -787,13 +849,20 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
         },
         caster: compactSpecialUnit(caster),
         target: target ? compactSpecialUnit(target) : null,
-        battlefield: {
-            rows: state.grid.rows,
-            cols: state.grid.cols,
-            terrainLegend: Object.fromEntries(Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [id, TC_TERRAIN[id]?.label || id])),
-            terrain: state.terrain.map(row => row.map(id => terrainChar(id)).join('')),
-            units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
-        },
+        battlefield: mode === 'traditional'
+            ? {
+                mode: 'traditional',
+                grid: 'none',
+                terrain: 'none',
+                units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
+            }
+            : {
+                rows: state.grid.rows,
+                cols: state.grid.cols,
+                terrainLegend: Object.fromEntries(Object.entries(TC_TERRAIN_CHARS).map(([char, id]) => [id, TC_TERRAIN[id]?.label || id])),
+                terrain: state.terrain.map(row => row.map(id => terrainChar(id)).join('')),
+                units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
+            },
         rules: {
             actorSide: caster.side,
             willpower: 'Willpower is separate from HP. To break Willpower, apply damage with resource "willpower". Set willpowerOutcome on the damage effect. A defeat effect is only legal after Willpower is already 0.',
@@ -803,16 +872,18 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
     };
     try {
         const raw = await sendStateRequest(
-            tacticalRequestSettings(settings),
-            String(settings?.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT),
+            requestSettingsFor(settings, mode),
+            String(mode === 'traditional'
+                ? (settings?.traditionalCombatSpecialPrompt || DEFAULT_TRADITIONAL_SPECIAL_RESOLUTION_PROMPT)
+                : (settings?.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT)),
             `## SPECIAL ABILITY\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nReturn only the JSON object with "log" and "effects".`,
             options.signal || null,
-            { stream: false, debugSource: 'Tactical Combat Special' },
+            { stream: false, debugSource: mode === 'traditional' ? 'Traditional Combat Special' : 'Tactical Combat Special' },
         );
         if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
         const parsed = parseTacticalResponse(raw, 'effects');
         if (!parsed.value) return { ok: false, error: parsed.error || 'The resolver returned no JSON.' };
-        const normalized = normalizeSpecialEffects(parsed.value, state);
+        const normalized = normalizeSpecialEffects(parsed.value, state, { theater: mode === 'traditional' });
         if (!normalized.effects.length) {
             return { ok: false, error: normalized.rejected.join(' ') || 'The resolver returned no usable effects.' };
         }
@@ -848,18 +919,22 @@ function chooseStrategicCell(state, unit, target) {
  * Deterministic local tactics. Returns declarative actions (does not mutate).
  * @param {object} state
  * @param {string[]} unitIds
- * @param {{ rng?: () => number }} [options]
+ * @param {{ rng?: () => number, allowMove?: boolean, theater?: boolean }} [options]
  * @returns {object[]}
  */
 export function buildLocalAiActions(state, unitIds, options = {}) {
     const actions = [];
     const ids = Array.isArray(unitIds) ? unitIds : [];
+    const allowMove = options.allowMove !== false;
+    const theater = options.theater === true || state?.theater === true;
+    const catalog = Array.isArray(options.catalog) ? options.catalog : null;
+    const canUse = (type) => !catalog || catalog.some(entry => entry.type === type && entry.enabled !== false);
     for (const unitId of ids) {
         const unit = state.units.find(candidate => candidate.id === unitId);
         if (!unit || unit.defeated || unit.fled || unit.doneForRound) continue;
         const targets = livingUnits(state).filter(target => target.id !== unit.id && hostileTo(unit, target));
         if (!targets.length) {
-            actions.push({ type: 'wait', unitId: unit.id });
+            if (canUse('wait')) actions.push({ type: 'wait', unitId: unit.id });
             continue;
         }
         targets.sort((a, b) => {
@@ -876,8 +951,12 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         let performed = false;
 
         // Low-health / low-Willpower self-heal before engaging.
-        if (!actionUsed && unit.hp <= unit.maxHp * 0.35) {
-            const heal = (unit.skills || []).find(skill => skill.kind === 'heal' && skill.uses > 0 && (skill.range || 0) === 0 && skill.resource !== 'willpower');
+        if (canUse('skill') && !actionUsed && unit.hp <= unit.maxHp * 0.35) {
+            const heal = (unit.skills || []).find(skill =>
+                skill.kind === 'heal'
+                && skill.uses > 0
+                && skill.resource !== 'willpower'
+                && (theater || (skill.range || 0) === 0));
             if (heal && (!heal.bonusAction || !bonusUsed)) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
                 if (heal.bonusAction) bonusUsed = true;
@@ -885,8 +964,12 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
                 performed = true;
             }
         }
-        if (!actionUsed && Number(unit.maxWillpower) > 0 && unit.willpower <= unit.maxWillpower * 0.35) {
-            const heal = (unit.skills || []).find(skill => skill.kind === 'heal' && skill.uses > 0 && (skill.range || 0) === 0 && skill.resource === 'willpower');
+        if (canUse('skill') && !actionUsed && Number(unit.maxWillpower) > 0 && unit.willpower <= unit.maxWillpower * 0.35) {
+            const heal = (unit.skills || []).find(skill =>
+                skill.kind === 'heal'
+                && skill.uses > 0
+                && skill.resource === 'willpower'
+                && (theater || (skill.range || 0) === 0));
             if (heal && (!heal.bonusAction || !bonusUsed)) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
                 if (heal.bonusAction) bonusUsed = true;
@@ -897,7 +980,7 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
 
         let moved = false;
         const projected = { ...unit };
-        if (!isAdjacentEnough(state, projected, target) && unit.movementUsed < unit.speed) {
+        if (allowMove && canUse('move') && !isAdjacentEnough(state, projected, target) && unit.movementUsed < unit.speed) {
             const best = chooseStrategicCell(state, unit, target);
             if (best && (best.x !== unit.x || best.y !== unit.y)) {
                 actions.push({ type: 'move', unitId: unit.id, to: { x: best.x, y: best.y } });
@@ -909,31 +992,38 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         }
 
         if (!actionUsed && isAdjacentEnough(state, projected, target)) {
-            const willpowerSkill = (unit.skills || []).find(skill =>
+            const willpowerSkill = canUse('skill') ? (unit.skills || []).find(skill =>
                 skill.kind === 'attack'
                 && skill.resource === 'willpower'
                 && skill.uses > 0
                 && (skill.bonusAction ? !bonusUsed : !actionUsed)
                 && chebyshev(projected, target) <= (Number(skill.range) || 1)
-                && ((Number(skill.range) || 1) <= 1 || hasLineOfSight(state, projected, target)));
+                && ((Number(skill.range) || 1) <= 1 || hasLineOfSight(state, projected, target))) : null;
             if (willpowerSkill && Number(target.maxWillpower) > 0) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: willpowerSkill.id, targetId: target.id });
                 if (willpowerSkill.bonusAction) bonusUsed = true;
                 else actionUsed = true;
                 performed = true;
-            } else {
+            } else if (canUse('attack')) {
                 actions.push({ type: 'attack', unitId: unit.id, targetId: target.id });
                 actionUsed = true;
                 performed = true;
+            } else if (canUse('skill')) {
+                const attackSkill = (unit.skills || []).find(skill => skill.kind === 'attack' && skill.uses > 0);
+                if (attackSkill) {
+                    actions.push({ type: 'skill', unitId: unit.id, skillId: attackSkill.id, targetId: target.id });
+                    actionUsed = true;
+                    performed = true;
+                }
             }
-        } else if (!actionUsed && !moved) {
+        } else if (!actionUsed && !moved && canUse('defend')) {
             actions.push({ type: 'defend', unitId: unit.id });
             actionUsed = true;
             performed = true;
         }
 
         // Every unit must produce at least one action so the batch is complete.
-        if (!performed) actions.push({ type: 'wait', unitId: unit.id });
+        if (!performed && canUse('wait')) actions.push({ type: 'wait', unitId: unit.id });
     }
     return actions;
 }
@@ -966,7 +1056,7 @@ async function executeAgentAction(state, action, settings, options = {}) {
     let log = '';
     if (template?.length) {
         effects = resolveEffectTemplate(template, { casterId: prepared.unit.id, targetId: prepared.target.id });
-        const normalized = normalizeSpecialEffects({ effects }, state);
+        const normalized = normalizeSpecialEffects({ effects }, state, { theater: state.theater === true });
         if (!normalized.effects.length) {
             return {
                 result: { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' },
@@ -988,7 +1078,7 @@ async function executeAgentAction(state, action, settings, options = {}) {
             },
             prepared.target,
             settings,
-            { signal: options.signal },
+            { signal: options.signal, mode: options.mode },
         );
         if (!resolved.ok) {
             return { result: { ok: false, error: resolved.error || 'The special resolver failed.' }, special: true, applied: [] };
@@ -1018,10 +1108,11 @@ async function executeAgentAction(state, action, settings, options = {}) {
  * @param {object} state
  * @param {string[]} unitIds
  * @param {Record<string, any>} settings
- * @param {{ signal?: AbortSignal, rng?: () => number, catalog?: object[] }} [options]
+ * @param {{ signal?: AbortSignal, rng?: () => number, catalog?: object[], mode?: 'tactical'|'traditional', prompts?: object, allowMove?: boolean }} [options]
  * @returns {Promise<{ source: string, applied: object[], rejected: object[], ended: boolean, error: string, attempts: number }>}
  */
 export async function runAgentTurn(state, unitIds, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const ids = (Array.isArray(unitIds) ? unitIds : []).filter(id => {
         const unit = state.units.find(candidate => candidate.id === id);
         return unit && !unit.defeated && !unit.fled;
@@ -1030,9 +1121,9 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
 
     const runChatId = getActiveChatId();
     const ownsRun = () => String(getActiveChatId() || '') === String(runChatId || '');
-    const catalogResult = getActionCatalog(settings);
+    const catalogResult = getActionCatalog(settings, mode === 'traditional' ? 'traditionalCombatActionCatalogJson' : 'tacticalCombatActionCatalogJson');
     const catalog = options.catalog || catalogResult.catalog;
-    const responses = await requestAgentActions(state, ids, settings, { ...options, catalog });
+    const responses = await requestAgentActions(state, ids, settings, { ...options, catalog, mode });
     if (!ownsRun()) {
         return { source: 'cancelled', applied: [], rejected: [], ended: false, error: 'The active chat changed.', attempts: responses.attempts };
     }
@@ -1053,7 +1144,7 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
     const allowed = new Set(ids);
     const applied = [];
     const actedUnitIds = [];
-    const maxSpecialResolutions = maxSpecialResolutionsFor(settings);
+    const maxSpecialResolutions = maxSpecialResolutionsFor(settings, mode);
     let specialResolutions = 0;
     for (const action of actions) {
         if (state.status !== 'active') break;

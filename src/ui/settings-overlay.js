@@ -30,7 +30,7 @@ const TAB_DEFS = [
     { id: 'maparchitect', icon: 'fa-map', label: 'Persistent Maps', match: /Persistent Maps/i },
     { id: 'worldprog', icon: 'fa-globe', label: 'World Progression', match: /World Progression/i },
     { id: 'companion', icon: 'fa-comments', label: 'Adventure Companion', match: /Adventure Companion/i },
-    { id: 'tactical', icon: 'fa-chess-board', label: 'Tactical Combat', match: /Tactical Combat/i },
+    { id: 'combat', icon: 'fa-crosshairs', label: 'Combat', match: /^Combat\b/i },
 ];
 
 let _lastTab = 'general';
@@ -366,6 +366,7 @@ function installPanelDrag(overlay) {
 export function switchSettingsOverlayTab(tabId) {
     const overlay = document.getElementById('rt-settings-overlay');
     if (!overlay) return;
+    if (tabId === 'tactical') tabId = 'combat';
     if (!TAB_DEFS.some(t => t.id === tabId) || !overlay.querySelector(`.rt-settings-tab[data-tab="${tabId}"]`)) {
         tabId = overlay.querySelector('.rt-so-tab-btn')?.dataset?.tab || TAB_DEFS[0].id;
     }

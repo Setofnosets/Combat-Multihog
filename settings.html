@@ -801,7 +801,8 @@
                                 <label class="checkbox_label"><input type="checkbox" id="rpg_sysprompt_mod_resting" /><span>💤 Resting Restrictions (=&gt;9h between rests)</span></label>
                                 <label class="checkbox_label"><input type="checkbox" id="rpg_sysprompt_mod_party_bench" /><span>⛺ Benched Party</span></label>
                                 <label class="checkbox_label" title="Builds district-scale settlements and room-scale dungeons or significant interiors. Settlement buildings remain assets unless CreateAreaMap explicitly promotes them."><input type="checkbox" id="rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping" /><span>🗺️ Persistent Maps</span></label>
-                                <label class="checkbox_label" title="Adds a predefined Tactical Combat section to the system prompt. It tells the narrator to call StartTacticalCombat once when a set-piece fight begins, never every turn. Requires Tactical Combat to be enabled and a model/API with function calling."><input type="checkbox" id="rpg_sysprompt_mod_tactical_combat" /><span>⚔️ Tactical Combat (StartTacticalCombat tool)</span></label>
+                                <label class="checkbox_label" title="Adds a predefined Tactical Combat section to the system prompt. It tells the narrator to call StartTacticalCombat once when a set-piece fight begins, never every turn. Requires the Tactical grid combat style and a model/API with function calling."><input type="checkbox" id="rpg_sysprompt_mod_tactical_combat" /><span>⚔️ Tactical Combat (StartTacticalCombat tool)</span></label>
+                                <label class="checkbox_label" title="Adds a predefined Traditional Combat section to the system prompt. It tells the narrator to call StartTraditionalCombat once when a fight begins, never every turn. Requires the Traditional turn-based combat style and a model/API with function calling."><input type="checkbox" id="rpg_sysprompt_mod_traditional_combat" /><span>🗡️ Traditional Combat (StartTraditionalCombat tool)</span></label>
                                 <div id="rpg_map_architect_opener_components" class="flex-container flexFlowColumn gap-1" style="padding-left: 20px; display: none;">
                                     <small style="display:block; font-weight:bold; opacity:0.65; text-transform:uppercase; font-size:0.7em; letter-spacing:0.4px;">Map Architect opener</small>
                                     <label class="checkbox_label" title="Default. The narrator calls CreateAreaMap; SillyTavern pauses the turn until the map is ready.">
@@ -2316,30 +2317,40 @@
                 </div>
             </div>
 
-            <!-- SUB-DRAWER: TACTICAL COMBAT -->
+            <!-- SUB-DRAWER: COMBAT -->
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">
-                    <i class="fa-solid fa-chess-board" style="margin-right: 8px; opacity: 0.7;"></i>
-                    <b>Tactical Combat</b>
+                    <i class="fa-solid fa-crosshairs" style="margin-right: 8px; opacity: 0.7;"></i>
+                    <b>Combat</b>
                     <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
                 </div>
                 <div class="inline-drawer-content">
                     <div class="rt-tc-settings-intro">
-                        Grid-based combat built from the current <code>[CHARACTER]</code>, <code>[PARTY]</code>, and <code>[COMBAT]</code> state. Move your units, use skills and items, then hand the enemy phase to the combat agent. Combat ends with a result queued for the main narrator.
+                        Choose how fights are resolved. <b>Narration</b> leaves combat to the main model. <b>Tactical</b> uses the grid board. <b>Traditional</b> is a no-grid, turn-based board: select a skill or attack and choose a target; the engine resolves it deterministically.
                     </div>
 
-                    <label class="checkbox_label" for="rpg_tactical_combat_enabled">
-                        <input type="checkbox" id="rpg_tactical_combat_enabled" />
-                        <span>Enable Tactical Combat</span>
-                    </label>
+                    <div class="rt-tc-field">
+                        <label for="rpg_combat_style">Combat style</label>
+                        <select id="rpg_combat_style" class="text_pole">
+                            <option value="narrative">Narration — the main model adjudicates combat</option>
+                            <option value="tactical">Tactical — grid battlefield with movement</option>
+                            <option value="traditional">Traditional — turn-based, no grid</option>
+                        </select>
+                        <div class="rt-tc-settings-note">Only the selected style's board, narrator tool, and system-prompt override are active. Existing saved boards remain available when you switch back.</div>
+                    </div>
 
+                    <div id="rpg_combat_narrative_pane" style="display: none;">
+                        <div class="rt-tc-settings-note">Narration mode uses the normal <code>&lt;combat&gt;</code> rules. The narrator describes attacks, damage, saves, and enemy turns. No board opens and no combat tool is registered.</div>
+                    </div>
+
+                    <div id="rpg_combat_tactical_pane">
                     <div class="rt-tc-settings-actions">
                         <button type="button" id="rpg_tactical_combat_open" class="menu_button interactable"><i class="fa-solid fa-table-cells-large"></i> Open board</button>
                         <button type="button" id="rpg_tactical_combat_start" class="menu_button interactable"><i class="fa-solid fa-crosshairs"></i> Start encounter</button>
                         <button type="button" id="rpg_tactical_combat_stop" class="menu_button interactable"><i class="fa-solid fa-stop"></i> Stop agent</button>
                         <button type="button" id="rpg_tactical_combat_reset" class="menu_button interactable"><i class="fa-solid fa-trash"></i> Clear board</button>
                     </div>
-                    <div id="rpg_tactical_combat_status" class="rt-tc-setting-status">Tactical Combat is disabled. Enable it to start an encounter.</div>
+                    <div id="rpg_tactical_combat_status" class="rt-tc-setting-status">Tactical Combat is not selected. Choose it in the Combat style dropdown.</div>
 
                     <div class="inline-drawer">
                         <div class="inline-drawer-toggle inline-drawer-header">
@@ -2613,8 +2624,172 @@
                             </div>
                         </div>
                     </div>
+                    </div><!-- /#rpg_combat_tactical_pane -->
 
-                    <div class="rt-tc-settings-note">Combat results are written to <code>[COMBAT]</code> as <code>END_COMBAT</code> and queued as an authoritative aftermath block for the narrator. The board is saved per chat under the extension settings.</div>
+                    <div id="rpg_combat_traditional_pane" style="display: none;">
+                        <div class="rt-tc-settings-actions">
+                            <button type="button" id="rpg_traditional_combat_open" class="menu_button interactable"><i class="fa-solid fa-table-list"></i> Open board</button>
+                            <button type="button" id="rpg_traditional_combat_start" class="menu_button interactable"><i class="fa-solid fa-crosshairs"></i> Start encounter</button>
+                            <button type="button" id="rpg_traditional_combat_stop" class="menu_button interactable"><i class="fa-solid fa-stop"></i> Stop agent</button>
+                            <button type="button" id="rpg_traditional_combat_reset" class="menu_button interactable"><i class="fa-solid fa-trash"></i> Clear board</button>
+                        </div>
+                        <div id="rpg_traditional_combat_status" class="rt-tc-setting-status">Traditional Combat is not selected. Choose it in the Combat style dropdown.</div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-scale-balanced" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Turn Rules</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_turn_style">Turn style</label>
+                                    <select id="rpg_traditional_combat_turn_style" class="text_pole">
+                                        <option value="initiative">Initiative — 1d20 + initiative modifier, one unit at a time</option>
+                                        <option value="phase">Phased — all party units act, then all enemy units</option>
+                                    </select>
+                                    <div class="rt-tc-settings-note">There is no movement in either style. Each unit gets one main action and optionally one bonus action.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_encounter_source">Encounter source</label>
+                                    <select id="rpg_traditional_combat_encounter_source" class="text_pole">
+                                        <option value="auto">Auto — reuse active [COMBAT], otherwise ask the agent</option>
+                                        <option value="existing">Existing [COMBAT] only</option>
+                                        <option value="agent">Always ask the combat agent to design a new encounter</option>
+                                    </select>
+                                </div>
+                                <label class="checkbox_label" for="rpg_traditional_combat_auto_start_on_hostility">
+                                    <input type="checkbox" id="rpg_traditional_combat_auto_start_on_hostility" checked />
+                                    <span>Start traditional combat automatically on hostile actions</span>
+                                </label>
+                                <div class="rt-tc-settings-note">When enabled, the narrator calls <code>StartTraditionalCombat</code> only after a real attack, hostile spell, charge, ambush, or an explicit COMBAT STATE: HOSTILE/ACTIVE. Mere presence, threats, negotiation, and DORMANT rosters stay in roleplay.</div>
+                                <label class="checkbox_label" for="rpg_traditional_combat_opening_actions">
+                                    <input type="checkbox" id="rpg_traditional_combat_opening_actions" checked />
+                                    <span>Resolve declared opening actions before Round 1</span>
+                                </label>
+                                <label class="checkbox_label" for="rpg_traditional_combat_auto_narrate">
+                                    <input type="checkbox" id="rpg_traditional_combat_auto_narrate" checked />
+                                    <span>Automatically return to narration when combat ends</span>
+                                </label>
+                                <label class="checkbox_label" for="rpg_traditional_combat_sync_tracker_before_narration">
+                                    <input type="checkbox" id="rpg_traditional_combat_sync_tracker_before_narration" checked />
+                                    <span>Update the State Tracker before returning to narration</span>
+                                </label>
+                                <div class="rt-tc-settings-note">The final outcome is always queued for the next narrator generation. Automatic return simply triggers that generation for you.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_max_special_resolutions">Maximum special resolutions per enemy activation</label>
+                                    <input type="number" id="rpg_traditional_combat_max_special_resolutions" class="text_pole" min="0" max="4" step="1" value="2" />
+                                    <div class="rt-tc-settings-note">Limits how many unique special abilities an enemy batch may send through the resolver. Deterministic attacks, heals, buffs, and effect templates do not use a resolution call.</div>
+                                </div>
+                                <div class="rt-tc-settings-note">Traditional combat shares the Willpower and Loadout Classifier settings from the Tactical pane. Terrain effects are rejected; summons, statuses, transformations, and Willpower breaks are supported.</div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-plug-circle-bolt" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Combat agent connection</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">The agent designs encounters and controls every enemy and non-party ally. It never acts for player units. Use Main API, a saved connection profile, Ollama, or an OpenAI-compatible endpoint. Connection settings are global.</div>
+                                <div class="flex-container flexFlowColumn gap-1">
+                                    <label for="rpg_traditional_combat_connection_source">Connection source</label>
+                                    <select id="rpg_traditional_combat_connection_source" class="text_pole">
+                                        <option value="default">Main API</option>
+                                        <option value="profile">Profile</option>
+                                        <option value="ollama">Ollama</option>
+                                        <option value="openai">OpenAI-compatible</option>
+                                    </select>
+                                    <div id="rpg_traditional_combat_profile_group" style="display: none;">
+                                        <label for="rpg_traditional_combat_connection_profile">Profile</label>
+                                        <select id="rpg_traditional_combat_connection_profile" class="text_pole"></select>
+                                    </div>
+                                    <div id="rpg_traditional_combat_ollama_group" style="display: none;">
+                                        <label for="rpg_traditional_combat_ollama_url">Ollama URL</label>
+                                        <input id="rpg_traditional_combat_ollama_url" type="text" class="text_pole" placeholder="http://localhost:11434" />
+                                        <label for="rpg_traditional_combat_ollama_model">Ollama model</label>
+                                        <div class="flex-container gap-1">
+                                            <select id="rpg_traditional_combat_ollama_model" class="text_pole" style="flex: 1;"></select>
+                                            <button type="button" id="rpg_traditional_combat_ollama_refresh" class="menu_button interactable" title="Refresh Ollama models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                        </div>
+                                    </div>
+                                    <div id="rpg_traditional_combat_openai_group" style="display: none;">
+                                        <label for="rpg_traditional_combat_openai_url">Endpoint URL</label>
+                                        <input id="rpg_traditional_combat_openai_url" type="text" class="text_pole" placeholder="URL" />
+                                        <label for="rpg_traditional_combat_openai_key">API key</label>
+                                        <input id="rpg_traditional_combat_openai_key" type="password" class="text_pole" placeholder="Key" />
+                                        <label for="rpg_traditional_combat_openai_model">Model</label>
+                                        <div class="flex-container gap-1">
+                                            <select id="rpg_traditional_combat_openai_model" class="text_pole" style="flex: 1;"></select>
+                                            <button type="button" id="rpg_traditional_combat_openai_refresh" class="menu_button interactable" title="Refresh OpenAI-compatible models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                        </div>
+                                        <input id="rpg_traditional_combat_openai_model_manual" type="text" class="text_pole" placeholder="Manual model name" />
+                                    </div>
+                                    <label for="rpg_traditional_combat_completion_preset">Completion preset</label>
+                                    <select id="rpg_traditional_combat_completion_preset" class="text_pole"></select>
+                                    <div class="rt-tc-field">
+                                        <label for="rpg_traditional_combat_max_tokens">Agent max output tokens</label>
+                                        <input type="number" id="rpg_traditional_combat_max_tokens" class="text_pole" min="1000" max="32000" step="500" value="6000" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-scroll" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Prompt Templates</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Prompts are sent verbatim (with the JSON state appended). Reset restores the shipped template.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_agent_prompt">Traditional agent system prompt</label>
+                                    <textarea id="rpg_traditional_combat_agent_prompt" class="text_pole rt-tc-prompt-input" rows="12" spellcheck="false"></textarea>
+                                    <button type="button" id="rpg_traditional_combat_agent_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset agent prompt</button>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_encounter_prompt">Encounter architect system prompt</label>
+                                    <textarea id="rpg_traditional_combat_encounter_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <button type="button" id="rpg_traditional_combat_encounter_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset encounter prompt</button>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_outcome_prompt">Outcome-to-narration template</label>
+                                    <textarea id="rpg_traditional_combat_outcome_prompt" class="text_pole rt-tc-prompt-input" rows="6" spellcheck="false"></textarea>
+                                    <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{details}}</code>.</div>
+                                    <button type="button" id="rpg_traditional_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome template</button>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_special_prompt">Special ability resolver prompt</label>
+                                    <textarea id="rpg_traditional_combat_special_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <div class="rt-tc-settings-note">Used only when a non-standard ability, spell, or item is cast. Terrain effects are rejected; summons, statuses, transformations, and Willpower breaks are supported.</div>
+                                    <button type="button" id="rpg_traditional_combat_special_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset special resolver prompt</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-list-check" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Action Catalogue</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Allowed actions are driven by this catalogue. The shipped catalogue is Attack, Skill, Item, Defend, Wait, and Flee; <code>move</code> is not valid in traditional combat. Disable an action with <code>"enabled": false</code>. Unknown action types are rejected.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_traditional_combat_action_catalog">Traditional action catalogue (JSON)</label>
+                                    <textarea id="rpg_traditional_combat_action_catalog" class="text_pole rt-tc-catalog-input" rows="14" spellcheck="false"></textarea>
+                                    <div id="rpg_traditional_combat_action_catalog_status" class="rt-tc-setting-status"></div>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_traditional_combat_action_catalog_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset catalogue</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div><!-- /#rpg_combat_traditional_pane -->
+
+                    <div class="rt-tc-settings-note">Combat results are written to <code>[COMBAT]</code> as <code>END_COMBAT</code> and queued as an authoritative aftermath block for the narrator. Each board is saved per chat under the extension settings.</div>
                 </div>
             </div>
 
