@@ -2,13 +2,13 @@
 
 Tactical Combat is a grid-based battle layer for the Multihog D&D Framework. It turns the tracker's existing state memo into a playable encounter: party members, enemies, non-party allies, stats, skills, and consumables are all read from `[CHARACTER]`, `[PARTY]`, `[COMBAT]`, and `[INVENTORY]`.
 
-Open it from **Settings → Tactical Combat** or the chess-board button in the tracker header.
+Open it from **Settings → Combat → Tactical Combat** or the combat button in the tracker header while the **Tactical** style is selected.
 
 ---
 
 ## Quick start
 
-1. Open **Settings → Tactical Combat** and enable the feature.
+1. Open **Settings → Combat**, set **Combat style** to **Tactical**, and use the Tactical pane.
 2. Choose a grid size, turn style, terrain theme, and (optionally) a dedicated combat-agent connection.
 3. Talk to the narrator until a fight begins. The narrator calls `StartTacticalCombat` immediately; it can reuse an existing `[COMBAT]` roster or build opposition from the current scene when none exists.
 4. The board opens with the party on the left and enemies on the right. When deployment is enabled, reposition player units inside the highlighted left lane and press **Start battle**. When the fight started from a declared action, that opening action is resolved before Round 1.
@@ -170,7 +170,7 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
 
 ### Loadout classifiers
 
-**Settings → Tactical Combat → Loadout Classifiers** exposes the JSON used by the memo parser:
+**Settings → Combat → Loadout Classifiers** exposes the JSON used by the memo parser:
 
 ```json
 {

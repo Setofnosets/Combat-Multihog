@@ -2,6 +2,16 @@
 
 All notable changes to the **Multihog D&D Framework** will be documented in this file.
 
+## [2026.10.3] - 2026-10-25
+
+### Added
+- A three-way **Combat style** selector: **Narration**, **Tactical** (grid), and **Traditional** (no-grid turn-based).
+- Traditional Combat, a Pokémon/SMT-style encounter mode built from the same `[CHARACTER]`, `[PARTY]`, and `[COMBAT]` memo state. The player selects an action and target; the AI agent declares enemy actions; the shared deterministic engine resolves attacks, skills, items, statuses, Willpower, specials, summons, and outcomes.
+- Traditional turn styles: **Initiative** (`1d20 + initiative modifier`) and **Phased** (party phase, then enemy phase). Neither uses movement, range, cover, or line of sight.
+- Traditional-specific encounter source, auto-start, opening actions, auto-narration, tracker sync, action catalogue, prompt templates, and a dedicated combat-agent connection.
+- `StartTraditionalCombat`, runtime narrator overrides, a `<traditional_combat>` system-prompt section, and per-chat persistence under `traditionalCombatByChat`.
+- Tactical combat remains available unchanged; the mode selector mirrors the legacy `tacticalCombatEnabled` flag so existing saves migrate cleanly.
+
 ## [2026.10.2] - 2026-10-23
 
 ### Added

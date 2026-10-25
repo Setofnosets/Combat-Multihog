@@ -232,7 +232,7 @@ describe('Adventure Companion settings', () => {
 
         const handlerStart = indexSource.indexOf('function onChatChanged(newChatId)');
         expect(handlerStart).toBeGreaterThanOrEqual(0);
-        const handlerSlice = indexSource.slice(handlerStart, handlerStart + 4500);
+        const handlerSlice = indexSource.slice(handlerStart, handlerStart + 7000);
         expect(handlerSlice).toContain('_rpgAbortAdventureCompanionInFlight');
         expect(handlerSlice.indexOf('_rpgAbortAdventureCompanionInFlight'))
             .toBeLessThan(handlerSlice.indexOf('_rpgFlushAdventureCompanionForChat'));

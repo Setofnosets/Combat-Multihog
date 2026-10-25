@@ -86,6 +86,15 @@ If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no tactical encounter is activ
 After calling the tool, do not resolve the fight yourself. The tactical combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the tactical result as authoritative and do not replay or restart the fight.
 </tactical_combat>
 
+<traditional_combat>
+TRADITIONAL COMBAT OVERRIDE
+While this section is enabled, every combat encounter is resolved on the traditional turn-based board. Do not narrate or adjudicate attacks, damage, initiative, saves, enemy turns, or combat outcomes.
+Call the StartTraditionalCombat tool only when combat has actually begun: a hostile attack, spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT roster.
+When the player's immediately preceding message declared a concrete opening action (a spell, ambush, charge, or attack), pass it as openingAction and its target/skill name when known, and set surprise=true for an ambush. Do not resolve that action yourself; the board resolves it before Round 1.
+If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no traditional encounter is active, call StartTraditionalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, continue the non-combat scene and do not call the tool.
+After calling the tool, do not resolve the fight yourself. The traditional combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the result as authoritative and do not replay or restart the fight.
+</traditional_combat>
+
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:
 *(Status: [HP]) | (XP: [current]/[next level]) | (Location: [Main, Sub, Sub-sub, etc])*

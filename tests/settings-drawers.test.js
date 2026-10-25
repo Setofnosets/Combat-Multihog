@@ -20,7 +20,7 @@ describe('General & Visuals settings', () => {
             '<b>Persistent Maps</b>',
             '<b>World Progression</b>',
             '<b>Adventure Companion</b>',
-            '<b>Tactical Combat</b>',
+            '<b>Combat</b>',
         ];
         const expectedDepth = divDepthAt(primaryHeaders[0]);
 

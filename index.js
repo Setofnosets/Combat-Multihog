@@ -4,7 +4,7 @@ import { snapshotChatSetup, chatSetupsMatch, syncChatSetupCatalogs, removeChatSe
 import { buildDirectPromptSystemPrompt, DIRECT_PROMPT_SYSTEM_MODES } from './src/state/direct-prompt-system.js';
 import { diffTextLines, diffHasChanges } from './prompt-diff.js';
 import { sendStateRequest, fetchOllamaModels, fetchOpenAIModels, testOpenAIConnection, getConnectionProfiles, getCurrentCompletionPreset, setCompletionPreset, syncCombatProfile, resetCombatProfileOverride, isCombatEngaged } from './llm-client.js';
-import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration } from './narrative-hooks.js';
+import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration, syncTraditionalCombatToolRegistration } from './narrative-hooks.js';
 import { deduplicateMemo, mergeMemo, computeDelta, escapeHtml, escapeRegex, highlightParens, cleanToolCallMessage, cleanMessageContent, getLastUserAction, buildLorebookContext, buildModulesInstructionText, buildModuleFormatInstruction, parseQuestsFromMemo, syncQuestsFromMemo, syncQuestsToMemo, writeQuestsToMemo, getQuestMood, extractCurrentTimeStr, stripArchivedQuestsFromMemo, stripCompletedQuestsFromMemo, applyQuestSyncAndStripMemo, isArchivedQuestStatus, removeArchivedQuest, parseInWorldTime, formatInWorldTime, sanitizeLorebookRecordContent, memoForTrackerContext, memoForGmContext } from './memo-processor.js';
 import { renderSubFieldByRule, tryRenderMarker, renderCustomBlockLine, stripMemoHtml, escapeHtmlWithColor, parseMemoBlocks, getPageSize, loadCollapsed, saveCollapsed, loadDetached, saveDetached, loadPartyCompact, savePartyCompact, blockToItems, renderMemoAsCards, renderTabModeView, renderBottomXpBar, renderQuestLog, renderLorebookTerminal, loadActiveTab, saveActiveTab, getTimeOfDayInfo, renderDayNightBadge, MARKER_TYPE_MAP, getMarkerLibraryKeys, loadBenchedExpanded, saveBenchedExpanded } from './renderer.js';
 import { unregisterLogQuestTool, checkQuestDeadlines, renderQuestsAsPlainText } from './quests.js';
@@ -28,7 +28,7 @@ import { bindQuickStartEvents } from './quickstart.js';
 import { bindAdventureCompanion, bindAdventureCompanionSettingsDrawer, openAdventureCompanion, closeAdventureCompanion } from './adventure-companion.js';
 import { openDisplayGroupsManager } from './display-groups.js';
 import { handleCategorySettings, openCustomFieldEditor, openPromptEditor, refreshOrderList, exportModules, importModulesFromJson, openNpcSectionEditor, openPcSectionEditor } from './ui-editors.js';
-import { openGameSystemWizard, openManageGameSystems, openSystemPromptControlRoom, syncAllNarratorTogglesForUnlockState, extractTopLevelSections, normalizeSectionOrder, getSectionRowDescriptor, transformBaseSectionContent, isBlankSectionContent, isSectionUnlocked, isEffectiveSectionEnabled, TACTICAL_COMBAT_COMBAT_OVERRIDE, TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL } from './game-systems.js';
+import { openGameSystemWizard, openManageGameSystems, openSystemPromptControlRoom, syncAllNarratorTogglesForUnlockState, extractTopLevelSections, normalizeSectionOrder, getSectionRowDescriptor, transformBaseSectionContent, isBlankSectionContent, isSectionUnlocked, isEffectiveSectionEnabled, TACTICAL_COMBAT_COMBAT_OVERRIDE, TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL, TRADITIONAL_COMBAT_COMBAT_OVERRIDE, TRADITIONAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL } from './game-systems.js';
 import { isCyoaEnabled, isLorebookAgentRuntimeActive, setLocationMappingEnabled, LOCATION_MAPPING_SECTION_TAG } from './src/state/section-enabled.js';
 import {
     AGENT_CONNECTION_SETUPS,
@@ -89,6 +89,17 @@ import {
     bindTacticalCombatSettings,
     syncTacticalCombatSettingsUi,
 } from './src/features/tactical-combat/tactical-combat-settings.js';
+import {
+    installTraditionalCombatUi,
+    onTraditionalCombatChatChanged,
+} from './src/features/traditional-combat/traditional-combat-ui.js';
+import {
+    bindTraditionalCombatSettings,
+    syncTraditionalCombatSettingsUi,
+} from './src/features/traditional-combat/traditional-combat-settings.js';
+import { bindCombatModeSettings, syncCombatModeSettingsUi } from './src/features/combat/combat-mode-settings.js';
+import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
+import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
 import { restoreEscapedCyoaChoiceMarkup } from './src/ui/panel/cyoa-markup.js';
 import { captureXpGainAnimationState, playXpGainAnimation } from './src/ui/panel/xp-gain-animation.js';
@@ -2742,6 +2753,9 @@ async function onChatChanged(newChatId) {
         if (migratedPortraitScope) void saveSettings(true);
         void ensureLocalMemoRecovery(resolvedId);
         try { syncTacticalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Tactical Combat settings refresh skipped:', error); }
+        try { syncTraditionalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Traditional Combat settings refresh skipped:', error); }
+        try { syncCombatModeSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Combat mode settings refresh skipped:', error); }
+        try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
         updateChatLinkUI();
         return;
     }
@@ -2823,6 +2837,8 @@ async function onChatChanged(newChatId) {
 
     runtimeState.currentChatId = resolvedId;
     try { onTacticalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Tactical Combat chat switch skipped:', error); }
+    try { onTraditionalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Traditional Combat chat switch skipped:', error); }
+    try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
     const ownsChat = createChatCommitGuard(resolvedId, getActiveChatId);
     runtimeState.hasActiveDungeonMap = false;
     if (s.chatLinkEnabled && oldChatId) {
@@ -3468,11 +3484,15 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
                 } else {
                     cleanedOutput = cleanedOutput.replace(/<\/?memo>/gi, '').trim();
                 }
-                // While a tactical board is active, [COMBAT] belongs to the board.
+                // While a board is active, [COMBAT] belongs to the board.
                 // Let the tracker update CHARACTER/PARTY/EVENT and everything else,
                 // but never let stale prose replace the live roster.
-                const activeBoard = settings.tacticalCombatByChat?.[passChatId];
-                if (activeBoard?.status === 'active') {
+                const tacticalBoard = settings.tacticalCombatByChat?.[passChatId];
+                const traditionalBoard = settings.traditionalCombatByChat?.[passChatId];
+                const activeBoard = tacticalBoard?.status === 'active'
+                    ? tacticalBoard
+                    : (traditionalBoard?.status === 'active' ? traditionalBoard : null);
+                if (activeBoard) {
                     cleanedOutput = cleanedOutput
                         .replace(/\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi, '')
                         .replace(/\n{3,}/g, '\n\n')
@@ -6001,11 +6021,19 @@ export function buildSysprompt(rawText) {
         if (!row || !row.enabled) return '';
         // CYOA is injected above the RNG queue by the generate interceptor — never into Main.
         if (row.tag === 'CYOA_mode') return '';
-        if (row.tag === 'tactical_combat' && !s.tacticalCombatEnabled) return '';
-        if (row.tag === 'combat' && s.tacticalCombatEnabled) {
-            return isEffectiveSectionEnabled('tactical_combat', s)
-                ? TACTICAL_COMBAT_COMBAT_OVERRIDE
-                : TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL;
+        if (row.tag === 'tactical_combat' && !isTacticalCombatMode(s)) return '';
+        if (row.tag === 'traditional_combat' && !isTraditionalCombatMode(s)) return '';
+        if (row.tag === 'combat') {
+            if (isTacticalCombatMode(s)) {
+                return isEffectiveSectionEnabled('tactical_combat', s)
+                    ? TACTICAL_COMBAT_COMBAT_OVERRIDE
+                    : TACTICAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL;
+            }
+            if (isTraditionalCombatMode(s)) {
+                return isEffectiveSectionEnabled('traditional_combat', s)
+                    ? TRADITIONAL_COMBAT_COMBAT_OVERRIDE
+                    : TRADITIONAL_COMBAT_COMBAT_OVERRIDE_NO_TOOL;
+            }
         }
         if (row.kind === 'base') {
             return transformBaseSectionContent(row.tag, row.content, s);
@@ -6499,12 +6527,24 @@ function organizeConnectionSettingsUI() {
         // Inject settings into the overlay BEFORE ID-based jQuery bindings below.
         initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });
         installTacticalCombatUi();
+        installTraditionalCombatUi();
+        installCombatUiRouter();
         document.addEventListener('rt_open_settings_overlay', (event) => {
-            openSettingsOverlay(event?.detail?.tab || 'tactical');
+            openSettingsOverlay(event?.detail?.tab || 'combat');
         });
 
         organizeConnectionSettingsUI();
         bindConnectionApplyAllControls();
+
+        // Combat-style changes are a runtime/tool concern, not a settings-UI
+        // binder. Keep this outside the settings markup setup block.
+        document.addEventListener('rt_combat_style_changed', () => {
+            try { syncTacticalCombatToolRegistration(); } catch (_) { /* boot */ }
+            try { syncTraditionalCombatToolRegistration(); } catch (_) { /* boot */ }
+            try { syncTacticalCombatSettingsUi({ settings: getSettings() }); } catch (_) { /* boot */ }
+            try { syncTraditionalCombatSettingsUi({ settings: getSettings() }); } catch (_) { /* boot */ }
+            try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
+        });
 
         // Bind drawer toggles ONLY for our own content to avoid global conflicts.
         // IMPORTANT: expand each comma-root before appending `.inline-drawer-toggle`.
@@ -6583,8 +6623,19 @@ function organizeConnectionSettingsUI() {
             settings,
             presetManager: pm,
         });
+        await bindFeatureConnectionSettings({
+            uiPrefix: 'rpg_traditional_combat',
+            keyPrefix: 'traditionalCombat',
+            settings,
+            presetManager: pm,
+        });
+        bindCombatModeSettings({ settings, saveSettings });
         bindTacticalCombatSettings({ settings, saveSettings, presetManager: pm });
+        bindTraditionalCombatSettings({ settings, saveSettings, presetManager: pm });
+        syncCombatModeSettingsUi({ settings, saveSettings });
         syncTacticalCombatSettingsUi({ settings, saveSettings, presetManager: pm });
+        syncTraditionalCombatSettingsUi({ settings, saveSettings, presetManager: pm });
+        syncCombatHeaderButton();
         applyMapArchitectOpenerToUi(settings.mapArchitectOpener);
         syncMapArchitectOpenerNestedVisibility(settings.syspromptModules?.[LOCATION_MAPPING_SECTION_TAG] ?? true);
         $('input[name="rpg_map_architect_opener"], input[name="rpg_map_architect_opener_components"]').on('change', function () {
@@ -8206,6 +8257,7 @@ function organizeConnectionSettingsUI() {
         eventSource.on(event_types.GENERATION_STOPPED, onGenerationEnded);
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, onMapUpdaterUserMessage);
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTacticalCombatToolRegistration());
+        if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTraditionalCombatToolRegistration());
         if (event_types.MESSAGE_RECEIVED) eventSource.on(event_types.MESSAGE_RECEIVED, onMapArchitectAssistantMessage);
         const catchUpMapArchitectFence = () => {
             setTimeout(() => { void onMapArchitectAssistantMessage(undefined, 'normal'); }, 0);
@@ -8432,6 +8484,7 @@ function organizeConnectionSettingsUI() {
 
         registerDiceFunctionTool();
         syncTacticalCombatToolRegistration();
+        syncTraditionalCombatToolRegistration();
         syncLocationMappingRuntime();
         registerDiceSlashCommand();
 
@@ -11097,6 +11150,7 @@ RULES:
             { key: 'dungeon_reality_and_hidden_mapping', id: 'rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping' },
             { key: 'CYOA_mode', id: 'rpg_sysprompt_mod_cyoa_mode' },
             { key: 'tactical_combat', id: 'rpg_sysprompt_mod_tactical_combat' },
+            { key: 'traditional_combat', id: 'rpg_sysprompt_mod_traditional_combat' },
             { key: 'quests', id: 'rpg_sysprompt_mod_quests' },
         ];
         _syspromptModDefs.forEach(({ key, id }) => {
@@ -11105,7 +11159,9 @@ RULES:
                 ? (s.syspromptModules?.CYOA_mode === true)
                 : key === 'tactical_combat'
                     ? (s.syspromptModules?.tactical_combat === true)
-                    : (s.syspromptModules?.[key] ?? true);
+                    : key === 'traditional_combat'
+                        ? (s.syspromptModules?.traditional_combat !== false)
+                        : (s.syspromptModules?.[key] ?? true);
             $(`#${id}`).prop('checked', val).on('change', function () {
                 const fresh = getSettings();
                 const checked = !!$(this).prop('checked');
@@ -11131,6 +11187,9 @@ RULES:
                 }
                 if (key === 'tactical_combat') {
                     syncTacticalCombatToolRegistration();
+                }
+                if (key === 'traditional_combat') {
+                    syncTraditionalCombatToolRegistration();
                 }
 
                 saveSettings();

@@ -16,10 +16,10 @@ const syspromptSource = readFileSync(new URL('../sysprompt.txt', import.meta.url
 const gameSystemsSource = readFileSync(new URL('../game-systems.js', import.meta.url), 'utf8');
 
 describe('Tactical Combat settings tab contract', () => {
-    it('ships a primary Tactical Combat drawer with the expected controls', () => {
-        expect(settingsHtml).toContain('<b>Tactical Combat</b>');
+    it('ships a primary Combat drawer with the expected tactical controls', () => {
+        expect(settingsHtml).toContain('<b>Combat</b>');
         for (const id of [
-            'rpg_tactical_combat_enabled',
+            'rpg_combat_style',
             'rpg_tactical_combat_grid_preset',
             'rpg_tactical_combat_grid_rows',
             'rpg_tactical_combat_grid_cols',
@@ -94,9 +94,9 @@ describe('Tactical Combat settings tab contract', () => {
     });
 
     it('registers the tab in the settings rail', () => {
-        expect(overlaySource).toContain("id: 'tactical'");
-        expect(overlaySource).toContain('Tactical Combat');
-        expect(overlaySource).toContain('fa-chess-board');
+        expect(overlaySource).toContain("id: 'combat'");
+        expect(overlaySource).toContain('Combat');
+        expect(overlaySource).toContain('fa-crosshairs');
     });
 
     it('ships defaults for every setting, prompt, per-chat map, and outcome slot', () => {
@@ -162,18 +162,18 @@ describe('Tactical Combat settings tab contract', () => {
         expect(syspromptSource).toContain('TACTICAL COMBAT OVERRIDE');
         expect(settingsHtml).toContain('id="rpg_sysprompt_mod_tactical_combat"');
         expect(gameSystemsSource).toContain("tactical_combat: 'rpg_sysprompt_mod_tactical_combat'");
-        expect(gameSystemsSource).toContain("tag === 'tactical_combat' && !settings.tacticalCombatEnabled");
+        expect(gameSystemsSource).toContain("tag === 'tactical_combat' && !isTacticalCombatMode(settings)");
         expect(gameSystemsSource).toContain('TACTICAL_COMBAT_COMBAT_OVERRIDE');
-        expect(indexSource).toContain("row.tag === 'combat' && s.tacticalCombatEnabled");
+        expect(indexSource).toContain("if (row.tag === 'combat')");
         expect(defaultsSource).toContain('tactical_combat: true');
         expect(indexSource).toContain('bindTacticalCombatSettings');
         expect(indexSource).toContain("uiPrefix: 'rpg_tactical_combat'");
         expect(indexSource).toContain("keyPrefix: 'tacticalCombat'");
         expect(indexSource).toContain('onTacticalCombatChatChanged');
         expect(indexSource).toContain("rt_open_settings_overlay");
-        expect(indexSource).toContain("openSettingsOverlay(event?.detail?.tab || 'tactical')");
-        expect(panelMarkup).toContain('rt-tactical-combat-btn');
-        expect(panelMarkup).toContain('fa-chess-board');
+        expect(indexSource).toContain("openSettingsOverlay(event?.detail?.tab || 'combat')");
+        expect(panelMarkup).toContain('rt-combat-btn');
+        expect(panelMarkup).toContain('data-combat-open');
     });
 
     it('injects the authoritative outcome as a narrator message and consumes it only after a real generation', () => {
@@ -228,7 +228,7 @@ describe('Tactical Combat settings tab contract', () => {
 
     it('disables upstream auto-update so the fork is not overwritten', () => {
         expect(manifest.auto_update).toBe(false);
-        expect(manifest.display_name).toContain('Tactical Combat');
+        expect(manifest.display_name).toContain('Combat');
         expect(manifest.forkHomePage).toBe('https://github.com/Setofnosets/Combat-Multihog');
     });
 });

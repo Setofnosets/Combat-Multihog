@@ -8,6 +8,7 @@
  */
 
 import { getActiveChatId } from '../../../state-manager.js';
+import { isTacticalCombatMode } from '../combat/combat-mode.js';
 import { parseActionCatalog } from './tactical-combat-actions.js';
 import {
     DEFAULT_LOADOUT_CLASSIFIER_JSON,
@@ -108,10 +109,10 @@ function syncStatus(settings = depsRef?.settings) {
     if (!status || !settings) return;
     const activeChatId = getActiveChatId();
     const state = getEncounterForChat(activeChatId, settings);
-    const enabled = !!settings.tacticalCombatEnabled;
+    const enabled = isTacticalCombatMode(settings);
     status.classList.toggle('rt-tc-error', !enabled);
     if (!enabled) {
-        status.textContent = 'Tactical Combat is disabled. Enable it to start an encounter.';
+        status.textContent = 'Tactical Combat is not selected. Choose it in the Combat style dropdown.';
     } else if (!activeChatId) {
         status.textContent = 'Open a chat to use tactical combat.';
     } else if (!state) {
@@ -133,8 +134,7 @@ function syncStatus(settings = depsRef?.settings) {
             ? 'Preparing encounter…'
             : state?.status === 'active' ? 'Resume encounter' : state ? 'Start new encounter' : 'Start encounter';
         startBtn.innerHTML = `<i class="fa-solid fa-crosshairs" aria-hidden="true"></i> ${label}`;
-    }
-    const resetBtn = el('rpg_tactical_combat_reset');
+    }    const resetBtn = el('rpg_tactical_combat_reset');
     if (resetBtn) resetBtn.disabled = !state;
     const stopBtn = el('rpg_tactical_combat_stop');
     if (stopBtn) stopBtn.disabled = !isTacticalCombatBusy() && (!state || state.status !== 'active');
@@ -391,7 +391,7 @@ export function bindTacticalCombatSettings(deps) {
     if (startBtn) {
         startBtn.addEventListener('click', (event) => {
             event.preventDefault();
-            if (!settings.tacticalCombatEnabled) {
+            if (!isTacticalCombatMode(settings)) {
                 syncStatus(settings);
                 return;
             }

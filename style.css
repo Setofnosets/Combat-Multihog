@@ -12595,15 +12595,15 @@ body.rt-tc-modal-open {
 }
 
 /* Tracker header chess-board button inherits the normal icon treatment. */
-.rt-tactical-combat-btn {
+.rt-combat-btn {
     position: relative;
 }
 
-.rt-tactical-combat-btn:hover {
+.rt-combat-btn:hover {
     color: #ffe0b0;
 }
 
-.rt-tactical-combat-btn::after {
+.rt-combat-btn::after {
     content: '';
     position: absolute;
     right: 4px;
@@ -12859,4 +12859,133 @@ body.rt-tc-modal-open {
     .rt-tc-token:hover {
         transform: none;
     }
+}
+
+/* ── Traditional (no-grid) combat board ─────────────────────────────────── */
+.rt-trad-overlay .rt-tc-shell {
+    max-width: 1280px;
+}
+
+.rt-trad-body {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.rt-trad-main {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.rt-trad-sidebar {
+    flex: 0 0 340px;
+    max-width: 340px;
+}
+
+.rt-trad-team {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    background: rgba(10, 14, 20, 0.42);
+    padding: 10px;
+}
+
+.rt-trad-team-player { border-color: rgba(63, 140, 255, 0.28); }
+.rt-trad-team-ally { border-color: rgba(47, 185, 138, 0.28); }
+.rt-trad-team-enemy { border-color: rgba(224, 82, 82, 0.28); }
+
+.rt-trad-team-title {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 0.78em;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.85;
+    margin-bottom: 8px;
+}
+
+.rt-trad-roster {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px;
+}
+
+.rt-trad-unit {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 9px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-left: 3px solid var(--trad-side, #888);
+    border-radius: 8px;
+    background: rgba(18, 24, 33, 0.72);
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    transition: border-color 0.12s, transform 0.12s, background 0.12s;
+}
+
+.rt-trad-unit:hover { background: rgba(30, 40, 54, 0.82); transform: translateY(-1px); }
+.rt-trad-unit.is-selected { border-color: #5aa9ff; box-shadow: 0 0 0 2px rgba(90, 169, 255, 0.22); }
+.rt-trad-unit.is-active { box-shadow: 0 0 0 2px rgba(255, 210, 100, 0.24); }
+.rt-trad-unit.is-targetable { border-color: #ffcf66; box-shadow: 0 0 0 2px rgba(255, 207, 102, 0.22); }
+.rt-trad-unit.is-defeated, .rt-trad-unit.is-fled { opacity: 0.45; filter: grayscale(0.6); cursor: default; }
+.rt-trad-unit.is-defeated:hover, .rt-trad-unit.is-fled:hover { transform: none; }
+
+.rt-trad-unit-head { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.rt-trad-unit-name { font-weight: 700; font-size: 0.88em; line-height: 1.2; }
+.rt-trad-unit-class { font-size: 0.70em; opacity: 0.62; margin-top: 2px; }
+.rt-trad-unit-vitals { text-align: right; font-size: 0.78em; white-space: nowrap; }
+.rt-trad-unit-vitals strong { font-size: 1.18em; }
+.rt-trad-unit-vitals small { display: block; font-size: 0.76em; opacity: 0.7; }
+
+.rt-trad-target-badge {
+    margin-top: 6px;
+    padding: 2px 7px;
+    display: inline-block;
+    border-radius: 999px;
+    font-size: 0.66em;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #241c07;
+    background: #ffcf66;
+}
+
+.rt-trad-target-list {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.rt-trad-target-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+
+.rt-trad-target {
+    padding: 6px 9px;
+    border-radius: 7px;
+    border: 1px solid rgba(255, 207, 102, 0.45);
+    background: rgba(255, 207, 102, 0.10);
+    color: inherit;
+    font: inherit;
+    font-size: 0.78em;
+    cursor: pointer;
+}
+
+.rt-trad-target:hover { background: rgba(255, 207, 102, 0.22); }
+
+@media (max-width: 900px) {
+    .rt-trad-body { flex-direction: column; }
+    .rt-trad-sidebar { width: 100%; max-width: none; flex-basis: auto; }
+    .rt-trad-roster { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
 }

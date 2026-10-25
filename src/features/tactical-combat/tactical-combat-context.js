@@ -1028,13 +1028,14 @@ export function resolveEncounterGrid(settings, unitCount, agentEncounter = null)
 }
 
 /**
- * Build a ready-to-play encounter state from parsed context.
+ * Select the enemy roster for an encounter. Shared by the tactical grid builder
+ * and the traditional turn-based builder so their sourcing rules never drift.
  * @param {object} context
  * @param {Record<string, any>} settings
  * @param {{ agentEncounter?: object|null, source?: string, seed?: number }} [options]
- * @returns {{ state: object, warnings: string[] }}
+ * @returns {{ enemies: object[], warnings: string[], sourceSetting: string, agentEncounter: object|null }}
  */
-export function buildEncounterFromContext(context, settings, options = {}) {
+export function selectEncounterEnemies(context, settings, options = {}) {
     const sourceSetting = String(options.source || settings?.tacticalCombatEncounterSource || 'auto');
     const warnings = [];
     const agentEncounter = options.agentEncounter || null;
@@ -1059,6 +1060,19 @@ export function buildEncounterFromContext(context, settings, options = {}) {
         if (agentEncounter != null) warnings.push('The combat agent did not return enemies; a local skirmish was generated instead.');
     }
 
+    return { enemies, warnings, sourceSetting, agentEncounter };
+}
+
+/**
+ * Build a ready-to-play encounter state from parsed context.
+ * @param {object} context
+ * @param {Record<string, any>} settings
+ * @param {{ agentEncounter?: object|null, source?: string, seed?: number }} [options]
+ * @returns {{ state: object, warnings: string[] }}
+ */
+export function buildEncounterFromContext(context, settings, options = {}) {
+    const selection = selectEncounterEnemies(context, settings, options);
+    const { enemies, warnings, sourceSetting, agentEncounter } = selection;
     const playerUnits = (context.playerUnits || []).map(unit => ({ ...unit, side: 'player', source: unit.source || 'memo' }));
     const allies = (context.allies || []).map(unit => ({ ...unit, side: 'ally', source: unit.source || 'memo' }));
     const allUnits = [...playerUnits, ...allies, ...enemies];
