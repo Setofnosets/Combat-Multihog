@@ -11,6 +11,17 @@
  */
 
 import { parseCombatants } from '../../state/combat-persistence.js';
+import {
+    buildResourceLedger,
+    describeResource,
+    ensureSpellSlots,
+    formatResourceLedger,
+    patchAbilityLine,
+    patchAbilityUsageText,
+    patchInventoryLine,
+    patchSpellLevelLines,
+    patchStandaloneAbilities,
+} from './tactical-combat-resources.js';
 
 const COMBAT_BLOCK_RX = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i;
 const COMBAT_BLOCK_RX_GLOBAL = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi;
@@ -67,14 +78,12 @@ function statusLine(unit) {
 }
 
 function abilityLine(unit) {
-    const skills = (Array.isArray(unit?.skills) ? unit.skills : []).slice(0, 6);
+    const skills = (Array.isArray(unit?.skills) ? unit.skills : [])
+        .filter(skill => !skill?.slotKey && !skill?.spell)
+        .slice(0, 6);
     if (!skills.length) return '';
     return skills.map(skill => {
-        const uses = Number(skill?.uses);
-        const maxUses = Number(skill?.maxUses);
-        const usage = Number.isFinite(uses) && Number.isFinite(maxUses) && maxUses > 0
-            ? `; ${Math.max(0, uses)}/${maxUses}`
-            : '';
+        const resource = describeResource(skill, unit);
         let description = cleanText(skill?.description || skill?.name || '');
         if (skill?.resource === 'willpower' || skill?.resource === 'both') {
             if (!/\bwillpower\b/i.test(description)) {
@@ -87,8 +96,44 @@ function abilityLine(unit) {
                 description = `${description}${description ? '; ' : ''}on Willpower break: ${skill.willpowerOutcome}`;
             }
         }
-        return `${cleanText(skill?.name || 'Ability')} (${description}${usage})`;
+        if (skill?.area && !/\barea\s*:/i.test(description)) {
+            const shape = skill.area.origin === 'self' ? 'aura' : 'burst';
+            description = `${description}${description ? '; ' : ''}Area: ${shape} ${Number(skill.area.radius) || 1}${skill.area.friendlyFire ? ' friendly fire' : ''}`;
+        }
+        if (!resource.unlimited && resource.max > 0) {
+            description = patchAbilityUsageText(description, resource.current, resource.max);
+        }
+        return `${cleanText(skill?.name || 'Ability')} (${description})`;
     }).join(', ');
+}
+
+function spellLines(unit) {
+    const spells = (Array.isArray(unit?.skills) ? unit.skills : []).filter(skill => skill?.slotKey || skill?.spell);
+    if (!spells.length) return [];
+    ensureSpellSlots(unit);
+    const groups = new Map();
+    for (const spell of spells) {
+        const level = Number(spell.slotLevel) || 0;
+        if (!groups.has(level)) groups.set(level, []);
+        groups.get(level).push(spell);
+    }
+    const lines = [];
+    const levels = [...groups.keys()].sort((a, b) => a - b);
+    for (const level of levels) {
+        const names = groups.get(level).map(spell => cleanText(spell.name)).join(', ');
+        if (level <= 0) {
+            lines.push(`Spells: Cantrips: ${names}`);
+            continue;
+        }
+        const pool = unit.spellSlots?.[`spell-${level}`] || { current: 0, max: 0 };
+        lines.push(`Spells: Level ${level} (${Math.max(0, Number(pool.current) || 0)}/${Math.max(0, Number(pool.max) || 0)}): ${names}`);
+    }
+    return lines;
+}
+
+function formatSpellModifier(value) {
+    const n = numberOr(value, 0);
+    return `${n >= 0 ? '+' : ''}${n}`;
 }
 
 function buildUnitBlock(unit) {
@@ -104,13 +149,24 @@ function buildUnitBlock(unit) {
     const attackSuffix = unit?.attackResource === 'willpower'
         ? ' [Willpower]'
         : unit?.attackResource === 'both' ? ' [HP+Willpower]' : '';
+    const spellAtk = Number(unit?.spellAttackBonus);
+    const spellDc = Number(unit?.spellSaveDC);
+    const spellParts = [];
+    if (Number.isFinite(spellAtk) && unit?.spellAttackBonus != null) {
+        spellParts.push(`Spell Atk ${formatSpellModifier(spellAtk)}`);
+    }
+    if (Number.isFinite(spellDc) && unit?.spellSaveDC != null) {
+        spellParts.push(`Spell DC ${Math.max(0, spellDc)}`);
+    }
+    const spellPrefix = spellParts.length ? `${spellParts.join(' | ')} | ` : '';
     const lines = [
         `${name}: ${hp}/${maxHp} HP`,
         `Willpower: ${willpower}/${maxWillpower}`,
-        `Att/def: Attack (1 attack, ${attackBonus >= 0 ? '+' : ''}${attackBonus} / ${damage}${damageType ? ` ${damageType}` : ''}${attackSuffix}) | Armor (AC: ${ac})`,
+        `Att/def: ${spellPrefix}Attack (1 attack, ${attackBonus >= 0 ? '+' : ''}${attackBonus} / ${damage}${damageType ? ` ${damageType}` : ''}${attackSuffix}) | Armor (AC: ${ac})`,
     ];
     const abilities = abilityLine(unit);
     if (abilities) lines.push(`Abilities: ${abilities}`);
+    for (const spellLine of spellLines(unit)) lines.push(spellLine);
     if (unit?.notes) lines.push(`Other: ${cleanText(unit.notes).slice(0, 300)}`);
     lines.push(`Status: ${statusLine(unit)}`);
     return lines.join('\n');
@@ -123,6 +179,7 @@ function buildUnitBlock(unit) {
  */
 export function buildCombatMemoBlock(state) {
     if (!state || !Array.isArray(state.units)) return '[COMBAT]\nEND_COMBAT\n[/COMBAT]';
+    if (state.status && state.status !== 'active') return '[COMBAT]END_COMBAT[/COMBAT]';
     const enemies = state.units.filter(unit => unit?.side === 'enemy');
     const allies = state.units.filter(unit => unit?.side === 'ally');
     const lines = ['[COMBAT]', 'COMBAT STATE: ACTIVE', `COMBAT ROUND ${Number(state.round) || 1}`, 'ENEMIES:'];
@@ -186,10 +243,10 @@ export function endCombatMemo(state, settings) {
 
 function matchUnitForHeader(units, headerName, used) {
     const name = normalizeName(headerName);
-    return (units || []).find(unit => {
-        if (!unit || used?.has(unit.id)) return false;
-        return sameName(name, unit.name);
-    }) || null;
+    const candidates = (units || []).filter(unit => unit && !used?.has(unit.id));
+    const exact = candidates.find(unit => normalizeName(unit.name) === name);
+    if (exact) return exact;
+    return candidates.find(unit => sameName(name, unit.name)) || null;
 }
 
 function patchHpLine(line, unit) {
@@ -246,14 +303,19 @@ function patchBlockWillpower(content, units, options = {}) {
         }
         const unit = matchUnitForHeader(units, entityName, used);
         if (unit) {
-            lines[index] = patchWillpowerLine(lines[index], unit, recover);
+            const shouldRecover = recover && !unit.defeated && !unit.fled && !unit.willpowerBroken;
+            lines[index] = patchWillpowerLine(lines[index], unit, shouldRecover);
             used.add(unit.id);
             matched = true;
         }
     }
     if (!matched && options.fallbackUnit) {
         const index = lines.findIndex(line => WP_LINE_RX.test(line));
-        if (index >= 0) lines[index] = patchWillpowerLine(lines[index], options.fallbackUnit, recover);
+        if (index >= 0) {
+            const unit = options.fallbackUnit;
+            const shouldRecover = recover && !unit.defeated && !unit.fled && !unit.willpowerBroken;
+            lines[index] = patchWillpowerLine(lines[index], unit, shouldRecover);
+        }
     }
     return lines.join('\n');
 }
@@ -298,12 +360,194 @@ export function clearStaleCombatMemo(previousState, settings) {
 }
 
 /**
- * Patch the player's and party's current HP from the board's final units.
- * Name matching is tolerant of `{{user}}`, class suffixes, and bullet prefixes.
+ * Canonical terminal status for a combatant. Only terminal/fled/broken states
+ * are written back; ordinary conditions remain whatever the tracker last wrote.
+ * @param {object} unit
+ * @returns {string}
+ */
+function terminalStatusFor(unit) {
+    if (!unit) return '';
+    if (unit.defeated) {
+        if (unit.defeatCause === 'willpower') {
+            if (unit.surrendered) return 'Defeated (Willpower broken — surrendered)';
+            if (unit.incapacitated) return 'Defeated (Willpower broken — incapacitated)';
+            return 'Defeated (Willpower broken)';
+        }
+        return 'Defeated';
+    }
+    if (unit.fled) {
+        return unit.willpowerBroken ? 'Fled (Willpower broken)' : 'Fled';
+    }
+    if (unit.willpowerBroken) return 'Willpower broken';
+    return '';
+}
+
+function patchStatusLine(line, unit) {
+    if (!unit) return line;
+    const status = terminalStatusFor(unit);
+    if (!status) return line;
+    const text = String(line || '');
+    const standalone = text.match(/^(\s*Status\s*:\s*).*$/i);
+    if (standalone) return `${standalone[1]}${status}`;
+    const inline = text.match(/^(.*\|\s*Status\s*:\s*).*$/i);
+    if (inline) return `${inline[1]}${status}`;
+    return line;
+}
+
+function patchResourceLine(line, unit) {
+    if (!unit) return line;
+    if (/(?:^|\|)\s*Status\s*:/i.test(line)) return patchStatusLine(line, unit);
+    if (/^\s*Abilities\s*:/i.test(line)) return patchAbilityLine(line, unit.skills || []);
+    if (/^\s*(?:[-*+•]\s*)?(?:Spells\s*:\s*)?(?:Cantrips\s*:|Level\s+\d+)/i.test(line)) {
+        ensureSpellSlots(unit);
+        return patchSpellLevelLines(line, unit.spellSlots || {});
+    }
+    return line;
+}
+
+/**
+ * Patch spell/ability/status lines inside a [CHARACTER] or [PARTY] block.
+ * Entries are delimited by HP headers, which is how the tracker writes stat
+ * blocks. Lines before the first header are preserved verbatim. A missing
+ * Status line is added when the unit ended the fight defeated, fled, or with
+ * broken Willpower.
+ * @param {string} content
+ * @param {object[]} units
+ * @returns {string}
+ */
+function patchResourceEntries(content, units) {
+    const lines = String(content || '').split(/\r?\n/);
+    const used = new Set();
+    const output = [];
+    let current = null;
+    let block = [];
+    const flush = () => {
+        if (!current) {
+            output.push(...block);
+            block = [];
+            return;
+        }
+        const patched = block.map(line => patchResourceLine(line, current));
+        if (!patched.some(line => /(?:^|\|)\s*Status\s*:/i.test(line))) {
+            const status = terminalStatusFor(current);
+            if (status) {
+                let index = patched.length;
+                while (index > 0 && !patched[index - 1].trim()) index -= 1;
+                patched.splice(index, 0, `Status: ${status}`);
+            }
+        }
+        output.push(...patched);
+        block = [];
+        current = null;
+    };
+    for (const rawLine of lines) {
+        const line = String(rawLine || '');
+        const hp = line.match(HP_LINE_RX);
+        if (hp) {
+            flush();
+            current = matchUnitForHeader(units, hp[2], used);
+            if (current) used.add(current.id);
+            block.push(line);
+            continue;
+        }
+        if (!current) output.push(line);
+        else block.push(line);
+    }
+    flush();
+    return output.join('\n');
+}
+
+/**
+ * Replace resources/statuses in a named memo block.
+ * @param {string} memo
+ * @param {string} tag
+ * @param {object[]} units
+ * @returns {string}
+ */
+function patchNamedResources(memo, tag, units) {
+    const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(`(\\[${escaped}\\])([\\s\\S]*?)(\\[\\/${escaped}\\])`, 'i');
+    return String(memo || '').replace(rx, (full, open, content, close) => {
+        return `${open}${patchResourceEntries(content, units)}${close}`;
+    });
+}
+
+/**
+ * Replace the standalone [SPELLS]/[ABILITIES] block for the player character.
+ * @param {string} memo
+ * @param {string} tag
+ * @param {object} pc
+ * @returns {string}
+ */
+function patchStandaloneResourceBlock(memo, tag, pc) {
+    if (!pc) return String(memo || '');
+    const escaped = String(tag).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const rx = new RegExp(`(\\[${escaped}\\])([\\s\\S]*?)(\\[\\/${escaped}\\])`, 'i');
+    return String(memo || '').replace(rx, (full, open, content, close) => {
+        if (tag === 'SPELLS') {
+            ensureSpellSlots(pc);
+            return `${open}${patchSpellLevelLines(content, pc.spellSlots || {})}${close}`;
+        }
+        return `${open}${patchStandaloneAbilities(content, pc.skills || [])}${close}`;
+    });
+}
+
+/**
+ * Patch [INVENTORY] quantities from remaining board item uses.
+ * @param {string} memo
+ * @param {object} pc
+ * @returns {string}
+ */
+function patchInventoryBlock(memo, pc) {
+    if (!pc) return String(memo || '');
+    const rx = /(\[INVENTORY\])([\s\S]*?)(\[\/INVENTORY\])/i;
+    return String(memo || '').replace(rx, (full, open, content, close) => {
+        const lines = String(content || '').split(/\r?\n/);
+        const next = [];
+        for (const rawLine of lines) {
+            const line = String(rawLine || '');
+            if (!/^\s*[-*+•]/.test(line)) {
+                next.push(line);
+                continue;
+            }
+            if (/^\s*[-*+•]\s*(?:💰|💵|🪙)/.test(line)) {
+                next.push(line);
+                continue;
+            }
+            const patched = patchInventoryLine(line, pc.items || []);
+            if (patched) next.push(patched);
+        }
+        return `${open}${next.join('\n')}${close}`;
+    });
+}
+
+/**
+ * Deterministically write spell slots, ability uses, inventory quantities, and
+ * terminal statuses from the board into the memo.
  * @param {string} memo
  * @param {object} state
  * @returns {string}
  */
+export function patchCombatResourcesInMemo(memo, state) {
+    const playerUnits = (state?.units || []).filter(unit =>
+        (unit?.originalSide || unit?.side) === 'player' && !unit.summoned,
+    );
+    if (!playerUnits.length) return String(memo || '');
+    const pc = playerUnits.find(unit => unit.isPlayerCharacter) || null;
+    let result = String(memo || '');
+    result = patchNamedResources(result, 'CHARACTER', playerUnits);
+    result = patchNamedResources(result, 'PARTY', playerUnits);
+    // Standalone [SPELLS]/[ABILITIES]/[INVENTORY] blocks belong to the player
+    // character only. Without a parsed [CHARACTER] sheet, do not attach them to
+    // an arbitrary party companion.
+    if (pc) {
+        result = patchStandaloneResourceBlock(result, 'SPELLS', pc);
+        result = patchStandaloneResourceBlock(result, 'ABILITIES', pc);
+        result = patchInventoryBlock(result, pc);
+    }
+    return result;
+}
+
 export function patchPartyMemoFromBoard(memo, state, options = {}) {
     const playerUnits = (state?.units || []).filter(unit => (unit?.originalSide || unit?.side) === 'player' && !unit.summoned);
     if (!playerUnits.length) return String(memo || '');
@@ -328,6 +572,7 @@ export function syncCombatResultToMemo(state, settings) {
     let next = patchPartyMemoFromBoard(before, state, {
         recoverWillpower: settings.tacticalCombatWillpowerRecoverAfterCombat !== false,
     });
+    next = patchCombatResourcesInMemo(next, state);
     if (COMBAT_BLOCK_RX.test(next)) {
         next = replaceCombatBlock(next, '[COMBAT]END_COMBAT[/COMBAT]');
     }
@@ -354,7 +599,7 @@ export function buildCombatTrackerReport(state, options = {}) {
     if (!state) return '';
     const outcome = state.outcome || {};
     const lines = [
-        '## TACTICAL COMBAT FINAL STATE (AUTHORITATIVE)',
+        `## ${state.mode === 'traditional' ? 'TRADITIONAL' : 'TACTICAL'} COMBAT FINAL STATE (AUTHORITATIVE)`,
         `Encounter: ${cleanText(state.title || 'Tactical encounter')}`,
         `Location: ${cleanText(state.location || 'the battlefield')}`,
         `Outcome: ${cleanText(outcome.label || state.status || 'Ended')} after ${Number(state.round) || 0} round(s).`,
@@ -375,24 +620,37 @@ export function buildCombatTrackerReport(state, options = {}) {
     }
     const spent = [];
     for (const unit of state.units || []) {
+        ensureSpellSlots(unit);
         for (const item of unit.items || []) {
-            const maxUses = Number(item.maxUses) || 0;
-            const uses = Number(item.uses);
-            if (maxUses > 0 && Number.isFinite(uses) && uses < maxUses) {
-                spent.push(`${unit.name}: ${item.name} (${uses}/${maxUses} left)`);
+            const resource = describeResource(item, unit);
+            if (!resource.unlimited && resource.max > 0 && resource.current < resource.max) {
+                spent.push(`${unit.name}: ${item.name} (${resource.current}/${resource.max} left)`);
             }
         }
+        for (const [slotKey, pool] of Object.entries(unit.spellSlots || {})) {
+            const current = Math.max(0, Number(pool.current) || 0);
+            const max = Math.max(0, Number(pool.max) || 0);
+            if (current >= max) continue;
+            const level = String(slotKey).replace(/^spell-/, '');
+            spent.push(`${unit.name}: level ${level} slots (${current}/${max} left)`);
+        }
         for (const skill of unit.skills || []) {
-            const maxUses = Number(skill.maxUses) || 0;
-            const uses = Number(skill.uses);
-            if (skill.kind !== 'special' && maxUses > 0 && Number.isFinite(uses) && uses < maxUses) {
-                spent.push(`${unit.name}: ${skill.name} (${uses}/${maxUses} left)`);
+            if (skill.slotKey) continue;
+            const resource = describeResource(skill, unit);
+            if (!resource.unlimited && resource.max > 0 && resource.current < resource.max) {
+                spent.push(`${unit.name}: ${skill.name} (${resource.current}/${resource.max} left)`);
             }
         }
     }
     if (spent.length) {
         lines.push('', 'Consumed resources:');
-        for (const entry of spent.slice(0, 24)) lines.push(`- ${entry}`);
+        for (const entry of spent.slice(0, 32)) lines.push(`- ${entry}`);
+    }
+    const ledger = buildResourceLedger(state);
+    const ledgerText = formatResourceLedger(ledger, { includeEnemies: false });
+    if (ledgerText && ledgerText !== 'None tracked.') {
+        lines.push('', 'Resource ledger:');
+        lines.push(`- ${ledgerText}`);
     }
     if (outcome.willpowerBreaks?.length) {
         lines.push('', 'Willpower breaks:');

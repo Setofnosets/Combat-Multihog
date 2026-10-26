@@ -18,7 +18,8 @@ import { DEFAULT_TACTICAL_OUTCOME_PROMPT, renderTacticalTemplate } from './tacti
 import { DEFAULT_TRADITIONAL_OUTCOME_PROMPT } from '../traditional-combat/traditional-combat-prompts.js';
 import { buildOutcomeSummary, restoreCombatScopedState } from './tactical-combat-engine.js';
 import { syncCombatResultToMemo } from './tactical-combat-memo.js';
-import { clearPendingNarration, getPendingNarration, setPendingNarration } from './tactical-combat-store.js';
+import { buildResourceLedger, formatResourceLedger } from './tactical-combat-resources.js';
+import { clearPendingNarration, getPendingNarration, hasPendingNarration, setPendingNarration } from './tactical-combat-store.js';
 
 function defaultPersist() {
     try { saveSettings(); } catch (error) { console.warn('[RPG Tracker] Tactical Combat outcome save deferred:', error); }
@@ -65,6 +66,7 @@ export function buildOutcomePayload(state, options = {}) {
         title: state.title,
         location: state.location,
         outcome,
+        resources: buildResourceLedger(state),
         trigger: state.opening?.text || '',
         finalState: outcome.finalUnits || [],
         createdAt: Date.now(),
@@ -84,7 +86,17 @@ export function buildOutcomePayload(state, options = {}) {
  */
 export function queueCombatOutcome(state, settings, options = {}) {
     const payload = buildOutcomePayload(state);
-    if (state.finalization?.narrationQueued) return state.finalization.payload || payload;
+    if (state.finalization?.narrationQueued) {
+        // A chat switch or an older single-slot save can leave the board marked
+        // queued while its per-chat narration is missing. Restore it instead of
+        // leaving finalization permanently stalled.
+        const restored = state.finalization.payload || payload;
+        const targetChatId = restored.chatId || payload.chatId || getActiveChatId();
+        if (!hasPendingNarration(settings, targetChatId)) {
+            setPendingNarration(settings, restored, { persist: options.persist !== false, chatId: targetChatId });
+        }
+        return restored;
+    }
 
     // Capture the outcome first, then revert encounter-scoped side changes and
     // temporary transformations before the deterministic memo sync.
@@ -154,7 +166,7 @@ function describeFinalUnits(outcome) {
 
 export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     if (!settings) return '';
-    const pending = getPendingNarration(settings);
+    const pending = getPendingNarration(settings, chatId || null);
     if (!pending || !pending.outcome) return '';
     if (chatId && pending.chatId && String(pending.chatId) !== String(chatId)) return '';
     const outcome = pending.outcome;
@@ -186,6 +198,9 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     const transformations = (outcome.transformations || []).length
         ? outcome.transformations.map(entry => `${entry.originalName || entry.name}${entry.permanent ? ' (permanent)' : ' (temporary)'}`).join(', ')
         : 'None';
+    const resources = pending.resources
+        ? formatResourceLedger(pending.resources, { includeEnemies: false })
+        : 'None tracked.';
     const rendered = renderTacticalTemplate(template, {
         title: pending.title || outcome.title || (isTraditional ? 'Traditional encounter' : 'Tactical encounter'),
         location: pending.location || outcome.location || 'the battlefield',
@@ -203,6 +218,7 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
         willpowerBreaks,
         sideChanges,
         transformations,
+        resources,
         highlights: describeHighlights(outcome),
         finalState: describeFinalUnits(outcome),
         details,
@@ -220,7 +236,7 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
  * @param {string} [chatId]
  */
 export function markNarrationInjected(settings, chatId = getActiveChatId()) {
-    const pending = getPendingNarration(settings);
+    const pending = getPendingNarration(settings, chatId || null);
     if (!pending) return;
     pending.injectedAt = Date.now();
     pending.injectedFor = String(chatId || pending.chatId || '');
@@ -234,11 +250,27 @@ export function markNarrationInjected(settings, chatId = getActiveChatId()) {
  * @param {{ save?: boolean }} [options]
  */
 export function clearNarrationAfterGeneration(settings, chatId = getActiveChatId(), options = {}) {
-    const pending = getPendingNarration(settings);
+    const pending = getPendingNarration(settings, chatId || null);
     if (!pending) return;
     if (!options.force && !pending.injectedAt) return;
     if (!options.force && pending.injectedFor && chatId && String(pending.injectedFor) !== String(chatId)) return;
     clearPendingNarration(settings, { chatId, persist: options.save === true });
+}
+
+/**
+ * Recreate a lost per-chat narration payload after a chat switch or migration.
+ * @param {object} state
+ * @param {Record<string, any>} settings
+ * @returns {boolean}
+ */
+export function requeueCombatOutcomeIfMissing(state, settings) {
+    if (!state?.finalization?.narrationQueued || !settings) return false;
+    const chatId = String(state.chatId || getActiveChatId() || '');
+    if (!chatId || hasPendingNarration(settings, chatId)) return false;
+    const payload = state.finalization.payload || buildOutcomePayload({ ...state, chatId });
+    setPendingNarration(settings, payload, { chatId, persist: false });
+    try { saveSettings(); } catch (_) { /* runtime bridge not ready */ }
+    return true;
 }
 
 /**
@@ -250,7 +282,7 @@ export function clearNarrationAfterGeneration(settings, chatId = getActiveChatId
  * @returns {Promise<boolean>}
  */
 export async function continueToNarration(settings) {
-    if (!getPendingNarration(settings)) return false;
+    if (!getPendingNarration(settings, getActiveChatId() || null)) return false;
     try {
         const ctx = (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) ? SillyTavern.getContext() : null;
         if (!ctx || typeof ctx.generate !== 'function') return false;

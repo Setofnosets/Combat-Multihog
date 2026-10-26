@@ -434,7 +434,10 @@ export async function syncCombatProfile(memo, settings) {
     if (!combatProfileId) return;
 
     const combatProfileName = getProfileNameById(combatProfileId);
-    if (!combatProfileName) return;
+    if (!combatProfileName) {
+        await resetCombatProfileOverride(settings);
+        return;
+    }
 
     const combatPresetId = String(settings.combatCompletionPresetId || '').trim();
     const combatActive = isCombatEngaged(memo);

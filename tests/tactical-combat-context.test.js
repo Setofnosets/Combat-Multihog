@@ -11,6 +11,7 @@ import {
     resolveTerrainTheme,
 } from '../src/features/tactical-combat/tactical-combat-context.js';
 import { buildEncounterRequestPayload } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { applyAction, getUnitById } from '../src/features/tactical-combat/tactical-combat-engine.js';
 
 const MEMO = `[CHARACTER]
 {{user}} (Fighter): 34/40 HP
@@ -533,5 +534,177 @@ Status: Healthy
         expect(player.skills.length).toBeGreaterThan(0);
         expect(player.items.length).toBeGreaterThan(0);
         expect(player.speed).toBe(5);
+    });
+});
+
+describe('tactical combat resource and caster parsing', () => {
+    it('keeps a shared spell-slot pool and marks abilities without usage text as at-will', () => {
+        const memo = `[PARTY]
+Mira (Wizard): 22/24 HP
+Combat: BAB: +2 | Spell Atk +7 | Spell DC 15 | Ranged (1 attack): +6 | Total AC: 13
+Spells: Level 1 (0/2): Magic Missile, Shield
+Abilities: Arcane Recovery (recover slots; 1/1 per rest), Silver Tongue (a quick lie)
+Status: Healthy
+[/PARTY]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Mira', chatId: 'spell-slots', chat: [] });
+        const mira = context.playerUnits[0];
+        const missile = mira.skills.find(skill => skill.name === 'Magic Missile');
+        const shield = mira.skills.find(skill => skill.name === 'Shield');
+        expect(missile).toMatchObject({ slotKey: 'spell-1', slotLevel: 1, uses: 0, maxUses: 2, spell: true });
+        expect(shield).toMatchObject({ slotKey: 'spell-1', uses: 0, maxUses: 2 });
+        expect(mira.spellSlots['spell-1']).toEqual({ current: 0, max: 2 });
+        expect(mira.skills.find(skill => skill.name === 'Arcane Recovery')).toMatchObject({ uses: 1, maxUses: 1 });
+        expect(mira.skills.find(skill => skill.name === 'Silver Tongue')).toMatchObject({ unlimited: true, maxUses: 0 });
+        expect(mira.spellAttackBonus).toBe(7);
+        expect(mira.spellSaveDC).toBe(15);
+    });
+
+    it('uses the first multiattack bonus and does not mistake it for the last', () => {
+        const memo = `[CHARACTER]
+Aria (Fighter): 30/30 HP
+Combat: BAB: +5 | Attack (2 attacks, +9/+4 / 1d10+4) | Total AC: 18
+Status: Healthy
+[/CHARACTER]`;
+        const [aria] = parsePlayerUnits(memo, { name1: 'Aria' });
+        expect(aria.attackBonus).toBe(9);
+        expect(aria.damage).toBe('1d10+4');
+    });
+
+    it('resolves a custom spell compendium entry with its own mechanics', () => {
+        const memo = `[CHARACTER]
+Aria (Mage): 20/20 HP
+Spells: Level 2 (1/1): Zephyr Lance
+Status: Healthy
+[/CHARACTER]`;
+        const context = collectEncounterContext({
+            ...BASE_SETTINGS,
+            currentMemo: memo,
+            tacticalCombatSpellCompendiumJson: JSON.stringify({
+                spells: {
+                    'Zephyr Lance': {
+                        kind: 'attack',
+                        damage: '4d8',
+                        range: 8,
+                        area: { shape: 'burst', radius: 2, origin: 'target' },
+                    },
+                },
+            }),
+        }, { name1: 'Aria', chatId: 'custom-spell', chat: [] });
+        const lance = context.playerUnits[0].skills.find(skill => skill.name === 'Zephyr Lance');
+        expect(lance).toMatchObject({
+            kind: 'attack',
+            damage: '4d8',
+            range: 8,
+            area: { radius: 2, origin: 'target' },
+        });
+    });
+
+    it('infers an unknown ranged spell from its level without treating Lightning Bolt as utility', () => {
+        const memo = `[CHARACTER]
+Aria (Mage): 20/20 HP
+Spells: Level 3 (1/1): Lightning Bolt
+Status: Healthy
+[/CHARACTER]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'inferred-spell', chat: [] });
+        const bolt = context.playerUnits[0].skills.find(skill => skill.name === 'Lightning Bolt');
+        expect(bolt).toMatchObject({ kind: 'attack', resource: 'hp', range: 6, damage: '5d6' });
+    });
+
+    it('excludes fled or Willpower-broken party members from a new encounter', () => {
+        const memo = `[PARTY]
+Mira (Wizard): 22/24 HP
+Status: Fled
+[/PARTY]`;
+        expect(() => collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Mira', chatId: 'fled-party', chat: [] }))
+            .toThrow(/Every player character/i);
+    });
+
+    it('excludes fled enemies from the active combat roster', () => {
+        const memo = `[COMBAT]
+ENEMIES:
+Goblin: 4/8 HP
+Status: Fled
+Hobgoblin: 10/10 HP
+Status: Healthy
+[/COMBAT]`;
+        const { enemies } = parseCombatUnits(memo);
+        expect(enemies.map(enemy => enemy.name)).toEqual(['Hobgoblin']);
+    });
+});
+
+describe('Willpower keyword classification', () => {
+    it('turns fear language into a deterministic Willpower attack', () => {
+        const memo = `[CHARACTER]
+Aria (Bard): 20/20 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Dread Wail (A fear-inducing wail; 1/1 per rest)
+- Shield Bash (Strike with a shield; 2d6)
+- Shield (Raise a ward)
+[/ABILITIES]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'willpower-classifier', chat: [] });
+        const byName = Object.fromEntries(context.playerUnits[0].skills.map(skill => [skill.name, skill]));
+        expect(byName['Dread Wail']).toMatchObject({
+            kind: 'attack',
+            resource: 'willpower',
+            willpowerOutcome: 'flee',
+            damage: '2d6',
+            uses: 1,
+            maxUses: 1,
+        });
+        expect(byName['Shield Bash']).toMatchObject({ kind: 'attack' });
+        expect(byName.Shield).toMatchObject({ kind: 'buff' });
+    });
+
+    it('does not treat fearless language as a fear effect', () => {
+        const memo = `[CHARACTER]
+Aria (Bard): 20/20 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Fearsome Roar (A terrifying shout; 1/1 per rest)
+- Fearless Stance (Stand firm against terror)
+[/ABILITIES]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'willpower-negative', chat: [] });
+        const byName = Object.fromEntries(context.playerUnits[0].skills.map(skill => [skill.name, skill]));
+        expect(byName['Fearsome Roar']).toMatchObject({ resource: 'willpower', willpowerOutcome: 'flee' });
+        expect(byName['Fearless Stance'].resource).toBe('hp');
+        expect(byName['Fearless Stance'].willpowerOutcome).toBe('defeat');
+    });
+});
+
+describe('Willpower parser-to-engine integration', () => {
+    it('applies parsed Willpower damage to the target pool', () => {
+        const memo = `[CHARACTER]
+Aria (Bard): 20/20 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Dread Wail (A fear-inducing wail; 1/1 per rest)
+[/ABILITIES]
+
+[COMBAT]
+ENEMIES:
+Goblin: 12/12 HP
+Willpower: 6/6
+Status: Healthy
+[/COMBAT]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'willpower-e2e', chat: [] });
+        const { state } = buildEncounterFromContext(context, BASE_SETTINGS, { source: 'existing', seed: 7 });
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = state.units.find(unit => unit.side === 'enemy');
+        const wail = aria.skills.find(skill => skill.name === 'Dread Wail');
+        goblin.x = aria.x + 1;
+        goblin.y = aria.y;
+        const result = applyAction(state, {
+            type: 'skill', unitId: aria.id, skillId: wail.id, targetId: goblin.id,
+        }, { actorSide: 'player', rng: () => 0.99 });
+        expect(result.ok).toBe(true);
+        expect(goblin.willpower).toBeLessThan(goblin.maxWillpower);
+        expect(goblin.hp).toBe(goblin.maxHp);
     });
 });

@@ -39,7 +39,7 @@ The agent receives `unitsToAct`, `attackTargets`, `skillTargets`, `itemTargets`,
 
 ## Outcome
 
-When the encounter ends, final HP/Willpower is written into `[CHARACTER]`/`[PARTY]`, `[COMBAT]` is closed, and an authoritative result is queued for the narrator. The shared pending-result slot is used for both tactical and traditional combat; the payload's `kind` selects the correct narration template and bridge text.
+When the encounter ends, final HP/Willpower, terminal Status, spell-slot lines, ability uses, and inventory quantities are written into `[CHARACTER]`/`[PARTY]`, `[SPELLS]`/`[ABILITIES]`, and `[INVENTORY]`; `[COMBAT]` is closed and an authoritative result is queued for the narrator. Pending results are stored per chat (`tacticalCombatReturnByChat`) so ending fights in two chats cannot overwrite the first narration; the payload's `kind` selects the correct narration template and bridge text.
 
 ## Sharing with tactical combat
 
@@ -54,4 +54,4 @@ Only the state builder, agent payload/prompt, roster UI, and settings binder are
 
 ## Persistence
 
-Each chat's board is stored in `extension_settings.rpg_tracker.traditionalCombatByChat[chatId]`. The board survives reloads and switches with the chat, like the tactical board. The shared pending narration lives in `tacticalCombatReturn`.
+Each chat's board is stored in `extension_settings.rpg_tracker.traditionalCombatByChat[chatId]`. The board survives reloads and switches with the chat, like the tactical board. Pending narration lives in `tacticalCombatReturnByChat[chatId]`; `tacticalCombatReturn` remains a legacy mirror of the most recently queued result. Caster sheets use `Spell Atk` for spell attack rolls; `Spell DC` is preserved for save-based rules that are still pending.

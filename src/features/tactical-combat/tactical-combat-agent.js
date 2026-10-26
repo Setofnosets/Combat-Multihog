@@ -32,6 +32,7 @@ import {
     normalizeWillpowerOutcome,
     normalizeWillpowerResource,
 } from './tactical-combat-willpower.js';
+import { describeResource, hasUses } from './tactical-combat-resources.js';
 import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
@@ -48,6 +49,7 @@ import {
     applySpecialEffects,
     buildAgentGameState,
     chebyshev,
+    cellKey,
     computeReachableCells,
     getAreaTargets,
     getTerrain,
@@ -311,29 +313,36 @@ export function normalizeEncounterPayload(value, options = {}) {
         const maxHp = numberOr(raw.maxHp ?? raw.hp, 12, 1, 500);
         const attackRange = numberOr(raw.attackRange, 1, 1, 24);
         const skills = Array.isArray(raw.skills)
-            ? raw.skills.filter(skill => skill && typeof skill === 'object').slice(0, 6).map((skill, skillIndex) => ({
-                id: String(skill.id || `skill-${index}-${skillIndex}`).slice(0, 60),
-                name: String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80),
-                description: String(skill.description || '').slice(0, 400),
-                kind: ['attack', 'heal', 'buff', 'special'].includes(String(skill.kind || '').toLowerCase())
-                    ? String(skill.kind).toLowerCase()
-                    : 'attack',
-                resource: normalizeWillpowerResource(skill.resource ?? skill.targetResource, 'hp'),
-                range: numberOr(skill.range, 1, 0, 24),
-                area: normalizeArea(skill.area ?? skill.aoe),
-                damage: String(skill.damage || '').slice(0, 40),
-                willpowerDamage: String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
-                willpowerOutcome: normalizeWillpowerOutcome(skill.willpowerOutcome ?? skill.willOutcome, 'defeat'),
-                heal: String(skill.heal || '').slice(0, 40),
-                acBonus: numberOr(skill.acBonus, 0, 0, 10),
-                attackBonus: numberOr(skill.attackBonus, 0, -5, 10),
-                bonusAction: !!skill.bonusAction,
-                rounds: numberOr(skill.rounds, 2, 1, 10),
-                maxUses: numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
-                effectTemplate: Array.isArray(skill.effectTemplate)
-                    ? skill.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
-                    : undefined,
-            }))
+            ? raw.skills.filter(skill => skill && typeof skill === 'object').slice(0, 6).map((skill, skillIndex) => {
+                const normalizedArea = normalizeArea(skill.area ?? skill.aoe);
+                const target = String(skill.target || '').toLowerCase();
+                return {
+                    id: String(skill.id || `skill-${index}-${skillIndex}`).slice(0, 60),
+                    name: String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80),
+                    description: String(skill.description || '').slice(0, 400),
+                    kind: ['attack', 'heal', 'buff', 'special'].includes(String(skill.kind || '').toLowerCase())
+                        ? String(skill.kind).toLowerCase()
+                        : 'attack',
+                    resource: normalizeWillpowerResource(skill.resource ?? skill.targetResource, 'hp'),
+                    target: ['enemy', 'ally', 'self', 'any'].includes(target) ? target : undefined,
+                    range: numberOr(skill.range, normalizedArea && normalizedArea.origin === 'target' ? 6 : 1, 0, 24),
+                    area: normalizedArea,
+                    damage: String(skill.damage || '').slice(0, 40),
+                    willpowerDamage: String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
+                    willpowerOutcome: normalizeWillpowerOutcome(skill.willpowerOutcome ?? skill.willOutcome, 'defeat'),
+                    heal: String(skill.heal || '').slice(0, 40),
+                    acBonus: numberOr(skill.acBonus, 0, 0, 10),
+                    attackBonus: numberOr(skill.attackBonus, 0, -5, 10),
+                    bonusAction: !!skill.bonusAction,
+                    rounds: numberOr(skill.rounds, 2, 1, 10),
+                    maxUses: numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
+                    save: String(skill.save || '').toLowerCase().slice(0, 8),
+                    spell: skill.spell === true,
+                    effectTemplate: Array.isArray(skill.effectTemplate)
+                        ? skill.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
+                        : undefined,
+                };
+            })
             : [];
         for (const skill of skills) {
             if (skill.resource === 'both' && !skill.willpowerDamage) {
@@ -351,6 +360,8 @@ export function normalizeEncounterPayload(value, options = {}) {
             willpowerSave: raw.willpowerSave == null ? (raw.willSave == null ? undefined : numberOr(raw.willSave, 0, -10, 30)) : numberOr(raw.willpowerSave, 0, -10, 30),
             ac: numberOr(raw.ac, 13, 1, 40),
             attackBonus: numberOr(raw.attackBonus, 3, -5, 30),
+            spellAttackBonus: raw.spellAttackBonus == null ? undefined : numberOr(raw.spellAttackBonus, raw.attackBonus ?? 3, -5, 30),
+            spellSaveDC: raw.spellSaveDC == null ? undefined : numberOr(raw.spellSaveDC, 13, 1, 40),
             attackRange,
             damage: String(raw.damage || '1d6').slice(0, 40),
             attackResource: normalizeWillpowerResource(raw.attackResource, 'hp'),
@@ -424,6 +435,8 @@ const ENCOUNTER_JSON_SCHEMA = {
                         willpowerSave: { type: 'integer' },
                         ac: { type: 'integer' },
                         attackBonus: { type: 'integer' },
+                        spellAttackBonus: { type: 'integer' },
+                        spellSaveDC: { type: 'integer' },
                         attackRange: { type: 'integer' },
                         damage: { type: 'string' },
                         attackResource: { type: 'string', enum: ['hp', 'willpower', 'both'] },
@@ -454,6 +467,8 @@ const ENCOUNTER_JSON_SCHEMA = {
                                     willpowerOutcome: { type: 'string', enum: ['defeat', 'flee', 'switch_side', 'incapacitate', 'surrender'] },
                                     heal: { type: 'string' },
                                     maxUses: { type: 'integer' },
+                                    spell: { type: 'boolean' },
+                                    save: { type: 'string' },
                                     bonusAction: { type: 'boolean' },
                                     effectTemplate: { type: 'array', items: { type: 'object' } },
                                 },
@@ -612,6 +627,10 @@ export async function requestAgentActions(state, unitIds, settings, options = {}
     const catalog = options.catalog || catalogResult.catalog;
     const request = requestSettingsFor(settings, mode);
     const prompts = options.prompts || buildAgentPrompts(state, unitIds, settings, catalog, { mode });
+    const engineCorrection = String(options.correction || '').trim();
+    const firstUserPrompt = engineCorrection
+        ? `${prompts.user}\n\n## ENGINE REJECTIONS\n${engineCorrection}\nReturn only a corrected JSON object with an "actions" array.`
+        : prompts.user;
     let lastError = '';
     let attempts = 0;
 
@@ -622,7 +641,7 @@ export async function requestAgentActions(state, unitIds, settings, options = {}
                 attempt === 0 ? request : { ...request, maxTokens: Math.max(8000, Number(request.maxTokens) || 0) },
                 prompts.system,
                 attempt === 0
-                    ? prompts.user
+                    ? firstUserPrompt
                     : `${prompts.user}\n\n## CORRECTION\nYour previous response was invalid: ${lastError}\nReturn only a corrected JSON object with an "actions" array.`,
                 options.signal || null,
                 { stream: false, debugSource: mode === 'traditional' ? 'Traditional Combat Agent' : 'Tactical Combat Agent', jsonSchema: ACTIONS_JSON_SCHEMA },
@@ -748,6 +767,10 @@ export function normalizeSpecialEffects(value, state, options = {}) {
                 rejected.push(`${target.name} is outside the ability's area.`);
                 continue;
             }
+            if (Number(target.maxWillpower) === 0) {
+                rejected.push(`${target.name} is immune to Willpower effects.`);
+                continue;
+            }
             if (Number(target.willpower) > 0 && !target.willpowerBroken) {
                 rejected.push(`${target.name} still has Willpower; a defeat effect is not legal.`);
                 continue;
@@ -814,11 +837,26 @@ export function normalizeSpecialEffects(value, state, options = {}) {
                 rejected.push('Terrain effects are not supported in traditional combat.');
                 continue;
             }
+            const areaKeys = Array.isArray(options.areaCells) && options.areaCells.length
+                ? new Set(options.areaCells.map(cell => cellKey(Number(cell.x), Number(cell.y))))
+                : null;
+            const occupied = new Set(
+                (state.units || [])
+                    .filter(unit => unit && !unit.defeated && !unit.fled)
+                    .map(unit => cellKey(Number(unit.x), Number(unit.y))),
+            );
             const cells = Array.isArray(raw.cells) ? raw.cells : Array.isArray(raw.tiles) ? raw.tiles : [];
             const cleaned = cells.slice(0, 24).filter(cell => {
                 const x = Number(cell?.x);
                 const y = Number(cell?.y);
-                return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < state.grid.cols && y < state.grid.rows;
+                if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= state.grid.cols || y >= state.grid.rows) return false;
+                if (areaKeys && !areaKeys.has(cellKey(x, y))) return false;
+                const terrain = String(cell.terrain || raw.terrain || '').toLowerCase();
+                const definition = TC_TERRAIN[terrain];
+                if (!definition) return false;
+                // Never entomb a living unit with impassable terrain.
+                if (definition.walkable === false && occupied.has(cellKey(x, y))) return false;
+                return true;
             }).map(cell => ({
                 x: Number(cell.x),
                 y: Number(cell.y),
@@ -881,7 +919,9 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
     const areaTargets = area ? targets : [];
     const allowedTargetIds = Array.isArray(options.allowedTargetIds)
         ? options.allowedTargetIds.map(String)
-        : (area ? [...new Set([caster.id, ...areaTargets.map(unit => unit.id)])] : null);
+        : (area
+            ? [...new Set(areaTargets.map(unit => unit.id))]
+            : [caster.id, target?.id].filter(Boolean).map(String));
     const maxEffects = Math.max(
         1,
         Math.min(64, Number(options.maxEffects) || (area ? Math.min(24, 6 * Math.max(1, areaTargets.length)) : 6)),
@@ -943,6 +983,7 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             theater: mode === 'traditional',
             maxEffects,
             allowedTargetIds,
+            areaCells: options.areaCells,
         });
         if (!normalized.effects.length) {
             return { ok: false, error: normalized.rejected.join(' ') || 'The resolver returned no usable effects.' };
@@ -979,7 +1020,7 @@ function chooseBestAreaAttack(state, caster, unit, targets) {
     let best = null;
     for (const skill of unit.skills || []) {
         const area = normalizeArea(skill.area);
-        if (skill.kind !== 'attack' || !area || skill.uses <= 0) continue;
+        if (skill.kind !== 'attack' || !area || !hasUses(skill, caster)) continue;
         if (skill.bonusAction ? unit.bonusUsed : unit.actionUsed) continue;
         const anchors = area.origin === 'self'
             ? [{ targetId: unit.id, cell: { x: caster.x, y: caster.y } }]
@@ -1038,9 +1079,8 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         if (canUse('skill') && !actionUsed && unit.hp <= unit.maxHp * 0.35) {
             const heal = (unit.skills || []).find(skill =>
                 skill.kind === 'heal'
-                && skill.uses > 0
-                && skill.resource !== 'willpower'
-                && (theater || (skill.range || 0) === 0));
+                && hasUses(skill, unit)
+                && skill.resource !== 'willpower');
             if (heal && (!heal.bonusAction || !bonusUsed)) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
                 if (heal.bonusAction) bonusUsed = true;
@@ -1051,9 +1091,8 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         if (canUse('skill') && !actionUsed && Number(unit.maxWillpower) > 0 && unit.willpower <= unit.maxWillpower * 0.35) {
             const heal = (unit.skills || []).find(skill =>
                 skill.kind === 'heal'
-                && skill.uses > 0
-                && skill.resource === 'willpower'
-                && (theater || (skill.range || 0) === 0));
+                && hasUses(skill, unit)
+                && skill.resource === 'willpower');
             if (heal && (!heal.bonusAction || !bonusUsed)) {
                 actions.push({ type: 'skill', unitId: unit.id, skillId: heal.id, targetId: unit.id });
                 if (heal.bonusAction) bonusUsed = true;
@@ -1099,7 +1138,7 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
             const willpowerSkill = canUse('skill') ? (unit.skills || []).find(skill =>
                 skill.kind === 'attack'
                 && skill.resource === 'willpower'
-                && skill.uses > 0
+                && hasUses(skill, unit)
                 && (skill.bonusAction ? !bonusUsed : !actionUsed)
                 && chebyshev(projected, target) <= (Number(skill.range) || 1)
                 && ((Number(skill.range) || 1) <= 1 || hasLineOfSight(state, projected, target))) : null;
@@ -1113,7 +1152,7 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
                 actionUsed = true;
                 performed = true;
             } else if (canUse('skill')) {
-                const attackSkill = (unit.skills || []).find(skill => skill.kind === 'attack' && skill.uses > 0);
+                const attackSkill = (unit.skills || []).find(skill => skill.kind === 'attack' && hasUses(skill, unit));
                 if (attackSkill) {
                     actions.push({ type: 'skill', unitId: unit.id, skillId: attackSkill.id, targetId: target.id });
                     actionUsed = true;
@@ -1130,6 +1169,19 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
         if (!performed && canUse('wait')) actions.push({ type: 'wait', unitId: unit.id });
     }
     return actions;
+}
+
+export function allowedSpecialTargetIds(prepared) {
+    const targets = Array.isArray(prepared?.targets)
+        ? prepared.targets
+        : (prepared?.target ? [prepared.target] : []);
+    if (!prepared?.area) {
+        return [...new Set([prepared?.unit?.id, prepared?.target?.id].filter(Boolean).map(String))];
+    }
+    // Area support effects already include the caster when they are inside the
+    // self-centered aura or target burst. Never add the caster unconditionally:
+    // that would let a heal burst reach a caster standing outside it.
+    return [...new Set(targets.map(target => target.id).filter(Boolean).map(String))];
 }
 
 async function executeAgentAction(state, action, settings, options = {}) {
@@ -1156,7 +1208,7 @@ async function executeAgentAction(state, action, settings, options = {}) {
     }
     const source = prepared.skill || prepared.item;
     const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-    const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(target => target.id)])];
+    const allowedTargetIds = allowedSpecialTargetIds(prepared);
     const maxEffects = prepared.area
         ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
         : 6;
@@ -1172,7 +1224,8 @@ async function executeAgentAction(state, action, settings, options = {}) {
         const normalized = normalizeSpecialEffects({ effects }, state, {
             theater: state.theater === true,
             maxEffects: Math.max(6, effects.length),
-            allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+            allowedTargetIds,
+            areaCells: prepared.areaCells,
         });
         if (!normalized.effects.length) {
             return {
@@ -1193,6 +1246,11 @@ async function executeAgentAction(state, action, settings, options = {}) {
                 resource: source.resource,
                 willpowerOutcome: source.willpowerOutcome,
                 area: source.area,
+                target: source.target,
+                damage: source.damage,
+                heal: source.heal,
+                willpowerDamage: source.willpowerDamage,
+                maxUses: source.maxUses,
             },
             prepared.target,
             settings,
@@ -1204,7 +1262,7 @@ async function executeAgentAction(state, action, settings, options = {}) {
                 anchor: prepared.anchor,
                 areaCells: prepared.areaCells,
                 maxEffects,
-                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                allowedTargetIds,
             },
         );
         if (!resolved.ok) {
@@ -1272,38 +1330,73 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
     const allowed = new Set(ids);
     const applied = [];
     const actedUnitIds = [];
+    const engineRejected = [];
     const maxSpecialResolutions = maxSpecialResolutionsFor(settings, mode);
     let specialResolutions = 0;
-    for (const action of actions) {
-        if (state.status !== 'active') break;
-        if (!allowed.has(action.unitId)) {
-            rejected.push({ action, error: `Unit "${action.unitId}" is not in the units-to-move list.` });
-            continue;
+    let attempts = responses.attempts;
+    const executeBatch = async (batch) => {
+        for (const action of batch) {
+            if (state.status !== 'active') break;
+            if (!allowed.has(action.unitId)) {
+                rejected.push({ action, error: `Unit "${action.unitId}" is not in the units-to-move list.` });
+                continue;
+            }
+            const unit = state.units.find(candidate => candidate.id === action.unitId);
+            const skill = action.skillId
+                ? (unit?.skills || []).find(entry => entry.id === action.skillId || entry.name === action.skillId)
+                : null;
+            const item = action.itemId
+                ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
+                : null;
+            const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
+            if (isSpecial && specialResolutions >= maxSpecialResolutions) {
+                rejected.push({ action, error: `Special resolution limit reached (${maxSpecialResolutions} per activation).` });
+                continue;
+            }
+            if (isSpecial) specialResolutions += 1;
+            const executed = await executeAgentAction(state, action, settings, options);
+            if (executed.result.ok) {
+                applied.push(...executed.applied);
+                if (!actedUnitIds.includes(action.unitId)) actedUnitIds.push(action.unitId);
+            } else {
+                const entry = { action, error: executed.result.error || 'Rejected.' };
+                rejected.push(entry);
+                engineRejected.push(entry);
+            }
         }
-        const unit = state.units.find(candidate => candidate.id === action.unitId);
-        const skill = action.skillId
-            ? (unit?.skills || []).find(entry => entry.id === action.skillId || entry.name === action.skillId)
-            : null;
-        const item = action.itemId
-            ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
-            : null;
-        const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
-        if (isSpecial && specialResolutions >= maxSpecialResolutions) {
-            rejected.push({ action, error: `Special resolution limit reached (${maxSpecialResolutions} per activation).` });
-            continue;
+    };
+
+    await executeBatch(actions);
+
+    let acted = new Set(actedUnitIds);
+    let missing = ids.filter(id => !acted.has(id));
+    // One corrective agent call after the local engine rejects actions. This is
+    // cheaper and more reliable than immediately replacing the model with local
+    // tactics, while still bounded to a single retry.
+    if (source === 'agent' && state.status === 'active' && engineRejected.length && missing.length) {
+        const correction = engineRejected.slice(0, 8)
+            .map(entry => `- ${entry.action?.unitId || 'unknown unit'} (${entry.action?.type || 'action'}): ${entry.error}`)
+            .join('\n');
+        const corrected = await requestAgentActions(state, missing, settings, {
+            ...options,
+            catalog,
+            mode,
+            prompts: undefined,
+            correction: `The engine rejected these declared actions:\n${correction}\nUse only legal target ids, current resources, and the action vocabulary.`,
+        });
+        attempts += corrected.attempts || 0;
+        if (ownsRun() && !options.signal?.aborted) {
+            if (corrected.ok && corrected.actions?.length) {
+                rejected.push(...(corrected.rejected || []));
+                await executeBatch(corrected.actions);
+            } else if (corrected.error) {
+                error = corrected.error;
+            }
         }
-        if (isSpecial) specialResolutions += 1;
-        const executed = await executeAgentAction(state, action, settings, options);
-        if (executed.result.ok) {
-            applied.push(...executed.applied);
-            if (!actedUnitIds.includes(action.unitId)) actedUnitIds.push(action.unitId);
-        } else {
-            rejected.push({ action, error: executed.result.error || 'Rejected.' });
-        }
+        acted = new Set(actedUnitIds);
+        missing = ids.filter(id => !acted.has(id));
     }
 
-    const acted = new Set(actedUnitIds);
-    const missing = ids.filter(id => !acted.has(id));
     if (missing.length && state.status === 'active') {
         const fallbackActions = buildLocalAiActions(state, missing, options);
         const secondPass = interpretActions(state, fallbackActions, {
@@ -1323,7 +1416,7 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
         rejected,
         ended: state.status !== 'active',
         error,
-        attempts: responses.attempts,
+        attempts,
     };
 }
 

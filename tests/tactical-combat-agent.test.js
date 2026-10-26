@@ -4,6 +4,7 @@ const { sendStateRequest } = vi.hoisted(() => ({ sendStateRequest: vi.fn() }));
 vi.mock('../llm-client.js', () => ({ sendStateRequest }));
 
 import {
+    allowedSpecialTargetIds,
     buildAgentPrompts,
     buildEncounterRequestPayload,
     buildEncounterUserPrompt,
@@ -31,6 +32,7 @@ import {
     endTurn,
     getPendingAgentUnitIds,
     getUnitById,
+    prepareSpecialAction,
     interpretActions,
 } from '../src/features/tactical-combat/tactical-combat-engine.js';
 
@@ -602,5 +604,88 @@ describe('tactical local AI & agent turn execution', () => {
         expect(prompts.user).toContain('GAME STATE');
         expect(prompts.user).toContain('enemy-2');
         expect(prompts.system).toBe(SETTINGS.tacticalCombatAgentPrompt);
+    });
+});
+
+describe('special area target allow-lists', () => {
+    function areaState() {
+        const state = createEncounterState({
+            seed: 7,
+            grid: { rows: 8, cols: 8 },
+            terrainRows: Array.from({ length: 8 }, () => '........'),
+            turnStyle: 'phase',
+            units: [
+                { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 30, ac: 12, attackBonus: 5, damage: '1d6',
+                    skills: [
+                        { id: 'cinder', name: 'Cinder Burst', kind: 'special', range: 6, maxUses: 1, uses: 1,
+                            area: { shape: 'burst', radius: 1, origin: 'target', friendlyFire: false } },
+                        { id: 'rally', name: 'Rally', kind: 'special', target: 'ally', range: 0, maxUses: 1, uses: 1, heal: '1d8',
+                            area: { shape: 'burst', radius: 2, origin: 'self', friendlyFire: false } },
+                    ] },
+                { id: 'pc-2', name: 'Mira', side: 'player', maxHp: 20, hp: 20, ac: 12, attackBonus: 4, damage: '1d6' },
+                { id: 'enemy-1', name: 'Goblin', side: 'enemy', maxHp: 20, hp: 20, ac: 12, attackBonus: 3, damage: '1d6' },
+            ],
+        });
+        state.terrain = Array.from({ length: 8 }, () => Array.from({ length: 8 }, () => 'floor'));
+        const [aria, mira, goblin] = state.units;
+        // The caster is inside the burst radius to prove that hostile special
+        // areas do not automatically include their own caster.
+        aria.x = 2; aria.y = 1;
+        mira.x = 1; mira.y = 3;
+        goblin.x = 3; goblin.y = 1;
+        return state;
+    }
+
+    it('never allows a hostile burst to add the caster or an ally as an effect target', () => {
+        const state = areaState();
+        const prepared = prepareSpecialAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'cinder', targetId: 'enemy-1',
+        }, { actorSide: 'player' });
+        expect(prepared.ok).toBe(true);
+        const allowed = allowedSpecialTargetIds(prepared);
+        expect(allowed).toEqual(['enemy-1']);
+        expect(allowed).not.toContain('pc-1');
+        const normalized = normalizeSpecialEffects({ effects: [
+            { type: 'damage', targetId: 'pc-1', amount: '1d6' },
+            { type: 'damage', targetId: 'enemy-1', amount: '1d6' },
+        ] }, state, { allowedTargetIds: allowed });
+        expect(normalized.effects.map(effect => effect.targetId)).toEqual(['enemy-1']);
+        expect(normalized.rejected.join(' ')).toMatch(/outside the ability's area/i);
+    });
+
+    it('keeps the caster for a support area', () => {
+        const state = areaState();
+        const prepared = prepareSpecialAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'rally',
+        }, { actorSide: 'player' });
+        expect(prepared.ok).toBe(true);
+        expect(allowedSpecialTargetIds(prepared)).toEqual(expect.arrayContaining(['pc-1', 'pc-2']));
+        expect(allowedSpecialTargetIds(prepared)).not.toContain('enemy-1');
+    });
+
+    it('rejects terrain changes outside the resolved area', () => {
+        const state = areaState();
+        const normalized = normalizeSpecialEffects({ effects: [
+            { type: 'terrain', terrain: 'wall', cells: [{ x: 0, y: 0 }] },
+        ] }, state, { areaCells: [{ x: 3, y: 1 }] });
+        expect(normalized.effects).toEqual([]);
+        expect(normalized.rejected.join(' ')).toMatch(/no valid cells/i);
+    });
+});
+
+describe('engine-validation correction pass', () => {
+    it('asks the agent once to fix engine-rejected actions before using local tactics', async () => {
+        const state = makeState();
+        sendStateRequest.mockReset();
+        sendStateRequest
+            .mockResolvedValueOnce('{"actions":[{"type":"skill","unitId":"enemy-2","skillId":"missing-skill","targetId":"pc-1"}]}')
+            .mockResolvedValueOnce('{"actions":[{"type":"wait","unitId":"enemy-2"}]}');
+        const result = await runAgentTurn(state, ['enemy-2'], SETTINGS);
+        expect(result.source).toBe('agent');
+        expect(result.applied).toHaveLength(1);
+        expect(result.rejected.some(entry => /Unknown skill/i.test(entry.error))).toBe(true);
+        expect(sendStateRequest).toHaveBeenCalledTimes(2);
+        expect(sendStateRequest.mock.calls[1][2]).toContain('ENGINE REJECTIONS');
+        expect(getUnitById(state, 'enemy-2').doneForRound).toBe(true);
     });
 });

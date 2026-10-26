@@ -5,6 +5,7 @@
 
 import {
     COMBAT_STYLES,
+    hasActiveCombatBoard,
     normalizeCombatStyle,
     resolveCombatStyle,
     setCombatStyle,
@@ -54,6 +55,14 @@ export function bindCombatModeSettings(deps) {
     if (select && !bound) {
         select.addEventListener('change', () => {
             const next = normalizeCombatStyle(select.value) || 'narrative';
+            const current = resolveCombatStyle(settings);
+            if (next !== current && hasActiveCombatBoard(settings)) {
+                select.value = current;
+                const message = 'Finish or clear the active combat encounter before switching combat styles.';
+                try { globalThis.toastr?.warning?.(message, 'Combat'); } catch (_) { /* no-op */ }
+                try { console.warn('[RPG Tracker]', message); } catch (_) { /* no-op */ }
+                return;
+            }
             setCombatStyle(settings, next);
             syncPanes(next);
             try { deps.saveSettings(); } catch (_) { /* boot */ }

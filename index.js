@@ -11155,13 +11155,14 @@ RULES:
         ];
         _syspromptModDefs.forEach(({ key, id }) => {
             const s = getSettings();
+            // Keep the Components checkboxes in lockstep with
+            // isEffectiveSectionEnabled(): base sections are enabled unless the
+            // setting is explicitly false. The old `=== true` check made a
+            // default/undefined combat module appear disabled while the runtime
+            // was still registering its tool.
             const val = key === 'CYOA_mode'
                 ? (s.syspromptModules?.CYOA_mode === true)
-                : key === 'tactical_combat'
-                    ? (s.syspromptModules?.tactical_combat === true)
-                    : key === 'traditional_combat'
-                        ? (s.syspromptModules?.traditional_combat !== false)
-                        : (s.syspromptModules?.[key] ?? true);
+                : (s.syspromptModules?.[key] ?? true);
             $(`#${id}`).prop('checked', val).on('change', function () {
                 const fresh = getSettings();
                 const checked = !!$(this).prop('checked');

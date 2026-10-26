@@ -99,6 +99,7 @@ Escaped: {{fled}}
 Willpower breaks: {{willpowerBreaks}}
 Side changes: {{sideChanges}}
 Transformations: {{transformations}}
+Resources: {{resources}}
 Highlights:
 {{highlights}}
 {{details}}

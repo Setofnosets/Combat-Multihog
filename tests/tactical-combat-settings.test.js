@@ -234,3 +234,26 @@ describe('Tactical Combat settings tab contract', () => {
         expect(manifest.forkHomePage).toBe('https://github.com/Setofnosets/Combat-Multihog');
     });
 });
+
+describe('Combat shared settings and compendium contract', () => {
+    it('exposes shared Willpower, classifiers, and spell compendium outside the style panes', () => {
+        expect(settingsHtml).toContain('id="rpg_combat_shared_pane"');
+        expect(settingsHtml).toContain('id="rpg_tactical_combat_willpower_percent"');
+        expect(settingsHtml).toContain('id="rpg_tactical_combat_willpower_recover"');
+        expect(settingsHtml).toContain('id="rpg_tactical_combat_classifier"');
+        expect(settingsHtml).toContain('id="rpg_tactical_combat_spell_compendium"');
+        expect(settingsHtml).toContain('id="rpg_tactical_combat_spell_compendium_status"');
+        expect(settingsHtml).not.toContain('id="rpg_tactical_combat_enabled"');
+    });
+
+    it('persists spell compendium and per-chat outcome settings', () => {
+        expect(defaultsSource).toContain('tacticalCombatSpellCompendiumJson: DEFAULT_SPELL_COMPENDIUM_JSON');
+        expect(defaultsSource).toContain('tacticalCombatReturnByChat: {}');
+        expect(settingsStateSource).toContain("'tacticalCombatSpellCompendiumJson'");
+        expect(settingsStateSource).toContain("'tacticalCombatReturnByChat'");
+    });
+
+    it('keeps Components checkboxes aligned with effective section defaults', () => {
+        expect(indexSource).toContain('s.syspromptModules?.[key] ?? true');
+    });
+});

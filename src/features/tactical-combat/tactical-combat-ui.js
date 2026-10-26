@@ -34,6 +34,7 @@ import {
     serializeAgentGameState,
 } from './tactical-combat-engine.js';
 import { describeArea, normalizeArea } from './tactical-combat-constants.js';
+import { describeResource, hasUses } from './tactical-combat-resources.js';
 import { getActionCatalog } from './tactical-combat-actions.js';
 import { buildTacticalCombatMarkup } from './tactical-combat-markup.js';
 import {
@@ -42,19 +43,23 @@ import {
     inferTerrainTheme,
 } from './tactical-combat-context.js';
 import {
+    allowedSpecialTargetIds,
     generateEncounterWithAgent,
     normalizeSpecialEffects,
     resolveSpecialEffectWithAgent,
     runAgentTurn,
 } from './tactical-combat-agent.js';
 import {
+    clearPendingNarration,
     getEncounterForChat,
+    hasPendingNarration,
     removeEncounterForChat,
     setEncounterForChat,
 } from './tactical-combat-store.js';
 import {
     continueToNarration,
     queueCombatOutcome,
+    requeueCombatOutcomeIfMissing,
 } from './tactical-combat-outcome.js';
 import {
     buildCombatTrackerReport,
@@ -308,7 +313,7 @@ export function buildTacticalView(state, viewOverrides = null) {
             }
         } else if (view.mode === 'skill') {
             const skill = (selected.skills || []).find(entry => entry.id === view.selectedSkillId);
-            if (skill && skill.uses > 0 && !skillResourceUsed(selected, skill)) {
+            if (skill && hasUses(skill, selected) && !skillResourceUsed(selected, skill)) {
                 areaSource = skill;
                 area = normalizeArea(skill.area);
                 const options = describeUnitOptions(state, selected);
@@ -335,7 +340,7 @@ export function buildTacticalView(state, viewOverrides = null) {
             }
         } else if (view.mode === 'item') {
             const item = (selected.items || []).find(entry => entry.id === view.selectedItemId);
-            if (item && item.uses > 0 && !selected.actionUsed) {
+            if (item && hasUses(item, selected) && !selected.actionUsed) {
                 areaSource = item;
                 area = normalizeArea(item.area);
                 if (area?.origin !== 'self') {
@@ -431,7 +436,7 @@ function previewAoeAtCell(x, y) {
         ? (selected.skills || []).find(skill => skill.id === view.selectedSkillId)
         : (selected.items || []).find(item => item.id === view.selectedItemId);
     if (!source) return;
-    if (source.uses <= 0) return;
+    if (!hasUses(source, selected)) return;
     const area = normalizeArea(source.area);
     if (!area || area.origin === 'self') return;
     if (view.mode === 'skill' && skillResourceUsed(selected, source)) return;
@@ -556,6 +561,9 @@ function openBoard() {
     overlay.classList.add('is-open');
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('rt-tc-modal-open');
+    try {
+        document.dispatchEvent(new CustomEvent('rt_combat_board_opening', { detail: { board: 'tactical' } }));
+    } catch (_) { /* no-op */ }
     render();
     setTimeout(() => overlay.querySelector('[data-tc-action="close"]')?.focus?.(), 40);
 }
@@ -799,7 +807,7 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
         toast('warning', 'The main action is already spent.');
         return;
     }
-    if (source.uses <= 0) {
+    if (!hasUses(source, caster)) {
         toast('warning', `${source.name} has no uses left.`);
         return;
     }
@@ -820,7 +828,7 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
         return;
     }
     const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-    const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(unit => unit.id)])];
+    const allowedTargetIds = allowedSpecialTargetIds(prepared);
     const maxEffects = prepared.area
         ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
         : 6;
@@ -840,7 +848,8 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
             });
             const normalized = normalizeSpecialEffects({ effects }, state, {
                 maxEffects: Math.max(6, effects.length),
-                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                allowedTargetIds,
+                areaCells: prepared.areaCells,
             });
             resolved = normalized.effects.length
                 ? { ok: true, effects: normalized.effects, log: '' }
@@ -856,6 +865,11 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
                     resource: source.resource,
                     willpowerOutcome: source.willpowerOutcome,
                     area: source.area,
+                    target: source.target,
+                    damage: source.damage,
+                    heal: source.heal,
+                    willpowerDamage: source.willpowerDamage,
+                    maxUses: source.maxUses,
                 },
                 prepared.target,
                 settings,
@@ -866,7 +880,7 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
                     anchor: prepared.anchor,
                     areaCells: prepared.areaCells,
                     maxEffects,
-                    allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                    allowedTargetIds,
                 },
             );
         }
@@ -982,7 +996,7 @@ function handleSelectSkill(skillId) {
     const unit = playerUnitById(state, view.selectedUnitId);
     if (!unit) return;
     const skill = (unit.skills || []).find(entry => entry.id === skillId);
-    if (!skill || skill.uses <= 0) {
+    if (!skill || !hasUses(skill, unit)) {
         toast('warning', 'That skill has no uses left.');
         return;
     }
@@ -1002,7 +1016,7 @@ function handleSelectItem(itemId) {
     const unit = playerUnitById(state, view.selectedUnitId);
     if (!unit) return;
     const item = (unit.items || []).find(entry => entry.id === itemId);
-    if (!item || item.uses <= 0) {
+    if (!item || !hasUses(item, unit)) {
         toast('warning', 'That item has no uses left.');
         return;
     }
@@ -1027,22 +1041,47 @@ function scheduleAutoNarration(state, settings, options = {}) {
     setEncounterForChat(chatId, state, settings);
     notifySettings();
     cancelAutoNarrate();
-    ui.autoNarrateTimer = setTimeout(() => {
+    const attempt = () => {
         ui.autoNarrateTimer = null;
         if (getActiveChatId() !== chatId) return;
         const latest = getEncounterForChat(chatId, getSettings());
         if (!latest || latest.id !== state.id || latest.finalization?.finalizing) return;
+        if (narratorGenerationBusy()) {
+            const attempts = Number(latest.finalization?.autoNarrateAttempts) || 0;
+            if (attempts >= 20) return;
+            latest.finalization = { ...(latest.finalization || {}), autoNarrateAttempts: attempts + 1 };
+            setEncounterForChat(chatId, latest, getSettings());
+            ui.autoNarrateTimer = setTimeout(attempt, AUTO_NARRATE_DELAY_MS);
+            return;
+        }
         closeBoard();
         void continueToNarration(getSettings()).then(ok => {
             if (!ok) toast('info', 'The result is queued. Send your next message to continue the story.');
         });
-    }, AUTO_NARRATE_DELAY_MS);
+    };
+    ui.autoNarrateTimer = setTimeout(attempt, AUTO_NARRATE_DELAY_MS);
+}
+
+function releaseInterruptedFinalization(chatId, stateId, settings = getSettings()) {
+    if (!chatId || !stateId) return;
+    const latest = getEncounterForChat(chatId, settings);
+    if (!latest || latest.id !== stateId || latest.status === 'active') return;
+    latest.finalization = {
+        ...(latest.finalization || {}),
+        finalizing: false,
+        waitingForNarration: false,
+        stage: 'interrupted',
+    };
+    setEncounterForChat(chatId, latest, settings);
 }
 
 async function runCombatFinalization(state, settings, options = {}) {
     const chatId = getActiveChatId();
     if (!chatId || !state || state.status === 'active') return true;
-    if (state.finalization?.narrationQueued) return true;
+    if (state.finalization?.narrationQueued) {
+        requeueCombatOutcomeIfMissing(state, settings);
+        return true;
+    }
     if (narratorGenerationBusy()) {
         if (!state.finalization?.waitingForNarration) {
             state.finalization = {
@@ -1055,7 +1094,10 @@ async function runCombatFinalization(state, settings, options = {}) {
             setEncounterForChat(chatId, state, settings);
             notifySettings();
             setTimeout(() => {
-                if (getActiveChatId() !== chatId) return;
+                if (getActiveChatId() !== chatId) {
+                    releaseInterruptedFinalization(chatId, state.id);
+                    return;
+                }
                 const latest = getEncounterForChat(chatId, getSettings());
                 if (!latest || latest.id !== state.id) return;
                 latest.finalization = { ...(latest.finalization || {}), finalizing: false, waitingForNarration: false };
@@ -1104,7 +1146,10 @@ async function runCombatFinalization(state, settings, options = {}) {
         setBusy(false);
     }
 
-    if (getActiveChatId() !== chatId) return true;
+    if (getActiveChatId() !== chatId) {
+        releaseInterruptedFinalization(chatId, state.id);
+        return true;
+    }
     const latest = getEncounterForChat(chatId, getSettings());
     if (!latest || latest.id !== state.id) return true;
 
@@ -1139,7 +1184,9 @@ function finalizeIfEnded(state, settings = getSettings(), options = {}) {
     if (staleFinalization) {
         state.finalization = { ...(state.finalization || {}), finalizing: false, waitingForNarration: false };
     }
-    if (!state.finalization?.narrationQueued && (!state.finalization?.finalizing || staleFinalization)) {
+    if (state.finalization?.narrationQueued) {
+        requeueCombatOutcomeIfMissing(state, settings);
+    } else if (!state.finalization?.finalizing || staleFinalization) {
         void runCombatFinalization(state, settings, options);
     }
     render();
@@ -1415,13 +1462,15 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
     const skill = (actor.skills || []).find(entry => entry.id === state.opening.skillId) || null;
     const item = (actor.items || []).find(entry => entry.id === state.opening.itemId) || null;
     state.opening.resolving = true;
-    setBusy(true, 'Resolving the opening action…');
+    const controller = new AbortController();
+    ui.abortController = controller;
+    setBusy(true, 'Resolving the opening action…', true);
     persist(state);
     render();
     try {
         const source = item
-            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, area: item.area }
-            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, area: skill?.area };
+            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, area: item.area, target: item.target, damage: item.damage, heal: item.heal, willpowerDamage: item.willpowerDamage, maxUses: item.maxUses }
+            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, area: skill?.area, target: skill?.target, damage: skill?.damage, heal: skill?.heal, willpowerDamage: skill?.willpowerDamage, maxUses: skill?.maxUses };
         let prepared;
         if (skill || item) {
             prepared = prepareSpecialAction(state, {
@@ -1456,7 +1505,7 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
             };
         }
         const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-        const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(unit => unit.id)])];
+        const allowedTargetIds = allowedSpecialTargetIds(prepared);
         const maxEffects = prepared.area
             ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
             : 6;
@@ -1470,20 +1519,21 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
             });
             const normalized = normalizeSpecialEffects({ effects }, state, {
                 maxEffects: Math.max(6, effects.length),
-                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                allowedTargetIds,
+                areaCells: prepared.areaCells,
             });
             resolved = normalized.effects.length
                 ? { ok: true, effects: normalized.effects, log: '' }
                 : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
         } else {
             resolved = await resolveSpecialEffectWithAgent(state, actor, source, prepared.target, settings, {
-                signal: options.signal || null,
+                signal: controller.signal,
                 targets,
                 area: prepared.area,
                 anchor: prepared.anchor,
                 areaCells: prepared.areaCells,
                 maxEffects,
-                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                allowedTargetIds,
             });
         }
         if (getActiveChatId() !== state.chatId) return false;
@@ -1510,6 +1560,10 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
             return false;
         }
         resetOpeningActorResources(state);
+        if (state.opening?.surprise && !state.opening?.surpriseApplied && state.status === 'active') {
+            applySurprise(state, 'player');
+            state.opening.surpriseApplied = true;
+        }
         state.opening.requiresAgent = false;
         state.opening.resolved = true;
         state.opening.log = resolved.log || '';
@@ -1523,6 +1577,7 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
         addLog(state, 'opening', `Opening action could not be resolved: ${state.opening.error}`, actor.id);
         return false;
     } finally {
+        if (ui.abortController === controller) ui.abortController = null;
         state.opening.resolving = false;
         setBusy(false);
         render();
@@ -1725,7 +1780,7 @@ async function startEncounterFlow(options = {}) {
         return { ok: true, alreadyActive: true, state: existing };
     }
     const activeChatId = getActiveChatId();
-    if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(activeChatId)) {
+    if (hasPendingNarration(settings, activeChatId)) {
         toast('info', 'A combat result is still queued for the narrator. Let it resolve before starting another encounter.');
         return { ok: false, error: 'A combat result is still queued for this chat.' };
     }
@@ -2079,6 +2134,9 @@ export function installTacticalCombatUi() {
     document.addEventListener('click', onDocumentClick);
     document.addEventListener('keydown', onKeydown);
     document.addEventListener('rt_open_tactical_combat', openBoard);
+    document.addEventListener('rt_combat_board_opening', (event) => {
+        if (event?.detail?.board !== 'tactical' && ui.overlayOpen) closeBoard();
+    });
 }
 
 /**
@@ -2101,8 +2159,11 @@ export function onTacticalCombatChatChanged(chatId = getActiveChatId()) {
     const arrived = chatId ? getEncounterForChat(chatId, getSettings()) : null;
     if (arrived?.preparing?.active) {
         scheduleDeferredEncounterArchitect(arrived, getSettings(), arrived.preparing.options || {});
-    } else if (arrived && arrived.status !== 'active' && !arrived.finalization?.narrationQueued) {
-        finalizeIfEnded(arrived, getSettings());
+    } else if (arrived?.opening?.requiresAgent && !arrived.opening?.resolving) {
+        scheduleOpeningResolution(arrived, getSettings(), arrived.preparing?.options || {});
+    } else if (arrived && arrived.status !== 'active') {
+        if (arrived.finalization?.narrationQueued) requeueCombatOutcomeIfMissing(arrived, getSettings());
+        else finalizeIfEnded(arrived, getSettings());
     }
     notifySettings();
     if (ui.overlayOpen) render();
@@ -2202,8 +2263,20 @@ export function refreshTacticalCombatUi() {
 export function resetTacticalCombatEncounter() {
     const chatId = getActiveChatId();
     if (!chatId) return;
+    const settings = getSettings();
+    const existing = getEncounterForChat(chatId, settings);
     cancelAutoNarrate();
-    removeEncounterForChat(chatId, getSettings());
+    if (ui.abortController) {
+        ui.abortController.abort();
+        ui.abortController = null;
+    }
+    ui.agentRunToken += 1;
+    cancelArchitectPreparation();
+    // Remove the board-owned COMBAT block and narration handoff so clearing the
+    // board cannot leave a stale encounter in the prompt.
+    if (existing) clearStaleCombatMemo(existing, settings);
+    clearPendingNarration(settings, { chatId });
+    removeEncounterForChat(chatId, settings);
     resetViewSelection();
     setBusy(false);
     notifySettings();

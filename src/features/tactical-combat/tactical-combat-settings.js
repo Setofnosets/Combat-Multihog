@@ -19,6 +19,10 @@ import {
     TC_GRID_PRESETS,
 } from './tactical-combat-constants.js';
 import {
+    DEFAULT_SPELL_COMPENDIUM_JSON,
+    normalizeSpellCompendium,
+} from './tactical-combat-spell-compendium.js';
+import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
@@ -104,6 +108,22 @@ function classifierStatus(settings) {
     }
 }
 
+function compendiumStatus(settings) {
+    const node = el('rpg_tactical_combat_spell_compendium_status');
+    if (!node) return;
+    const parsed = normalizeSpellCompendium(settings?.tacticalCombatSpellCompendiumJson);
+    if (parsed.ok) {
+        const count = Object.keys(parsed.config.spells).length;
+        node.textContent = parsed.usingDefault
+            ? `Using the shipped compendium · ${count} spell definitions.`
+            : `Valid spell compendium · ${count} definitions (shipped entries stay available).`;
+        node.className = 'rt-tc-setting-status rt-tc-ok';
+    } else {
+        node.textContent = `Invalid spell compendium: ${parsed.error} The shipped definitions are used until this is fixed.`;
+        node.className = 'rt-tc-setting-status rt-tc-error';
+    }
+}
+
 function syncStatus(settings = depsRef?.settings) {
     const status = el('rpg_tactical_combat_status');
     if (!status || !settings) return;
@@ -134,7 +154,8 @@ function syncStatus(settings = depsRef?.settings) {
             ? 'Preparing encounter…'
             : state?.status === 'active' ? 'Resume encounter' : state ? 'Start new encounter' : 'Start encounter';
         startBtn.innerHTML = `<i class="fa-solid fa-crosshairs" aria-hidden="true"></i> ${label}`;
-    }    const resetBtn = el('rpg_tactical_combat_reset');
+    }
+    const resetBtn = el('rpg_tactical_combat_reset');
     if (resetBtn) resetBtn.disabled = !state;
     const stopBtn = el('rpg_tactical_combat_stop');
     if (stopBtn) stopBtn.disabled = !isTacticalCombatBusy() && (!state || state.status !== 'active');
@@ -142,7 +163,6 @@ function syncStatus(settings = depsRef?.settings) {
 
 function syncControls(settings) {
     if (!settings) return;
-    setChecked(el('rpg_tactical_combat_enabled'), settings.tacticalCombatEnabled);
     setValue(el('rpg_tactical_combat_grid_preset'), settings.tacticalCombatGridPreset || '15x15');
     setValue(el('rpg_tactical_combat_turn_style'), settings.tacticalCombatTurnStyle || 'phase');
     setValue(el('rpg_tactical_combat_terrain_theme'), settings.tacticalCombatTerrainTheme || 'auto');
@@ -168,9 +188,11 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_special_prompt'), settings.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT);
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
+    setValue(el('rpg_tactical_combat_spell_compendium'), settings.tacticalCombatSpellCompendiumJson || DEFAULT_SPELL_COMPENDIUM_JSON);
     syncGridControls(settings);
     catalogStatus(settings);
     classifierStatus(settings);
+    compendiumStatus(settings);
     syncStatus(settings);
 }
 
@@ -193,15 +215,6 @@ export function bindTacticalCombatSettings(deps) {
         refreshTacticalCombatUi();
         try { document.dispatchEvent(new CustomEvent('rt_tactical_combat_changed')); } catch (_) { /* no-op */ }
     };
-
-    const enabled = el('rpg_tactical_combat_enabled');
-    if (enabled) {
-        enabled.addEventListener('change', () => {
-            settings.tacticalCombatEnabled = !!enabled.checked;
-            save();
-            changed();
-        });
-    }
 
     const gridPreset = el('rpg_tactical_combat_grid_preset');
     if (gridPreset) {
@@ -382,6 +395,25 @@ export function bindTacticalCombatSettings(deps) {
         }
     }
 
+    const compendium = el('rpg_tactical_combat_spell_compendium');
+    if (compendium) {
+        compendium.addEventListener('input', () => {
+            settings.tacticalCombatSpellCompendiumJson = String(compendium.value || '');
+            save();
+            compendiumStatus(settings);
+        });
+        const reset = el('rpg_tactical_combat_spell_compendium_reset');
+        if (reset) {
+            reset.addEventListener('click', (event) => {
+                event.preventDefault();
+                settings.tacticalCombatSpellCompendiumJson = DEFAULT_SPELL_COMPENDIUM_JSON;
+                compendium.value = DEFAULT_SPELL_COMPENDIUM_JSON;
+                save();
+                compendiumStatus(settings);
+            });
+        }
+    }
+
     const openBtn = el('rpg_tactical_combat_open');
     if (openBtn) {
         openBtn.addEventListener('click', (event) => {
@@ -426,6 +458,9 @@ export function bindTacticalCombatSettings(deps) {
         document.addEventListener('rt_tactical_combat_changed', () => syncStatus(depsRef?.settings));
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) catalogStatus(depsRef.settings);
+        });
+        document.addEventListener('rt_tactical_combat_changed', () => {
+            if (depsRef?.settings) compendiumStatus(depsRef.settings);
         });
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) classifierStatus(depsRef.settings);

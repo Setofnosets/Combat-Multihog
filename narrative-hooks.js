@@ -30,6 +30,7 @@ import { runtimeState } from './src/app/runtime-state.js';
 import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.js';
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
+import { getPendingNarration, hasPendingNarration } from './src/features/tactical-combat/tactical-combat-store.js';
 import { isTacticalCombatMode, isTraditionalCombatMode } from './src/features/combat/combat-mode.js';
 import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
@@ -646,15 +647,17 @@ function bindTraditionalCombatToolSync() {
 /** Runtime prompt override: once [COMBAT] exists, regular combat narration is prohibited. */
 export function buildTacticalCombatRuntimeOverride(settings) {
     try {
-        if (!isTacticalCombatMode(settings)) return '';
         const chatId = getActiveChatId();
         const board = settings.tacticalCombatByChat?.[chatId];
+        // An active board owns the fight even if the style was changed by an
+        // older save or an external integration. The mode-switch guard prevents
+        // this in the UI, but the narrator must never start narrating over it.
         if (board?.status === 'active') {
             return `[TACTICAL_COMBAT_OVERRIDE]\nTactical Combat is currently being resolved on the board. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or the outcome. Do not call StartTacticalCombat again. If the player writes in chat, acknowledge that the fight is paused on the tactical board and wait for its result.\n[/TACTICAL_COMBAT_OVERRIDE]\n\n`;
         }
-        if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
-            return '';
-        }
+        if (board?.finalization?.finalizing) return '';
+        if (!isTacticalCombatMode(settings)) return '';
+        if (hasPendingNarration(settings, chatId)) return '';
         const combatState = getCombatState(settings.currentMemo);
         if (combatState === 'absent' || combatState === 'ended') return '';
         if (combatState !== 'engaged') {
@@ -674,16 +677,14 @@ export function buildTacticalCombatRuntimeOverride(settings) {
 /** Runtime prompt override for the no-grid traditional board. */
 export function buildTraditionalCombatRuntimeOverride(settings) {
     try {
-        if (!isTraditionalCombatMode(settings)) return '';
         const chatId = getActiveChatId();
         const board = settings.traditionalCombatByChat?.[chatId];
         if (board?.status === 'active') {
             return `[TRADITIONAL_COMBAT_OVERRIDE]\nTraditional Combat is currently being resolved on the board. Do not narrate attacks, damage, Willpower loss, mental defeats, initiative, saves, enemy turns, or the outcome. Do not call StartTraditionalCombat again. If the player writes in chat, acknowledge that the fight is paused on the traditional board and wait for its result.\n[/TRADITIONAL_COMBAT_OVERRIDE]\n\n`;
         }
+        if (!isTraditionalCombatMode(settings)) return '';
         if (board?.finalization?.finalizing) return '';
-        if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(chatId)) {
-            return '';
-        }
+        if (hasPendingNarration(settings, chatId)) return '';
         const combatState = getCombatState(settings.currentMemo);
         if (combatState === 'absent' || combatState === 'ended') return '';
         if (combatState !== 'engaged') {
@@ -722,7 +723,7 @@ function tacticalCombatToolAvailable() {
         if (!chatId) return false;
         const board = s.tacticalCombatByChat?.[chatId];
         if (board?.status === 'active' || board?.finalization?.finalizing) return false;
-        if (s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId)) return false;
+        if (hasPendingNarration(s, chatId)) return false;
         if (s.tacticalCombatAutoStartOnHostility === false) return false;
         if (s.tacticalCombatEncounterSource === 'existing') {
             const rosterState = getCombatState(s.currentMemo);
@@ -747,7 +748,7 @@ export function syncTacticalCombatToolRegistration() {
         const chatId = getActiveChatId();
         const board = s.tacticalCombatByChat?.[chatId];
         const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
-        const pendingResult = s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId);
+        const pendingResult = hasPendingNarration(s, chatId);
         const rosterState = getCombatState(s.currentMemo);
         const waitingForExistingRoster = s.tacticalCombatEncounterSource === 'existing'
             && (rosterState === 'absent' || rosterState === 'ended');
@@ -853,7 +854,7 @@ function traditionalCombatToolAvailable() {
         if (!chatId) return false;
         const board = s.traditionalCombatByChat?.[chatId];
         if (board?.status === 'active' || board?.finalization?.finalizing) return false;
-        if (s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId)) return false;
+        if (hasPendingNarration(s, chatId)) return false;
         if (s.traditionalCombatAutoStartOnHostility === false) return false;
         if (s.traditionalCombatEncounterSource === 'existing') {
             const rosterState = getCombatState(s.currentMemo);
@@ -872,7 +873,7 @@ export function syncTraditionalCombatToolRegistration() {
         const chatId = getActiveChatId();
         const board = s.traditionalCombatByChat?.[chatId];
         const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
-        const pendingResult = s.tacticalCombatReturn?.chatId && String(s.tacticalCombatReturn.chatId) === String(chatId);
+        const pendingResult = hasPendingNarration(s, chatId);
         const rosterState = getCombatState(s.currentMemo);
         const waitingForExistingRoster = s.traditionalCombatEncounterSource === 'existing'
             && (rosterState === 'absent' || rosterState === 'ended');
@@ -1758,9 +1759,12 @@ export function installInterceptor() {
 
         // Core user-message injection every turn: PC / relations / pacing / CYOA / RNG / memo / quests.
         // CYOA / pacing follow the State Tracker master toggle (same as Persistent Maps).
+        const activeCombatChatId = getActiveChatId();
         const hasTacticalWork = isTacticalCombatMode(settings)
             || isTraditionalCombatMode(settings)
-            || !!settings.tacticalCombatReturn;
+            || hasPendingNarration(settings, activeCombatChatId)
+            || settings.tacticalCombatByChat?.[activeCombatChatId]?.status === 'active'
+            || settings.traditionalCombatByChat?.[activeCombatChatId]?.status === 'active';
         if (!skipInjection && (settings.enabled || cyoaActive || pacingInject || hasTacticalWork)) {
             // Hard override: while a board fight is active, or while [COMBAT]
             // exists and no board is running, the narrator must not resolve the
@@ -1776,7 +1780,7 @@ export function installInterceptor() {
             const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
             if (tacticalBlock) {
                 tacticalNarrationBlock = tacticalBlock;
-                const traditionalResult = settings.tacticalCombatReturn?.kind === 'traditional';
+                const traditionalResult = getPendingNarration(settings, getActiveChatId())?.kind === 'traditional';
                 injections += traditionalResult
                     ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
                     : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
@@ -2137,21 +2141,23 @@ export function installInterceptor() {
         // end of the prompt so the narrator sees the aftermath as authoritative
         // context immediately before generating.
         if (tacticalNarrationBlock) {
-            const pending = settings.tacticalCombatReturn;
-            const resultId = String(pending?.stateId || '');
-            const isTraditional = pending?.kind === 'traditional';
-            const alreadyInjected = chat.some(message => message?.extra?.tcResultId
-                && String(message.extra.tcResultId) === resultId);
-            markNarrationInjected(settings, getActiveChatId());
-            if (!alreadyInjected) {
-                chat.push({
-                    name: isTraditional ? 'Traditional Combat' : 'Tactical Combat',
-                    mes: tacticalNarrationBlock,
-                    is_user: false,
-                    extra: { type: 'narrator', tcResultId: resultId, tcResultAt: Date.now() },
-                });
-                if (settings.debugMode) {
-                    console.log(`[Multihog Framework] ${isTraditional ? 'Traditional' : 'Tactical'} Combat result injected as a narrator message.`);
+            const pending = getPendingNarration(settings, getActiveChatId());
+            if (pending) {
+                const resultId = String(pending.stateId || '');
+                const isTraditional = pending.kind === 'traditional';
+                const alreadyInjected = chat.some(message => message?.extra?.tcResultId
+                    && String(message.extra.tcResultId) === resultId);
+                markNarrationInjected(settings, getActiveChatId());
+                if (!alreadyInjected) {
+                    chat.push({
+                        name: isTraditional ? 'Traditional Combat' : 'Tactical Combat',
+                        mes: tacticalNarrationBlock,
+                        is_user: false,
+                        extra: { type: 'narrator', tcResultId: resultId, tcResultAt: Date.now() },
+                    });
+                    if (settings.debugMode) {
+                        console.log(`[Multihog Framework] ${isTraditional ? 'Traditional' : 'Tactical'} Combat result injected as a narrator message.`);
+                    }
                 }
             }
         }

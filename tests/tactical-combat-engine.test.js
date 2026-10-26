@@ -817,3 +817,125 @@ describe('tactical combat geometry & dice', () => {
         expect(exported.version).toBeGreaterThanOrEqual(1);
     });
 });
+
+describe('tactical combat resource accounting', () => {
+    function combatState(units) {
+        const state = createEncounterState({
+            seed: 99,
+            grid: { rows: 8, cols: 8 },
+            terrainRows: openTerrain(),
+            turnStyle: 'phase',
+            units,
+        });
+        state.terrain = openTerrain().map(row => row.split('').map(() => 'floor'));
+        return state;
+    }
+
+    function resourceState() {
+        return combatState([
+            {
+                id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 30, ac: 12,
+                attackBonus: 5, damage: '1d6', initiativeBonus: 5,
+                spellAttackBonus: 10,
+                skills: [
+                    { id: 'missile', name: 'Magic Missile', kind: 'attack', spell: true, slotLevel: 1, slotKey: 'spell-1', damage: '1d4+1', range: 6, uses: 2, maxUses: 2 },
+                    { id: 'shield', name: 'Shield', kind: 'buff', spell: true, slotLevel: 1, slotKey: 'spell-1', target: 'self', rounds: 1, acBonus: 5, range: 0, uses: 2, maxUses: 2 },
+                ],
+            },
+            { id: 'enemy-3', name: 'Goblin', side: 'enemy', maxHp: 40, hp: 40, ac: 10, attackBonus: 3, damage: '1d6', initiativeBonus: 0 },
+        ]);
+    }
+
+    it('consumes one shared spell-slot pool instead of one pool per spell', () => {
+        const state = resourceState();
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        aria.x = 1; aria.y = 1;
+        goblin.x = 2; goblin.y = 1;
+        expect(aria.spellSlots['spell-1']).toEqual({ current: 2, max: 2 });
+
+        const first = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'missile', targetId: goblin.id }, { actorSide: 'player', rng: midRoll });
+        expect(first.ok).toBe(true);
+        expect(aria.spellSlots['spell-1'].current).toBe(1);
+        expect(aria.skills.map(skill => skill.uses)).toEqual([1, 1]);
+
+        aria.actionUsed = false;
+        const second = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'shield' }, { actorSide: 'player', rng: midRoll });
+        expect(second.ok).toBe(true);
+        expect(aria.spellSlots['spell-1'].current).toBe(0);
+        expect(aria.skills.map(skill => skill.uses)).toEqual([0, 0]);
+
+        aria.actionUsed = false;
+        const third = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'missile', targetId: goblin.id }, { actorSide: 'player', rng: midRoll });
+        expect(third.ok).toBe(false);
+        expect(third.error).toMatch(/no uses left/i);
+    });
+
+    it('allows at-will abilities to be used repeatedly', () => {
+        const state = combatState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 30, ac: 12, attackBonus: 20, damage: '1d6', initiativeBonus: 5,
+                skills: [{ id: 'cantrip', name: 'Fire Bolt', kind: 'attack', spell: true, unlimited: true, damage: '1d10', range: 6 }] },
+            { id: 'enemy-3', name: 'Goblin', side: 'enemy', maxHp: 100, hp: 100, ac: 5, attackBonus: 3, damage: '1d6' },
+        ]);
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        aria.x = 1; aria.y = 1;
+        goblin.x = 2; goblin.y = 1;
+        for (let i = 0; i < 3; i += 1) {
+            aria.actionUsed = false;
+            const result = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'cantrip', targetId: goblin.id }, { actorSide: 'player', rng: midRoll });
+            expect(result.ok).toBe(true);
+        }
+        expect(aria.skills[0].uses).toBe(0);
+        expect(aria.skills[0].unlimited).toBe(true);
+    });
+
+    it('uses Spell Atk for spell attacks when the sheet provides it', () => {
+        const state = resourceState();
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        aria.x = 1; aria.y = 1;
+        goblin.x = 2; goblin.y = 1;
+        goblin.ac = 15; // d20(6) + Spell Atk(10) hits; weapon attack(+5) would miss.
+        const result = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'missile', targetId: goblin.id }, { actorSide: 'player', rng: lowRoll });
+        expect(result.ok).toBe(true);
+        expect(goblin.hp).toBeLessThan(goblin.maxHp);
+    });
+
+    it('falls back to the normal attack bonus when no Spell Atk is listed', () => {
+        const state = combatState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 30, ac: 12, attackBonus: 10, damage: '1d6', initiativeBonus: 5,
+                skills: [{ id: 'bolt', name: 'Arcane Bolt', kind: 'attack', spell: true, damage: '1d6', range: 6, uses: 1, maxUses: 1 }] },
+            { id: 'enemy-3', name: 'Goblin', side: 'enemy', maxHp: 20, hp: 20, ac: 15, attackBonus: 3, damage: '1d6' },
+        ]);
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        aria.x = 1; aria.y = 1;
+        goblin.x = 2; goblin.y = 1;
+        expect(aria.spellAttackBonus).toBeNull();
+        const result = applyAction(state, { type: 'skill', unitId: aria.id, skillId: 'bolt', targetId: goblin.id }, { actorSide: 'player', rng: lowRoll });
+        expect(result.ok).toBe(true);
+        expect(goblin.hp).toBeLessThan(goblin.maxHp);
+    });
+
+    it('stops applying special effects once the encounter has ended', () => {
+        const state = combatState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 20, ac: 12, attackBonus: 5, damage: '1d6',
+                skills: [{ id: 'dread', name: 'Dread', kind: 'special', range: 6, uses: 1, maxUses: 1 }] },
+            { id: 'enemy-3', name: 'Goblin', side: 'enemy', maxHp: 10, hp: 1, ac: 10, attackBonus: 3, damage: '1d6' },
+        ]);
+        const aria = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        aria.x = 1; aria.y = 1;
+        goblin.x = 2; goblin.y = 1;
+        const beforeHp = aria.hp;
+        const result = applySpecialEffects(state, [
+            { type: 'damage', targetId: goblin.id, amount: '10', resource: 'hp' },
+            { type: 'heal', targetId: aria.id, amount: '10', resource: 'hp' },
+        ], { casterId: aria.id, skillId: 'dread' });
+        expect(state.status).not.toBe('active');
+        expect(result.applied).toHaveLength(1);
+        expect(result.rejected.join(' ')).toMatch(/encounter ended/i);
+        expect(aria.hp).toBe(beforeHp);
+    });
+});
