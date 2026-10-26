@@ -1,5 +1,6 @@
 const COMBATANT_HP_RX = /^(.+?):\s*([+-]?[\d,]+|\?+)(?:\/([\d,]+|\?+))?\s*HP\b(.*)$/i;
-const RESOLVED_STATUS_RX = /(?:^|\|)\s*Status\s*:\s*(?:(?:\(\([^)]*\)\)|\([^)]*\))\s*)*(?:defeated|dead)\b/i;
+const RESOLVED_STATUS_RX = /(?:^|\|)\s*Status\s*:\s*(?:(?:\(\([^)]*\)\)|\([^)]*\))\s*)*(?:defeated|dead|fled|retreated|routed|surrendered|incapacitated)\b/i;
+const FLED_STATUS_RX = /(?:^|\|)\s*Status\s*:\s*(?:(?:\(\([^)]*\)\)|\([^)]*\))\s*)*(?:fled|retreated|routed)\b/i;
 const COMBAT_SIDE_HEADER_RX = /^(ENEMIES|(?:NON[-\s]+PARTY\s+)?ALLIES)\s*:?\s*$/i;
 const COMBAT_STATE_RX = /^\s*COMBAT[ _-]?STATE\s*:\s*([A-Za-z_-]+)\s*$/im;
 const COMBAT_ROUND_RX = /^\s*COMBAT ROUND\s+(\d+)\s*$/im;
@@ -75,6 +76,14 @@ export function parseCombatSideHeader(line) {
  */
 export function isResolvedCombatantStatusLine(line) {
     return RESOLVED_STATUS_RX.test(String(line || '').trim());
+}
+
+/**
+ * @param {string} line
+ * @returns {boolean}
+ */
+export function isFledCombatantStatusLine(line) {
+    return FLED_STATUS_RX.test(String(line || '').trim());
 }
 
 /**

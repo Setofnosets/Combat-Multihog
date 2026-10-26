@@ -76,7 +76,8 @@ describe('Tactical Combat narrator function tool', () => {
     it('registers during init next to the dice tools, not inside the settings UI setup', () => {
         expect(hooksSource).toContain('registerFunctionTool({');
         expect(hooksSource).toContain("name: 'StartTacticalCombat'");
-        expect(hooksSource).toContain('tacticalCombatReturn');
+        expect(hooksSource).toContain('getPendingNarration');
+        expect(hooksSource).toContain('hasPendingNarration');
         expect(hooksSource).toContain("isEffectiveSectionEnabled('tactical_combat'");
         expect(hooksSource).toContain('stealth: false');
         expect(hooksSource).toContain("tacticalCombatEncounterSource || 'auto'");

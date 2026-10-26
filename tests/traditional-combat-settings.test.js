@@ -144,3 +144,10 @@ describe('Traditional Combat settings contract', () => {
         }
     });
 });
+
+describe('Traditional Combat shared settings contract', () => {
+    it('binds the catalogue status element that actually exists in the markup', () => {
+        expect(settingsHtml).toContain('id="rpg_traditional_combat_action_catalog_status"');
+        expect(settingsHtml).not.toContain('id="rpg_traditional_combat_catalog_status"');
+    });
+});

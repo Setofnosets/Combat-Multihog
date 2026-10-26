@@ -12,6 +12,11 @@
  */
 
 export const DEFAULT_LOADOUT_CLASSIFIER_CONFIG = {
+    attackKeywords: [
+        'attack', 'strike', 'bash', 'smash', 'slash', 'pierce', 'cleave', 'shot', 'bolt',
+        'arrow', 'blade', 'sword', 'axe', 'hammer', 'mace', 'spear', 'claw', 'bite',
+        'punch', 'kick', 'wound', 'damage', 'blast', 'beam', 'zap', 'burst',
+    ],
     skillRules: [
         {
             kind: 'heal',
@@ -69,9 +74,9 @@ export const DEFAULT_LOADOUT_CLASSIFIER_CONFIG = {
     willpower: {
         damageKeywords: ['willpower', 'will damage', 'morale', 'resolve'],
         outcomeRules: [
-            { outcome: 'flee', keywords: ['fear', 'terror', 'frighten', 'panic', 'dread', 'demoraliz', 'intimidat', 'despair'] },
-            { outcome: 'switch_side', keywords: ['dominate', 'mind control', 'charm', 'seduce', 'possess', 'compel', 'enslave'] },
-            { outcome: 'incapacitate', keywords: ['sleep', 'slumber', 'hypnot', 'stun', 'paralyze', 'daze', 'coma'] },
+            { outcome: 'flee', keywords: ['fear', 'terror', 'frighten', 'terrif', 'panic', 'dread', 'demoraliz', 'intimidat', 'despair'] },
+            { outcome: 'switch_side', keywords: ['dominat', 'mind control', 'charm', 'seduc', 'possess', 'compel', 'enslav'] },
+            { outcome: 'incapacitate', keywords: ['sleep', 'slumber', 'hypnot', 'stun', 'paralyz', 'daz', 'coma', 'petrif', 'hold person', 'hold monster'] },
             { outcome: 'surrender', keywords: ['surrender', 'yield', 'submit', 'cower'] },
         ],
         complexKeywords: ['summon', 'conjure', 'terrain', 'vein', 'teleport', 'banish', 'illusion', 'wall of', 'pillar', 'polymorph', 'transform', 'create'],
@@ -138,6 +143,7 @@ export function normalizeClassifierConfig(raw) {
     const area = value.area && typeof value.area === 'object' && !Array.isArray(value.area) ? value.area : {};
     const items = value.items && typeof value.items === 'object' ? value.items : {};
     const config = {
+        attackKeywords: keywordList(value.attackKeywords, defaults.attackKeywords),
         skillRules: normalizeSkillRules(value.skillRules, defaults.skillRules),
         buff: {
             acBonus: numberOr(buff.acBonus, defaults.buff.acBonus, 0, 20),
@@ -209,12 +215,29 @@ export function matchesAnyWord(text, keywords) {
         const clean = String(keyword || '').trim().toLowerCase();
         if (!clean) return false;
         const escaped = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        return new RegExp(`\\b${escaped}[a-z]{0,5}\\b`, 'i').test(source);
+        // Very short/ambiguous words must match as whole words. The suffix
+        // allowance exists for natural stems ("regenerat", "invisib").
+        if (clean === 'light' || clean === 'ft') {
+            return new RegExp(`\\b${escaped}\\b`, 'i').test(source);
+        }
+        const regex = new RegExp(
+            `\\b${escaped}((?:s|es|ed|d|ing|er|ers|ion|ions|ment|ments|ive|ives|al|ic|ous|ful|fully|ly|ness|some|le|e|ize|ized|izing|ise|ised|ising|ned|ning|led|ling|ied|ying)?)\\b`,
+            'gi',
+        );
+        for (const match of source.matchAll(regex)) {
+            const suffix = String(match[1] || '').toLowerCase();
+            // "fearless" is not fear, and "restoration-proof" is not a
+            // restoration consumable. Other natural inflections are allowed.
+            if (!/(?:less|proof|free)$/.test(suffix)) return true;
+        }
+        return false;
     });
 }
 
 /**
- * First matching rule wins; unmatched abilities fall back to attack.
+ * First matching rule wins. Damage/attack language takes precedence over broad
+ * support keywords so "Shield Bash" remains an attack instead of becoming a
+ * buff, while ordinary "Shield" still resolves as a buff.
  * @param {string} name
  * @param {string} description
  * @param {object} config
@@ -222,8 +245,12 @@ export function matchesAnyWord(text, keywords) {
  */
 export function classifyAbility(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     const text = `${name || ''} ${description || ''}`;
+    const attackKeywords = config?.attackKeywords || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.attackKeywords || [];
+    const healRule = (config?.skillRules || []).find(rule => rule.kind === 'heal');
+    const explicitHeal = healRule ? matchesAnyWord(text, healRule.keywords) : false;
+    if (!explicitHeal && /\b\d+d\d+\b/i.test(text) && matchesAnyWord(text, attackKeywords)) return 'attack';
     for (const rule of config?.skillRules || []) {
-        if (matchesAny(text, rule.keywords)) return rule.kind;
+        if (matchesAnyWord(text, rule.keywords)) return rule.kind;
     }
     return 'attack';
 }
@@ -240,7 +267,7 @@ export function willpowerOutcomeFor(name, description, config = DEFAULT_LOADOUT_
     const text = `${name || ''} ${description || ''}`;
     const rules = config?.willpower?.outcomeRules || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.willpower.outcomeRules;
     for (const rule of rules || []) {
-        if (matchesAny(text, rule.keywords)) return rule.outcome;
+        if (matchesAnyWord(text, rule.keywords)) return rule.outcome;
     }
     return 'defeat';
 }
@@ -249,14 +276,14 @@ export function buffModifiers(name, description, config = DEFAULT_LOADOUT_CLASSI
     const text = `${name || ''} ${description || ''}`;
     const buff = config?.buff || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.buff;
     return {
-        acBonus: matchesAny(text, buff.acKeywords) ? buff.acBonus : 0,
-        attackBonus: matchesAny(text, buff.attackKeywords) ? buff.attackBonus : 0,
+        acBonus: matchesAnyWord(text, buff.acKeywords) ? buff.acBonus : 0,
+        attackBonus: matchesAnyWord(text, buff.attackKeywords) ? buff.attackBonus : 0,
         rounds: buff.rounds,
     };
 }
 
 export function isRangedAbility(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
-    return matchesAny(`${name || ''} ${description || ''}`, config?.rangedKeywords);
+    return matchesAnyWord(`${name || ''} ${description || ''}`, config?.rangedKeywords);
 }
 
 /**
@@ -276,10 +303,10 @@ export function parseAreaKeywords(name, description, config = DEFAULT_LOADOUT_CL
     if (!text.trim()) return null;
 
     const explicitArea = /\b(?:area|aoe)\s*:\s*(?:burst|aura|sphere|radius)\b/i.test(text);
-    if (matchesAny(text, areaConfig.singleTargetKeywords || []) && !explicitArea) return null;
+    if (matchesAnyWord(text, areaConfig.singleTargetKeywords || []) && !explicitArea) return null;
 
-    const selfMatched = matchesAny(text, areaConfig.selfKeywords || []);
-    const burstMatched = matchesAny(text, areaConfig.burstKeywords || []);
+    const selfMatched = matchesAnyWord(text, areaConfig.selfKeywords || []);
+    const burstMatched = matchesAnyWord(text, areaConfig.burstKeywords || []);
     if (!explicitArea && !selfMatched && !burstMatched) return null;
 
     const maxRadius = Math.max(1, Math.min(24, Math.round(Number(areaConfig.maxRadius) || 6)));
@@ -316,7 +343,7 @@ export function parseAreaKeywords(name, description, config = DEFAULT_LOADOUT_CL
         shape: 'burst',
         radius,
         origin,
-        friendlyFire: matchesAny(text, areaConfig.friendlyFireKeywords || []),
+        friendlyFire: matchesAnyWord(text, areaConfig.friendlyFireKeywords || []),
     };
 }
 

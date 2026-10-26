@@ -117,26 +117,79 @@ export function hasActiveEncounter(settings, chatId = getActiveChatId(), options
     return !!state && state.status === 'active';
 }
 
+function pendingByChat(settings) {
+    if (!settings.tacticalCombatReturnByChat || typeof settings.tacticalCombatReturnByChat !== 'object'
+        || Array.isArray(settings.tacticalCombatReturnByChat)) {
+        settings.tacticalCombatReturnByChat = {};
+    }
+    return settings.tacticalCombatReturnByChat;
+}
+
 /**
  * Queue the authoritative post-combat result for the next narrator generation.
+ * Results are stored per chat so ending two fights in different chats cannot
+ * overwrite the first narration. `tacticalCombatReturn` remains a legacy mirror
+ * of the most recently queued payload.
  * @param {Record<string, any>} settings
  * @param {object} payload
- * @param {{ persist?: boolean }} [options]
+ * @param {{ persist?: boolean, chatId?: string }} [options]
  */
 export function setPendingNarration(settings, payload, options = {}) {
     if (!settings) return;
-    settings.tacticalCombatReturn = payload ? { ...payload } : null;
+    if (!payload) {
+        const chatId = String(options.chatId || '');
+        if (chatId) delete pendingByChat(settings)[chatId];
+        else settings.tacticalCombatReturnByChat = {};
+        const legacy = settings.tacticalCombatReturn;
+        if (!chatId || !legacy?.chatId || String(legacy.chatId) === chatId) {
+            settings.tacticalCombatReturn = null;
+        }
+        if (options.persist !== false) persist();
+        return;
+    }
+    const copy = { ...payload };
+    const chatId = String(copy.chatId || options.chatId || '');
+    if (!copy.chatId && chatId) copy.chatId = chatId;
+    if (chatId) {
+        const map = pendingByChat(settings);
+        map[chatId] = copy;
+        const entries = Object.entries(map);
+        if (entries.length > 12) {
+            entries
+                .filter(([key]) => key !== chatId)
+                .sort((a, b) => Number(a[1]?.createdAt || 0) - Number(b[1]?.createdAt || 0))
+                .slice(0, entries.length - 12)
+                .forEach(([key]) => { delete map[key]; });
+        }
+    }
+    settings.tacticalCombatReturn = copy;
     if (options.persist !== false) persist();
 }
 
 /**
  * @param {Record<string, any>} settings
+ * @param {string|{ chatId?: string }} [chatIdOrOptions]
  * @returns {object|null}
  */
-export function getPendingNarration(settings) {
+export function getPendingNarration(settings, chatIdOrOptions = null) {
+    const chatId = typeof chatIdOrOptions === 'string'
+        ? chatIdOrOptions
+        : String(chatIdOrOptions?.chatId || '');
+    const map = settings?.tacticalCombatReturnByChat;
+    if (chatId && map && typeof map === 'object' && map[chatId]) return map[chatId];
     const pending = settings?.tacticalCombatReturn;
     if (!pending || typeof pending !== 'object') return null;
+    if (chatId && pending.chatId && String(pending.chatId) !== String(chatId)) return null;
     return pending;
+}
+
+/**
+ * @param {Record<string, any>} settings
+ * @param {string} [chatId]
+ * @returns {boolean}
+ */
+export function hasPendingNarration(settings, chatId = '') {
+    return !!getPendingNarration(settings, chatId || null);
 }
 
 /**
@@ -145,9 +198,20 @@ export function getPendingNarration(settings) {
  */
 export function clearPendingNarration(settings, options = {}) {
     if (!settings) return;
+    if (options.chatId) {
+        delete pendingByChat(settings)[String(options.chatId)];
+    } else {
+        settings.tacticalCombatReturnByChat = {};
+    }
     const pending = settings.tacticalCombatReturn;
-    if (!pending) return;
-    if (options.chatId && pending.chatId && String(pending.chatId) !== String(options.chatId)) return;
+    if (!pending) {
+        if (options.persist !== false) persist();
+        return;
+    }
+    if (options.chatId && pending.chatId && String(pending.chatId) !== String(options.chatId)) {
+        if (options.persist !== false) persist();
+        return;
+    }
     settings.tacticalCombatReturn = null;
     if (options.persist !== false) persist();
 }

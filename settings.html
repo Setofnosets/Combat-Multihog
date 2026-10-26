@@ -2343,6 +2343,68 @@
                         <div class="rt-tc-settings-note">Narration mode uses the normal <code>&lt;combat&gt;</code> rules. The narrator describes attacks, damage, saves, and enemy turns. No board opens and no combat tool is registered.</div>
                     </div>
 
+                    <div id="rpg_combat_shared_pane">
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-brain" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Willpower &amp; Shared Rules</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">These rules are shared by Tactical and Traditional combat. They apply to newly started encounters.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_willpower_percent">Derived Willpower as % of max HP</label>
+                                    <input type="number" id="rpg_tactical_combat_willpower_percent" class="text_pole" min="10" max="60" step="5" value="30" />
+                                    <div class="rt-tc-settings-note">Used only when a character has no explicit <code>Willpower: current/max</code> line or architect <code>maxWillpower</code>. Explicit values always win. The formula also adds positive WIS and Will-save modifiers and keeps Willpower below HP.</div>
+                                </div>
+                                <label class="checkbox_label" for="rpg_tactical_combat_willpower_recover">
+                                    <input type="checkbox" id="rpg_tactical_combat_willpower_recover" checked />
+                                    <span>Recover Willpower to full after combat</span>
+                                </label>
+                                <div class="rt-tc-settings-note">Disable to persist current Willpower loss in <code>[CHARACTER]</code>/<code>[PARTY]</code>. Defeated, fled, or Willpower-broken units never recover automatically, and their terminal Status is written back to the memo.</div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-tags" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Loadout Classifiers</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Controls how parsed abilities, spells, and items are classified before an encounter. <code>skillRules</code> are checked in order; the first keyword match wins, and unmatched skills become attacks. <code>attackKeywords</code> lets damage language beat broad support keywords. <code>buff</code> sets the default AC/attack bonuses and duration. <code>items</code> controls which inventory lines become usable consumables. <code>willpower.damageKeywords</code> identifies mental/morale damage, and <code>willpower.outcomeRules</code> maps fear/charm/sleep/morale keywords to break outcomes. Invalid JSON falls back to the shipped rules.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_classifier">Loadout classifier rules (JSON)</label>
+                                    <textarea id="rpg_tactical_combat_classifier" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
+                                    <div id="rpg_tactical_combat_classifier_status" class="rt-tc-setting-status"></div>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_tactical_combat_classifier_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset classifier rules</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-book" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Spell Compendium</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Spell mechanics are resolved per encounter. The shipped definitions cover common tabletop spells; this JSON can override or extend them for a homebrew system. Spell names found in the current <code>[SPELLS]</code> or <code>[CHARACTER]</code>/<code>[PARTY]</code> spell lines without a definition are inferred from their name and spell level, so different chats and rule sets can use different spells without a global rebuild.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_spell_compendium">Spell compendium (JSON)</label>
+                                    <textarea id="rpg_tactical_combat_spell_compendium" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
+                                    <div id="rpg_tactical_combat_spell_compendium_status" class="rt-tc-setting-status"></div>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_tactical_combat_spell_compendium_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset spell compendium</button>
+                                    </div>
+                                </div>
+                                <div class="rt-tc-settings-note">Each level line such as <code>Level 1 (2/2): Magic Missile, Shield</code> is one shared slot pool, not one pool per spell. Cantrips are unlimited. Abilities without a usage suffix are treated as at-will.</div>
+                            </div>
+                        </div>
+                    </div><!-- /#rpg_combat_shared_pane -->
+
                     <div id="rpg_combat_tactical_pane">
                     <div class="rt-tc-settings-actions">
                         <button type="button" id="rpg_tactical_combat_open" class="menu_button interactable"><i class="fa-solid fa-table-cells-large"></i> Open board</button>
@@ -2453,7 +2515,7 @@
                     <div class="inline-drawer">
                         <div class="inline-drawer-toggle inline-drawer-header">
                             <i class="fa-solid fa-brain" style="margin-right: 6px; opacity: 0.65;"></i>
-                            <b>Encounter &amp; Willpower</b>
+                            <b>Tactical Encounter</b>
                             <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
                         </div>
                         <div class="inline-drawer-content">
@@ -2464,24 +2526,12 @@
                             <div class="rt-tc-settings-note">When enabled, the narrator opens the board only after a real attack, hostile spell, charge, ambush, or an explicit COMBAT STATE: HOSTILE/ACTIVE. Enemy presence, threats, negotiation, intimidation, and surrender offers stay in normal roleplay. Disable to require the Start encounter button.</div>
 
                             <div class="rt-tc-field">
-                                <label for="rpg_tactical_combat_willpower_percent">Derived Willpower as % of max HP</label>
-                                <input type="number" id="rpg_tactical_combat_willpower_percent" class="text_pole" min="10" max="60" step="5" value="30" />
-                                <div class="rt-tc-settings-note">Used only when a character has no explicit <code>Willpower: current/max</code> line or architect <code>maxWillpower</code>. Explicit values always win. The formula also adds positive WIS and Will-save modifiers and keeps Willpower below HP. Applies to newly started encounters.</div>
-                            </div>
-
-                            <label class="checkbox_label" for="rpg_tactical_combat_willpower_recover">
-                                <input type="checkbox" id="rpg_tactical_combat_willpower_recover" checked />
-                                <span>Recover Willpower to full after combat</span>
-                            </label>
-                            <div class="rt-tc-settings-note">Disable to persist current Willpower loss in <code>[CHARACTER]</code>/<code>[PARTY]</code>. The board still keeps its final values for review.</div>
-
-                            <div class="rt-tc-field">
                                 <label for="rpg_tactical_combat_max_special_resolutions">Maximum special resolutions per enemy activation</label>
                                 <input type="number" id="rpg_tactical_combat_max_special_resolutions" class="text_pole" min="0" max="4" step="1" value="2" />
                                 <div class="rt-tc-settings-note">Limits how many unique special abilities an enemy batch may send through the resolver. Deterministic Willpower attacks and pre-authored effect templates do not use a resolution call.</div>
                             </div>
 
-                            <div class="rt-tc-settings-note">Willpower keyword and break-outcome rules are editable under <b>Loadout classifiers</b> below. Fear, charm, sleep, and morale keywords map to deterministic outcomes there.</div>
+                            <div class="rt-tc-settings-note">Willpower and loadout classification are shared with Traditional combat under <b>Willpower &amp; Shared Rules</b> above the style panes.</div>
                         </div>
                     </div>
 
@@ -2557,7 +2607,7 @@
                             <div class="rt-tc-field">
                                 <label for="rpg_tactical_combat_outcome_prompt">Outcome-to-narration template</label>
                                 <textarea id="rpg_tactical_combat_outcome_prompt" class="text_pole rt-tc-prompt-input" rows="6" spellcheck="false"></textarea>
-                                <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{details}}</code>.</div>
+                                <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{resources}}</code>, <code>{{details}}</code>.</div>
                                 <button type="button" id="rpg_tactical_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome template</button>
                             </div>
                             <div class="rt-tc-field">
@@ -2586,26 +2636,6 @@
                                 </div>
                             </div>
                             <div class="rt-tc-settings-note">The exported game state contains the grid, terrain rows, every unit's position, HP, AC, attack, stats, resources, skills, items, reachable cells, and legal targets. Changes to this catalogue apply to the next encounter.</div>
-                        </div>
-                    </div>
-
-                    <div class="inline-drawer">
-                        <div class="inline-drawer-toggle inline-drawer-header">
-                            <i class="fa-solid fa-tags" style="margin-right: 6px; opacity: 0.65;"></i>
-                            <b>Loadout Classifiers</b>
-                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
-                        </div>
-                        <div class="inline-drawer-content">
-                            <div class="rt-tc-settings-note">Controls how parsed abilities, spells, and items are classified before an encounter. <code>skillRules</code> are checked in order; the first keyword match wins, and unmatched skills become attacks. <code>buff</code> sets the default AC/attack bonuses and duration. <code>items</code> controls which inventory lines become usable consumables. <code>willpower</code> maps fear/charm/sleep/morale keywords to break outcomes. Invalid JSON falls back to the shipped rules.</div>
-                            <div class="rt-tc-field">
-                                <label for="rpg_tactical_combat_classifier">Loadout classifier rules (JSON)</label>
-                                <textarea id="rpg_tactical_combat_classifier" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
-                                <div id="rpg_tactical_combat_classifier_status" class="rt-tc-setting-status"></div>
-                                <div class="rt-tc-settings-actions">
-                                    <button type="button" id="rpg_tactical_combat_classifier_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset classifier rules</button>
-                                </div>
-                            </div>
-                            <div class="rt-tc-settings-note">Changes apply to the next encounter. Already-created encounters keep the skills/items they were built with.</div>
                         </div>
                     </div>
 
@@ -2762,7 +2792,7 @@
                                 <div class="rt-tc-field">
                                     <label for="rpg_traditional_combat_outcome_prompt">Outcome-to-narration template</label>
                                     <textarea id="rpg_traditional_combat_outcome_prompt" class="text_pole rt-tc-prompt-input" rows="6" spellcheck="false"></textarea>
-                                    <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{details}}</code>.</div>
+                                    <div class="rt-tc-settings-note">Placeholders: <code>{{title}}</code>, <code>{{location}}</code>, <code>{{outcome}}</code>, <code>{{rounds}}</code>, <code>{{survivors}}</code>, <code>{{fallen}}</code>, <code>{{fled}}</code>, <code>{{defeated}}</code>, <code>{{resources}}</code>, <code>{{details}}</code>.</div>
                                     <button type="button" id="rpg_traditional_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome template</button>
                                 </div>
                                 <div class="rt-tc-field">

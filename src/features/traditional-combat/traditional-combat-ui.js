@@ -24,10 +24,12 @@ import {
     restoreCombatScopedState,
     retreatEncounter,
 } from '../tactical-combat/tactical-combat-engine.js';
-import { normalizeSpecialEffects } from '../tactical-combat/tactical-combat-agent.js';
+import { normalizeSpecialEffects, allowedSpecialTargetIds } from '../tactical-combat/tactical-combat-agent.js';
 import { collectEncounterContext } from '../tactical-combat/tactical-combat-context.js';
 import {
+    clearPendingNarration,
     getEncounterForChat,
+    hasPendingNarration,
     removeEncounterForChat,
     setEncounterForChat,
     TRADITIONAL_BY_CHAT_KEY,
@@ -38,7 +40,7 @@ import {
     seedCombatMemo,
     syncCombatResultToMemo,
 } from '../tactical-combat/tactical-combat-memo.js';
-import { continueToNarration, queueCombatOutcome } from '../tactical-combat/tactical-combat-outcome.js';
+import { continueToNarration, queueCombatOutcome, requeueCombatOutcomeIfMissing } from '../tactical-combat/tactical-combat-outcome.js';
 import { isTraditionalCombatMode } from '../combat/combat-mode.js';
 import { buildTraditionalCombatMarkup } from './traditional-combat-markup.js';
 import {
@@ -197,6 +199,9 @@ function openBoard() {
     ui.overlay.classList.add('is-open');
     ui.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('rt-tc-modal-open');
+    try {
+        document.dispatchEvent(new CustomEvent('rt_combat_board_opening', { detail: { board: 'traditional' } }));
+    } catch (_) { /* no-op */ }
     render();
 }
 
@@ -530,16 +535,25 @@ function scheduleAutoNarration(state, settings, options = {}) {
     state.finalization = { ...(state.finalization || {}), autoNarrateStarted: true };
     persist(state);
     cancelAutoNarrate();
-    ui.autoNarrateTimer = setTimeout(() => {
+    const attempt = () => {
         ui.autoNarrateTimer = null;
         if (getActiveChatId() !== chatId) return;
         const latest = getState();
         if (!latest || latest.id !== state.id || latest.finalization?.finalizing) return;
+        if (narratorGenerationBusy()) {
+            const attempts = Number(latest.finalization?.autoNarrateAttempts) || 0;
+            if (attempts >= 20) return;
+            latest.finalization = { ...(latest.finalization || {}), autoNarrateAttempts: attempts + 1 };
+            persist(latest);
+            ui.autoNarrateTimer = setTimeout(attempt, AUTO_NARRATE_DELAY_MS);
+            return;
+        }
         closeBoard();
         void continueToNarration(getSettings()).then(ok => {
             if (!ok) toast('info', 'The result is queued. Send your next message to continue the story.');
         });
-    }, AUTO_NARRATE_DELAY_MS);
+    };
+    ui.autoNarrateTimer = setTimeout(attempt, AUTO_NARRATE_DELAY_MS);
 }
 
 function cancelAutoNarrate() {
@@ -549,10 +563,50 @@ function cancelAutoNarrate() {
     }
 }
 
+function releaseInterruptedFinalization(chatId, stateId, settings = getSettings()) {
+    if (!chatId || !stateId) return;
+    const latest = getEncounterForChat(chatId, settings, { key: TRADITIONAL_BY_CHAT_KEY });
+    if (!latest || latest.id !== stateId || latest.status === 'active') return;
+    latest.finalization = {
+        ...(latest.finalization || {}),
+        finalizing: false,
+        waitingForNarration: false,
+        stage: 'interrupted',
+    };
+    setEncounterForChat(chatId, latest, settings, { key: TRADITIONAL_BY_CHAT_KEY });
+}
+
 async function runCombatFinalization(state, settings, options = {}) {
     const chatId = getActiveChatId();
     if (!chatId || !state || state.status === 'active') return true;
-    if (state.finalization?.narrationQueued) return true;
+    if (state.finalization?.narrationQueued) {
+        requeueCombatOutcomeIfMissing(state, settings);
+        return true;
+    }
+    if (narratorGenerationBusy()) {
+        if (!state.finalization?.waitingForNarration) {
+            state.finalization = {
+                ...(state.finalization || {}),
+                finalizing: true,
+                waitingForNarration: true,
+                stage: 'waiting-for-narration',
+                finalizingStartedAt: state.finalization?.finalizingStartedAt || Date.now(),
+            };
+            persist(state);
+            setTimeout(() => {
+                if (getActiveChatId() !== chatId) {
+                    releaseInterruptedFinalization(chatId, state.id);
+                    return;
+                }
+                const latest = getEncounterForChat(chatId, getSettings(), { key: TRADITIONAL_BY_CHAT_KEY });
+                if (!latest || latest.id !== state.id) return;
+                latest.finalization = { ...(latest.finalization || {}), finalizing: false, waitingForNarration: false };
+                void runCombatFinalization(latest, getSettings(), options);
+            }, 1200);
+        }
+        render();
+        return true;
+    }
     if (state.finalization?.finalizing) return true;
 
     state.finalization = {
@@ -592,7 +646,10 @@ async function runCombatFinalization(state, settings, options = {}) {
         setBusy(false);
     }
 
-    if (getActiveChatId() !== chatId) return true;
+    if (getActiveChatId() !== chatId) {
+        releaseInterruptedFinalization(chatId, state.id);
+        return true;
+    }
     const latest = getState();
     if (!latest || latest.id !== state.id) return true;
     syncCombatResultToMemo(latest, settings);
@@ -621,7 +678,9 @@ function finishEncounter(state, settings = getSettings(), options = {}) {
     if (staleFinalization) {
         state.finalization = { ...(state.finalization || {}), finalizing: false, waitingForNarration: false };
     }
-    if (!state.finalization?.narrationQueued && (!state.finalization?.finalizing || staleFinalization)) {
+    if (state.finalization?.narrationQueued) {
+        requeueCombatOutcomeIfMissing(state, settings);
+    } else if (!state.finalization?.finalizing || staleFinalization) {
         void runCombatFinalization(state, settings, options);
     }
     render();
@@ -705,24 +764,37 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
     const skill = (actor.skills || []).find(entry => entry.id === state.opening.skillId) || null;
     const item = (actor.items || []).find(entry => entry.id === state.opening.itemId) || null;
     state.opening.resolving = true;
-    setBusy(true, 'Resolving the opening action…');
+    const controller = new AbortController();
+    ui.abortController = controller;
+    setBusy(true, 'Resolving the opening action…', true);
     persist(state);
     render();
     try {
         const source = item
-            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome }
-            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome };
+            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, target: item.target, damage: item.damage, heal: item.heal, willpowerDamage: item.willpowerDamage, maxUses: item.maxUses }
+            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, target: skill?.target, damage: skill?.damage, heal: skill?.heal, willpowerDamage: skill?.willpowerDamage, maxUses: skill?.maxUses };
         let resolved;
         if (Array.isArray(skill?.effectTemplate) || Array.isArray(item?.effectTemplate)) {
             const template = skill?.effectTemplate || item?.effectTemplate;
             const effects = resolveEffectTemplate(template, { casterId: actor.id, targetId: target?.id || actor.id });
-            const normalized = normalizeSpecialEffects({ effects }, state, { theater: true });
+            const preparedForTargets = {
+                unit: actor,
+                target,
+                targets: target ? [target] : [],
+                area: null,
+                skill,
+                item,
+            };
+            const normalized = normalizeSpecialEffects({ effects }, state, {
+                theater: true,
+                allowedTargetIds: allowedSpecialTargetIds(preparedForTargets),
+            });
             resolved = normalized.effects.length
                 ? { ok: true, effects: normalized.effects, log: '' }
                 : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
         } else {
             resolved = await resolveTraditionalSpecialEffectWithAgent(state, actor, source, target, settings, {
-                signal: options.signal || null,
+                signal: controller.signal,
             });
         }
         if (getActiveChatId() !== state.chatId) return false;
@@ -748,6 +820,10 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
             return false;
         }
         resetOpeningActorResources(state);
+        if (state.opening?.surprise && !state.opening?.surpriseApplied && state.status === 'active') {
+            applySurprise(state, 'player');
+            state.opening.surpriseApplied = true;
+        }
         state.opening.requiresAgent = false;
         state.opening.resolved = true;
         state.opening.log = resolved.log || '';
@@ -761,6 +837,7 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
         addLog(state, 'opening', `Opening action could not be resolved: ${state.opening.error}`, actor.id);
         return false;
     } finally {
+        if (ui.abortController === controller) ui.abortController = null;
         state.opening.resolving = false;
         setBusy(false);
         render();
@@ -918,7 +995,7 @@ async function startEncounterFlow(options = {}) {
         return { ok: true, alreadyActive: true, state: existing };
     }
     const activeChatId = getActiveChatId();
-    if (settings.tacticalCombatReturn?.chatId && String(settings.tacticalCombatReturn.chatId) === String(activeChatId)) {
+    if (hasPendingNarration(settings, activeChatId)) {
         toast('info', 'A combat result is still queued for the narrator. Let it resolve before starting another encounter.');
         return { ok: false, error: 'A combat result is still queued for this chat.' };
     }
@@ -1254,6 +1331,9 @@ export function installTraditionalCombatUi() {
     document.addEventListener('click', onDocumentClick);
     document.addEventListener('keydown', onKeydown);
     document.addEventListener('rt_open_traditional_combat', openBoard);
+    document.addEventListener('rt_combat_board_opening', (event) => {
+        if (event?.detail?.board !== 'traditional' && ui.overlayOpen) closeBoard();
+    });
 }
 
 export function onTraditionalCombatChatChanged(chatId = getActiveChatId()) {
@@ -1278,8 +1358,11 @@ export function onTraditionalCombatChatChanged(chatId = getActiveChatId()) {
     const state = arrived ? hydrateTraditionalEncounterState(arrived) : null;
     if (state?.preparing?.active) {
         scheduleDeferredArchitect(state, getSettings(), state.preparing.options || {});
-    } else if (state && state.status !== 'active' && !state.finalization?.narrationQueued) {
-        finishEncounter(state, getSettings());
+    } else if (state?.opening?.requiresAgent && !state.opening?.resolving) {
+        scheduleOpeningResolution(state, getSettings(), state.preparing?.options || {});
+    } else if (state && state.status !== 'active') {
+        if (state.finalization?.narrationQueued) requeueCombatOutcomeIfMissing(state, getSettings());
+        else finishEncounter(state, getSettings());
     }
     notifySettings();
     if (ui.overlayOpen) render();
@@ -1371,7 +1454,11 @@ export function resetTraditionalCombatEncounter() {
         ui.architectTimer = null;
     }
     ui.architectStateId = '';
-    removeEncounterForChat(chatId, getSettings(), { key: TRADITIONAL_BY_CHAT_KEY });
+    const settings = getSettings();
+    const existing = getEncounterForChat(chatId, settings, { key: TRADITIONAL_BY_CHAT_KEY });
+    if (existing) clearStaleCombatMemo(existing, settings);
+    clearPendingNarration(settings, { chatId });
+    removeEncounterForChat(chatId, settings, { key: TRADITIONAL_BY_CHAT_KEY });
     resetViewSelection();
     setBusy(false);
     notifySettings();

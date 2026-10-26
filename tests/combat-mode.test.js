@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     isNarrativeCombatMode,
     isTacticalCombatMode,
+    hasActiveCombatBoard,
     isTraditionalCombatMode,
     resolveCombatStyle,
     setCombatStyle,
@@ -35,5 +36,15 @@ describe('combat mode resolution', () => {
         expect(resolveCombatStyle(settings)).toBe('tactical');
         setCombatStyle(settings, 'nonsense');
         expect(settings.combatStyle).toBe('narrative');
+    });
+});
+
+describe('combat style switching guard', () => {
+    it('detects active, preparing, and finalizing boards across both stores', () => {
+        expect(hasActiveCombatBoard({})).toBe(false);
+        expect(hasActiveCombatBoard({ tacticalCombatByChat: { a: { status: 'ended' } } })).toBe(false);
+        expect(hasActiveCombatBoard({ tacticalCombatByChat: { a: { status: 'active' } } })).toBe(true);
+        expect(hasActiveCombatBoard({ traditionalCombatByChat: { b: { preparing: { active: true } } } })).toBe(true);
+        expect(hasActiveCombatBoard({ tacticalCombatByChat: { c: { finalization: { finalizing: true } } } })).toBe(true);
     });
 });

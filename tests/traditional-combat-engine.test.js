@@ -269,3 +269,26 @@ describe('traditional combat theater engine', () => {
         expect(built.state.turnStyle).toBe('phase');
     });
 });
+
+describe('traditional caster metadata', () => {
+    it('preserves and uses Spell Atk for spell attacks', () => {
+        const state = makeState();
+        const caster = getUnitById(state, 'pc-1');
+        const goblin = getUnitById(state, 'enemy-3');
+        caster.spellAttackBonus = 11;
+        caster.spellSaveDC = 15;
+        caster.skills.push({
+            id: 'spell-bolt', name: 'Arcane Bolt', kind: 'attack', spell: true,
+            damage: '1d8', range: 6, maxUses: 1, uses: 1,
+        });
+        goblin.ac = 15;
+        const payload = buildTraditionalAgentGameState(state, ['enemy-3']);
+        const serialized = payload.units.find(unit => unit.id === 'pc-1');
+        expect(serialized).toMatchObject({ spellAttackBonus: 11, spellSaveDC: 15 });
+        const result = applyTraditionalAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'spell-bolt', targetId: 'enemy-3',
+        }, { actorSide: 'player', rng: () => 0.25 });
+        expect(result.ok).toBe(true);
+        expect(goblin.hp).toBeLessThan(goblin.maxHp);
+    });
+});

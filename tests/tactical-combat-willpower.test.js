@@ -64,6 +64,15 @@ describe('Willpower derivation', () => {
         expect(state.units[0].willpower).toBe(state.units[0].maxWillpower);
     });
 
+    it('derives Willpower when a saved board stored null instead of a number', () => {
+        const state = makeState();
+        state.units[0].maxWillpower = null;
+        state.units[0].willpower = null;
+        hydrateEncounterState(state);
+        expect(state.units[0].maxWillpower).toBeGreaterThan(0);
+        expect(state.units[0].willpower).toBe(state.units[0].maxWillpower);
+    });
+
     it('includes Willpower and its targeting metadata in the agent game state', () => {
         const state = makeState();
         const enemy = state.units[1];
@@ -301,5 +310,38 @@ describe('special action preparation', () => {
             type: 'skill', unitId: caster.id, skillId: 'fear', targetId: target.id,
         }, { actorSide: 'player' });
         expect(prepared.ok).toBe(false);
+    });
+});
+
+describe('Willpower immunity', () => {
+    it('rejects a defeat effect against a mindless target', () => {
+        const state = makeState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 20, hp: 20, ac: 12, attackBonus: 5, damage: '1d6' },
+            { id: 'enemy-2', name: 'Construct', side: 'enemy', maxHp: 20, hp: 20, maxWillpower: 0 },
+        ]);
+        const caster = state.units[0];
+        caster.skills.push({ id: 'sleep', name: 'Sleep', kind: 'special', range: 6, maxUses: 1, uses: 1 });
+        const result = applySpecialEffects(state, [
+            { type: 'defeat', targetId: 'enemy-2', outcome: 'incapacitate' },
+        ], { casterId: caster.id, skillId: 'sleep' });
+        expect(result.ok).toBe(false);
+        expect(result.rejected.join(' ')).toMatch(/immune/i);
+        expect(state.units[1].defeated).toBe(false);
+    });
+
+    it('does not reduce Willpower or break a mindless target with Willpower damage', () => {
+        const state = makeState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 20, hp: 20, ac: 12, attackBonus: 5, damage: '1d6' },
+            { id: 'enemy-2', name: 'Construct', side: 'enemy', maxHp: 20, hp: 20, maxWillpower: 0 },
+        ]);
+        const caster = state.units[0];
+        caster.skills.push({ id: 'dread', name: 'Dread', kind: 'special', range: 6, maxUses: 1, uses: 1 });
+        const result = applySpecialEffects(state, [
+            { type: 'damage', targetId: 'enemy-2', amount: '10', resource: 'willpower', willpowerOutcome: 'flee' },
+        ], { casterId: caster.id, skillId: 'dread' });
+        expect(result.ok).toBe(true);
+        expect(state.units[1].willpower).toBe(0);
+        expect(state.units[1].defeated).toBe(false);
+        expect(state.units[1].fled).toBe(false);
     });
 });

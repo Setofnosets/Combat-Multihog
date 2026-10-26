@@ -33,6 +33,7 @@ import {
 } from '../features/traditional-combat/traditional-combat-prompts.js';
 import { DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON } from '../features/traditional-combat/traditional-combat-constants.js';
 import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tactical-combat-classifiers.js';
+import { DEFAULT_SPELL_COMPENDIUM_JSON } from '../features/tactical-combat/tactical-combat-spell-compendium.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
     DEFAULT_ROUTER_COMBAT_PROFILE_GUIDANCE_AGENT,
@@ -230,8 +231,10 @@ export function buildDefaultSettings() {
         tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
         tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
         tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON,
+        tacticalCombatSpellCompendiumJson: DEFAULT_SPELL_COMPENDIUM_JSON,
         tacticalCombatByChat: {},
         tacticalCombatReturn: null,
+        tacticalCombatReturnByChat: {},
 
         // ── Traditional Combat ────────────────────────────────────────────
         // No-grid turn-based mode. Shares the Willpower/classifier settings and

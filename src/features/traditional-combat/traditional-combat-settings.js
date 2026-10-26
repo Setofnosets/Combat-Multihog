@@ -45,7 +45,7 @@ function setChecked(node, value) {
 }
 
 function catalogStatus(settings) {
-    const node = el('rpg_traditional_combat_catalog_status');
+    const node = el('rpg_traditional_combat_action_catalog_status');
     if (!node) return;
     const raw = String(settings?.traditionalCombatActionCatalogJson || '').trim();
     if (!raw) {

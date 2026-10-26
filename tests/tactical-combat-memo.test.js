@@ -158,3 +158,104 @@ Unchanged | keep me
         expect(report).toContain('Do not re-adjudicate');
     });
 });
+
+describe('combat resource writeback', () => {
+    function resourceState() {
+        const state = createEncounterState({
+            chatId: 'chat-A',
+            seed: 12,
+            grid: { rows: 6, cols: 6 },
+            terrainRows: Array.from({ length: 6 }, () => '......'),
+            units: [
+                {
+                    id: 'pc-1', name: 'Aria', side: 'player', isPlayerCharacter: true,
+                    maxHp: 20, hp: 12, ac: 13, attackBonus: 5, damage: '1d8+2',
+                    skills: [
+                        { id: 'missile', name: 'Magic Missile', kind: 'attack', spell: true, slotLevel: 1, slotKey: 'spell-1', damage: '1d4+1', uses: 1, maxUses: 2 },
+                        { id: 'shield', name: 'Shield', kind: 'buff', spell: true, slotLevel: 1, slotKey: 'spell-1', target: 'self', uses: 1, maxUses: 2 },
+                        { id: 'surge', name: 'Action Surge', kind: 'buff', uses: 0, maxUses: 1, description: 'Extra action; 1/1 per rest' },
+                        { id: 'lie', name: 'Silver Tongue', unlimited: true, uses: 0, maxUses: 0, description: 'A quick lie' },
+                    ],
+                    items: [{ id: 'potion', name: 'Healing Potion', kind: 'heal', amount: '2d4+2', uses: 1, maxUses: 2 }],
+                },
+                { id: 'enemy-2', name: 'Goblin', side: 'enemy', maxHp: 8, hp: 0, ac: 11, attackBonus: 3, damage: '1d6' },
+            ],
+        });
+        state.units[1].defeated = true;
+        state.status = 'victory';
+        state.outcome = { label: 'Victory', summary: 'The goblin falls.' };
+        return state;
+    }
+
+    it('writes shared spell slots, ability uses, and item quantities back to the memo', () => {
+        const state = resourceState();
+        state.terrain = Array.from({ length: 6 }, () => Array.from({ length: 6 }, () => 'floor'));
+        const settings = {
+            currentMemo: `[CHARACTER]
+Aria (Fighter): 20/20 HP
+Abilities: Action Surge (Extra action; 1/1 per rest), Silver Tongue (A quick lie)
+Spells: Level 1 (2/2): Magic Missile, Shield
+Status: Healthy
+[/CHARACTER]
+
+[INVENTORY]
+- Healing Potion x2 [restores 2d4+2]
+[/INVENTORY]`,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Aria (Fighter): 12/20 HP');
+        expect(settings.currentMemo).toContain('Level 1 (1/2): Magic Missile, Shield');
+        expect(settings.currentMemo).toContain('Action Surge (Extra action; 0/1 per rest)');
+        expect(settings.currentMemo).toContain('Silver Tongue (A quick lie)');
+        expect(settings.currentMemo).toContain('- Healing Potion x1');
+    });
+
+    it('inserts a terminal Status when the memo entry has no Status line', () => {
+        const state = resourceState();
+        state.terrain = Array.from({ length: 6 }, () => Array.from({ length: 6 }, () => 'floor'));
+        const aria = state.units[0];
+        aria.fled = true;
+        aria.willpowerBroken = true;
+        aria.willpower = 0;
+        const settings = {
+            currentMemo: `[CHARACTER]
+Aria (Fighter): 12/20 HP
+Willpower: 0/8
+[/CHARACTER]`,
+            tacticalCombatWillpowerRecoverAfterCombat: true,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Status: Fled (Willpower broken)');
+        expect(settings.currentMemo).toContain('Willpower: 0/8');
+    });
+
+    it('does not restore Willpower for a defeated unit', () => {
+        const state = resourceState();
+        state.terrain = Array.from({ length: 6 }, () => Array.from({ length: 6 }, () => 'floor'));
+        const aria = state.units[0];
+        aria.defeated = true;
+        aria.defeatCause = 'willpower';
+        aria.willpower = 0;
+        aria.maxWillpower = 8;
+        const settings = {
+            currentMemo: `[CHARACTER]
+Aria (Fighter): 12/20 HP
+Willpower: 0/8
+Status: Healthy
+[/CHARACTER]`,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Status: Defeated (Willpower broken)');
+        expect(settings.currentMemo).toContain('Willpower: 0/8');
+    });
+
+    it('includes the resource ledger in the authoritative tracker report', () => {
+        const state = resourceState();
+        state.terrain = Array.from({ length: 6 }, () => Array.from({ length: 6 }, () => 'floor'));
+        const report = buildCombatTrackerReport(state);
+        expect(report).toContain('Resource ledger:');
+        expect(report).toContain('Aria: L1 1/2');
+        expect(report).toContain('Action Surge 0/1');
+        expect(report).toContain('Healing Potion 1/2');
+    });
+});

@@ -40,6 +40,13 @@ import {
     normalizeWillpowerResource,
     willpowerOutcomeLabel,
 } from './tactical-combat-willpower.js';
+import {
+    consumeUse,
+    describeResource,
+    ensureSpellSlots,
+    getResourceState,
+    hasUses,
+} from './tactical-combat-resources.js';
 
 // ── RNG & dice ───────────────────────────────────────────────────────────────
 
@@ -365,8 +372,14 @@ function isAreaTargetEligible(caster, target, source, area) {
     const mode = String(source.target || 'any').toLowerCase();
     if (mode === 'enemy') return target.id !== caster.id && isHostile(caster.side, target.side);
     if (mode === 'self') return target.id === caster.id;
-    if (mode === 'ally') return isFriendly(caster.side, target.side);
-    return true;
+    if (mode === 'ally') return target.id === caster.id || isFriendly(caster.side, target.side);
+    // Special "any" areas still honour friendlyFire: a hostile freeform burst
+    // must not catch the caster or allies unless the ability explicitly says it
+    // does. Utility auras that should include allies are authored with target
+    // "ally"/"self", which were handled above.
+    if (target.id === caster.id) return false;
+    if (area.friendlyFire === true) return true;
+    return isHostile(caster.side, target.side);
 }
 
 /**
@@ -638,6 +651,13 @@ function makeUnitGlyph(name) {
     return String(name || '??').slice(0, 2).toUpperCase();
 }
 
+function safeUnitColor(value, fallback) {
+    const color = String(value || '').trim();
+    if (/^#[0-9a-f]{3,8}$/i.test(color)) return color;
+    if (/^[a-z]{3,20}$/i.test(color)) return color;
+    return fallback;
+}
+
 function normalizeStatus(raw) {
     if (!raw || typeof raw !== 'object') return null;
     const rounds = clampInt(raw.rounds, 1, 99) || 1;
@@ -664,6 +684,7 @@ function normalizeSkill(raw, index, side) {
     const name = String(raw.name || raw.label || `Skill ${index + 1}`).trim().slice(0, 80);
     const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
     const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
+    const unlimited = raw.unlimited === true;
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
     const resource = normalizeWillpowerResource(raw.resource ?? raw.targetResource ?? raw.stat, 'hp');
     const target = String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase();
@@ -693,8 +714,14 @@ function normalizeSkill(raw, index, side) {
         attackBonus: Number(raw.attackBonus) || 0,
         bonusAction: !!raw.bonusAction,
         rounds: clampInt(raw.rounds, 1, 10) || 2,
-        maxUses,
-        uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
+        save: String(raw.save || '').toLowerCase().slice(0, 8),
+        spell: raw.spell === true,
+        slotLevel: raw.slotLevel == null ? null : clampInt(raw.slotLevel, 0, 9),
+        slotKey: String(raw.slotKey || ''),
+        utility: raw.utility === true,
+        unlimited,
+        maxUses: unlimited ? 0 : maxUses,
+        uses: unlimited ? 0 : (raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses)),
         effectTemplate: Array.isArray(raw.effectTemplate)
             ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
             : null,
@@ -706,8 +733,11 @@ function normalizeItem(raw, index) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || `Item ${index + 1}`).trim().slice(0, 80);
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
-    const rawTarget = String(raw.target || 'ally').toLowerCase();
-    const target = ['ally', 'enemy', 'any'].includes(rawTarget) ? rawTarget : 'ally';
+    const kind = ['heal', 'buff', 'special'].includes(String(raw.kind || '').toLowerCase())
+        ? String(raw.kind).toLowerCase()
+        : 'heal';
+    const rawTarget = String(raw.target || (kind === 'special' ? 'any' : 'ally')).toLowerCase();
+    const target = ['ally', 'enemy', 'any'].includes(rawTarget) ? rawTarget : (kind === 'special' ? 'any' : 'ally');
     const area = normalizeArea(raw.area ?? raw.aoe ?? raw.areaTemplate, {
         defaultOrigin: target === 'self' ? 'self' : 'target',
         maxRadius: TC_AREA_MAX_RADIUS,
@@ -716,12 +746,13 @@ function normalizeItem(raw, index) {
         id: String(raw.id || `item-${slug(name, `item-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || '').slice(0, 300),
-        kind: ['heal', 'buff', 'special'].includes(String(raw.kind || '').toLowerCase())
-            ? String(raw.kind).toLowerCase()
-            : 'heal',
+        kind,
         resource: normalizeWillpowerResource(raw.resource ?? raw.stat, 'hp'),
         target,
         amount: String(raw.amount || raw.heal || ((raw.kind || 'heal') === 'heal' ? '2d4+2' : '')).slice(0, 40),
+        acBonus: Number(raw.acBonus) || 0,
+        attackBonus: Number(raw.attackBonus) || 0,
+        rounds: clampInt(raw.rounds, 1, 10) || 2,
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
         range: raw.range == null ? (area && area.origin === 'target' ? 6 : 0) : clampInt(raw.range, 0, 12),
@@ -787,13 +818,14 @@ export function normalizeUnitSeed(seed, meta) {
         : maxWillpower;
     const attackResource = normalizeWillpowerResource(seed?.attackResource, 'hp');
 
-    return {
+    const unit = {
         id: String(seed?.id || `${prefix}-${index + 1}`).slice(0, 60),
         name,
         classLabel: String(seed?.classLabel || seed?.className || '').slice(0, 80),
         side,
         originalSide: side,
         sideChanged: false,
+        isPlayerCharacter: seed?.isPlayerCharacter === true,
         x: 0,
         y: 0,
         hp,
@@ -818,6 +850,16 @@ export function normalizeUnitSeed(seed, meta) {
         attackResource,
         willpowerDamage: String(seed?.willpowerDamage ?? seed?.willDamage ?? '').trim().slice(0, 40),
         attackWillpowerOutcome: normalizeWillpowerOutcome(seed?.attackWillpowerOutcome ?? seed?.willOutcome, 'defeat'),
+        spellAttackBonus: seed?.spellAttackBonus == null
+            || String(seed.spellAttackBonus).trim() === ''
+            || !Number.isFinite(Number(seed.spellAttackBonus))
+            ? null
+            : clampInt(seed.spellAttackBonus, -10, 30),
+        spellSaveDC: seed?.spellSaveDC == null
+            || String(seed.spellSaveDC).trim() === ''
+            || !Number.isFinite(Number(seed.spellSaveDC))
+            ? null
+            : clampInt(seed.spellSaveDC, 1, 40),
         initiativeBonus,
         initiative: 0,
         speed,
@@ -832,6 +874,12 @@ export function normalizeUnitSeed(seed, meta) {
         fled: false,
         statuses: [],
         skills,
+        spellSlots: seed?.spellSlots && typeof seed.spellSlots === 'object' && !Array.isArray(seed.spellSlots)
+            ? Object.fromEntries(Object.entries(seed.spellSlots).map(([key, pool]) => [key, {
+                current: Math.max(0, Number(pool?.current) || 0),
+                max: Math.max(0, Number(pool?.max) || 0),
+            }]))
+            : {},
         items,
         inventory: (Array.isArray(seed?.inventory) ? seed.inventory : [])
             .filter(entry => entry && typeof entry === 'object')
@@ -848,10 +896,12 @@ export function normalizeUnitSeed(seed, meta) {
         stats,
         level: clampInt(seed?.level, 1, 30) || 1,
         notes: String(seed?.notes || '').slice(0, 500),
-        color: String(seed?.color || TC_SIDE_COLORS[side] || TC_SIDE_COLORS.enemy),
+        color: safeUnitColor(seed?.color, TC_SIDE_COLORS[side] || TC_SIDE_COLORS.enemy),
         glyph: String(seed?.glyph || makeUnitGlyph(name)).slice(0, 3),
         source: seed?.source || '',
     };
+    ensureSpellSlots(unit);
+    return unit;
 }
 
 /**
@@ -1154,6 +1204,22 @@ export function getEffectiveAttackBonus(state, unit, extra = 0) {
     return (Number(unit.attackBonus) || 0) + (Number(terrain.attackBonus) || 0) + getStatusAttackBonus(unit) + (Number(extra) || 0);
 }
 
+/**
+ * Spell attacks use the sheet's Spell Atk when present; weapon attacks and
+ * unlabelled abilities keep the ordinary attack bonus. Terrain and status
+ * modifiers apply equally to both.
+ * @param {object} state
+ * @param {object} unit
+ * @param {object} source
+ * @returns {number}
+ */
+function getSourceAttackBonus(state, unit, source) {
+    const normal = Number(unit?.attackBonus) || 0;
+    const spell = unit?.spellAttackBonus == null ? NaN : Number(unit.spellAttackBonus);
+    const base = source?.spell === true && Number.isFinite(spell) ? spell : normal;
+    return getEffectiveAttackBonus(state, unit, (Number(source?.attackBonus) || 0) + base - normal);
+}
+
 function applyHazardAtRoundStart(state, unit, rng) {
     if (!unit || unit.defeated || unit.fled) return;
     const terrain = getTerrain(state, unit.x, unit.y);
@@ -1371,16 +1437,34 @@ export function addLog(state, type, text, unitId = null) {
 
 // ── Damage & outcomes ────────────────────────────────────────────────────────
 
-function isHostile(attackerSide, targetSide) {
-    const friendly = new Set(['player', 'ally']);
-    return (friendly.has(attackerSide) && targetSide === 'enemy')
-        || (attackerSide === 'enemy' && friendly.has(targetSide));
+const FRIENDLY_SIDES = new Set(['player', 'ally']);
+
+/**
+ * Shared side-compatibility rule used by the tactical engine and the
+ * traditional theater adapter. Keeping one implementation prevents the two
+ * modes from disagreeing about who is a legal enemy or ally.
+ * @param {string} attackerSide
+ * @param {string} targetSide
+ * @returns {boolean}
+ */
+export function isHostileSide(attackerSide, targetSide) {
+    return (FRIENDLY_SIDES.has(attackerSide) && targetSide === 'enemy')
+        || (attackerSide === 'enemy' && FRIENDLY_SIDES.has(targetSide));
 }
 
-function isFriendly(attackerSide, targetSide) {
+/**
+ * @param {string} attackerSide
+ * @param {string} targetSide
+ * @returns {boolean}
+ */
+export function isFriendlySide(attackerSide, targetSide) {
     return attackerSide === targetSide
-        || (new Set(['player', 'ally']).has(attackerSide) && new Set(['player', 'ally']).has(targetSide));
+        || (FRIENDLY_SIDES.has(attackerSide) && FRIENDLY_SIDES.has(targetSide));
 }
+
+// Internal aliases keep the engine's action code readable.
+const isHostile = isHostileSide;
+const isFriendly = isFriendlySide;
 
 function canTarget(unit, target, kind) {
     if (!target || target === unit) return kind !== 'attack';
@@ -1479,6 +1563,7 @@ export function healUnit(state, target, amount, sourceLabel = '', resource = 'hp
  */
 export function breakWillpower(state, target, options = {}) {
     if (!target || target.defeated || target.fled) return false;
+    if (isWillpowerImmune(target)) return false;
     if (target.willpowerBroken) return false;
     const outcome = normalizeWillpowerOutcome(options.outcome, 'defeat');
     target.willpower = 0;
@@ -1813,6 +1898,8 @@ function snapshotUnitForm(unit) {
         maxWillpower: unit.maxWillpower,
         willpower: unit.willpower,
         attackBonus: unit.attackBonus,
+        spellAttackBonus: unit.spellAttackBonus,
+        spellSaveDC: unit.spellSaveDC,
         attackRange: unit.attackRange,
         damage: unit.damage,
         damageType: unit.damageType,
@@ -1909,8 +1996,8 @@ function revertTransform(state, unit, reason = '') {
     if (!unit?.transform || unit.transform.permanent) return false;
     const original = unit.transform.original || {};
     for (const key of [
-        'name', 'classLabel', 'ac', 'maxHp', 'maxWillpower', 'attackBonus', 'attackRange',
-        'damage', 'damageType', 'speed', 'level', 'notes', 'glyph', 'color',
+        'name', 'classLabel', 'ac', 'maxHp', 'maxWillpower', 'attackBonus', 'spellAttackBonus',
+        'spellSaveDC', 'attackRange', 'damage', 'damageType', 'speed', 'level', 'notes', 'glyph', 'color',
         'attackResource', 'willpowerDamage', 'attackWillpowerOutcome', 'skills', 'items', 'inventory',
     ]) {
         if (Object.prototype.hasOwnProperty.call(original, key)) {
@@ -1987,8 +2074,8 @@ export function applySpecialEffects(state, effects, options = {}) {
     const item = options.itemId ? findItem(caster, options.itemId) : null;
     if (options.skillId && !skill) return { ok: false, error: 'Unknown ability.', applied: [], rejected: [], ended: false };
     if (options.itemId && !item) return { ok: false, error: 'Unknown item.', applied: [], rejected: [], ended: false };
-    if (skill && skill.uses <= 0) return { ok: false, error: `${skill.name} has no uses left.`, applied: [], rejected: [], ended: false };
-    if (item && item.uses <= 0) return { ok: false, error: `${item.name} has no uses left.`, applied: [], rejected: [], ended: false };
+    if (skill && !hasUses(skill, caster)) return { ok: false, error: `${skill.name} has no uses left.`, applied: [], rejected: [], ended: false };
+    if (item && !hasUses(item, caster)) return { ok: false, error: `${item.name} has no uses left.`, applied: [], rejected: [], ended: false };
     if (skill && (skill.bonusAction ? caster.bonusUsed : caster.actionUsed)) {
         return { ok: false, error: 'That action is already spent.', applied: [], rejected: [], ended: false };
     }
@@ -2003,6 +2090,13 @@ export function applySpecialEffects(state, effects, options = {}) {
     const list = Array.isArray(effects) ? effects.slice(0, maxEffects) : [];
 
     for (const effect of list) {
+        // A defeat or damage effect can end the encounter mid-list. Re-evaluate
+        // after every previous effect, then stop before applying the next one.
+        if (state.status === 'active') checkEncounterEnd(state);
+        if (state.status !== 'active') {
+            rejected.push('The encounter ended before the remaining effects could resolve.');
+            break;
+        }
         if (!effect || typeof effect !== 'object') {
             rejected.push('Effect was not an object.');
             continue;
@@ -2064,6 +2158,10 @@ export function applySpecialEffects(state, effects, options = {}) {
                 rejected.push(`Unknown target "${effect.targetId}".`);
                 continue;
             }
+            if (isWillpowerImmune(target)) {
+                rejected.push(`${target.name} is immune to Willpower effects.`);
+                continue;
+            }
             if (!target.willpowerBroken && Number(target.willpower) > 0) {
                 rejected.push(`${target.name} still has Willpower; a defeat effect is not legal.`);
                 continue;
@@ -2109,6 +2207,11 @@ export function applySpecialEffects(state, effects, options = {}) {
                 const y = Number(cell?.y);
                 const terrainId = String(cell?.terrain || effect.terrain || '').toLowerCase();
                 if (!inBounds(state, x, y) || !TC_TERRAIN[terrainId]) continue;
+                const definition = TC_TERRAIN[terrainId];
+                if (definition.walkable === false) {
+                    const occupant = state.units.find(unit => !unit.defeated && !unit.fled && unit.x === x && unit.y === y);
+                    if (occupant) continue;
+                }
                 state.terrain[y][x] = terrainId;
                 changed += 1;
             }
@@ -2181,12 +2284,12 @@ export function applySpecialEffects(state, effects, options = {}) {
     }
 
     if (skill) {
-        skill.uses = Math.max(0, Number(skill.uses) - 1);
+        consumeUse(skill, caster);
         if (skill.bonusAction) caster.bonusUsed = true;
         else caster.actionUsed = true;
     }
     if (item) {
-        item.uses = Math.max(0, Number(item.uses) - 1);
+        consumeUse(item, caster);
         caster.actionUsed = true;
     }
     if (narrative) addLog(state, 'special', String(narrative).slice(0, 600), caster.id);
@@ -2279,7 +2382,7 @@ export function prepareSpecialAction(state, action, options = {}) {
     const source = skill || item;
     if (!source) return { ok: false, error: 'Special action needs a skillId or itemId.' };
     if (source.kind !== 'special') return { ok: false, error: `${source.name} does not require special resolution.` };
-    if (source.uses <= 0) return { ok: false, error: `${source.name} has no uses left.` };
+    if (!hasUses(source, unit)) return { ok: false, error: `${source.name} has no uses left.` };
     const resourceKey = skill?.bonusAction ? 'bonusUsed' : 'actionUsed';
     if (unit[resourceKey]) {
         return { ok: false, error: skill?.bonusAction ? `${unit.name} has already used a bonus action.` : `${unit.name} has already used their action.` };
@@ -2300,7 +2403,7 @@ export function prepareSpecialAction(state, action, options = {}) {
             if (!primary) return { ok: false, error: `${source.name} needs a target or targetCell.` };
             anchor = { x: primary.x, y: primary.y };
         }
-        const areaResult = getAreaTargets(state, unit, source, anchor, { ...options, allowEmpty: true });
+        const areaResult = getAreaTargets(state, unit, source, anchor, { ...options, allowEmpty: options.allowEmptyArea === true });
         if (!areaResult.ok) return { ok: false, error: areaResult.error || `${source.name} has no legal area.` };
         return {
             ok: true,
@@ -2421,7 +2524,7 @@ function resolveAreaAttack(state, unit, source, areaResult, options, rng, source
         const result = resolveAttack(state, unit, target, {
             rng,
             source: sourceLabel,
-            attackBonus: getEffectiveAttackBonus(state, unit, source.attackBonus || 0),
+            attackBonus: getSourceAttackBonus(state, unit, source),
             damage: source.damage || '1d6',
             resource: source.resource,
             willpowerDamage: source.willpowerDamage,
@@ -2581,7 +2684,7 @@ export function applyAction(state, action, options = {}) {
             if (skill.kind === 'special') {
                 return rejectAction(state, action, `${skill.name} requires special resolution by the combat agent.`, source);
             }
-            if (skill.uses <= 0) return rejectAction(state, action, `${skill.name} has no uses left.`, source);
+            if (!hasUses(skill, unit)) return rejectAction(state, action, `${skill.name} has no uses left.`, source);
             const resourceKey = skill.bonusAction ? 'bonusUsed' : 'actionUsed';
             if (unit[resourceKey]) {
                 return rejectAction(state, action, skill.bonusAction
@@ -2592,7 +2695,7 @@ export function applyAction(state, action, options = {}) {
             if (areaResult) {
                 if (!areaResult.ok) return rejectAction(state, action, areaResult.error || `No legal targets for ${skill.name}.`, source);
                 unit[resourceKey] = true;
-                skill.uses = Math.max(0, Number(skill.uses) - 1);
+                consumeUse(skill, unit);
                 if (skill.kind === 'attack') return resolveAreaAttack(state, unit, skill, areaResult, options, rng, source);
                 if (skill.kind === 'heal') return resolveAreaHeal(state, unit, skill, areaResult, rng);
                 return resolveAreaBuff(state, unit, skill, areaResult);
@@ -2612,12 +2715,12 @@ export function applyAction(state, action, options = {}) {
                 return rejectAction(state, action, 'Line of sight is blocked.', source);
             }
             unit[resourceKey] = true;
-            skill.uses = Math.max(0, Number(skill.uses) - 1);
+            consumeUse(skill, unit);
             if (skill.kind === 'attack') {
                 return resolveAttack(state, unit, target, {
                     rng,
                     source,
-                    attackBonus: getEffectiveAttackBonus(state, unit, skill.attackBonus),
+                    attackBonus: getSourceAttackBonus(state, unit, skill),
                     damage: skill.damage || '1d6',
                     resource: skill.resource,
                     willpowerDamage: skill.willpowerDamage,
@@ -2657,12 +2760,12 @@ export function applyAction(state, action, options = {}) {
             if (item.kind === 'special') {
                 return rejectAction(state, action, `${item.name} requires special resolution by the combat agent.`, source);
             }
-            if (item.uses <= 0) return rejectAction(state, action, `${item.name} has no uses left.`, source);
+            if (!hasUses(item, unit)) return rejectAction(state, action, `${item.name} has no uses left.`, source);
             const areaResult = resolveAreaAction(state, unit, item, action, options);
             if (areaResult) {
                 if (!areaResult.ok) return rejectAction(state, action, areaResult.error || `No legal targets for ${item.name}.`, source);
                 unit.actionUsed = true;
-                item.uses = Math.max(0, Number(item.uses) - 1);
+                consumeUse(item, unit);
                 if (item.kind === 'heal') return resolveAreaHeal(state, unit, item, areaResult, rng);
                 return resolveAreaBuff(state, unit, item, areaResult);
             }
@@ -2681,7 +2784,7 @@ export function applyAction(state, action, options = {}) {
                 return rejectAction(state, action, `${target.name} is out of item range.`, source);
             }
             unit.actionUsed = true;
-            item.uses = Math.max(0, Number(item.uses) - 1);
+            consumeUse(item, unit);
             if (item.kind === 'heal') {
                 const amount = rollDice(item.amount || '2d4+2', rng).total;
                 if (item.resource === 'both') {
@@ -2691,7 +2794,14 @@ export function applyAction(state, action, options = {}) {
                     healUnit(state, target, amount, item.name, item.resource);
                 }
             } else {
-                addStatus(target, { id: slug(item.name, 'item'), label: item.name, rounds: 2, description: item.description });
+                addStatus(target, {
+                    id: slug(item.name, 'item'),
+                    label: item.name,
+                    rounds: item.rounds || 2,
+                    acBonus: item.acBonus,
+                    attackBonus: item.attackBonus,
+                    description: item.description,
+                });
             }
             checkEncounterEnd(state);
             return { ok: true, log: `${item.name} used.`, ended: state.status !== 'active' };
@@ -2805,8 +2915,6 @@ export function applyOpeningAction(state, opening, options = {}) {
 
     const inferSurprise = request.surprise === true
         || /\b(ambush|ambushes|surprise|surprised|sneak attack|from behind|caught off guard)\b/i.test(text);
-    if (inferSurprise) applySurprise(state, 'player');
-
     const skill = (actor.skills || []).find(entry => {
         if (request.skillName && openingNameMatch(entry.name, request.skillName)) return true;
         return text.toLowerCase().includes(String(entry.name || '').toLowerCase());
@@ -2833,6 +2941,12 @@ export function applyOpeningAction(state, opening, options = {}) {
             error: '',
             resolvedAt: 0,
         };
+        // The surprise round begins immediately even though the special effect
+        // itself is resolved asynchronously by the agent.
+        if (inferSurprise && state.status === 'active') {
+            applySurprise(state, 'player');
+            state.opening.surpriseApplied = true;
+        }
         return {
             ok: false,
             requiresAgent: true,
@@ -2894,6 +3008,14 @@ export function applyOpeningAction(state, opening, options = {}) {
         addLog(state, 'opening', `Opening action could not be resolved: ${result.error || 'unknown error'}.`, actor.id);
         return { ok: false, actorId: actor.id, targetId: target?.id || '', error: result.error };
     }
+    if (inferSurprise && state.status === 'active') {
+        applySurprise(state, 'player');
+    }
+    state.opening = {
+        ...state.opening,
+        surprise: inferSurprise,
+        surpriseApplied: inferSurprise && state.surprise?.remaining > 0,
+    };
     if (state.status !== 'active') {
         state.outcome = buildOutcomeSummary(state);
     }
@@ -2969,6 +3091,7 @@ function rollDamagePool(expression, critical, rng) {
 function resolveAttack(state, unit, target, options) {
     const rng = options.rng;
     const attackBonus = Number(options.attackBonus) || 0;
+    const resource = normalizeWillpowerResource(options.resource, 'hp');
     const roll = rollDie(20, rng);
     const natural = roll;
     const total = roll + attackBonus;
@@ -2990,7 +3113,6 @@ function resolveAttack(state, unit, target, options) {
         return { ok: true, log: 'Missed.', hit: false, ended: state.status !== 'active' };
     }
 
-    const resource = normalizeWillpowerResource(options.resource, 'hp');
     let hpDamage = 0;
     let willpowerDamage = 0;
     if (resource === 'hp' || resource === 'both') {
@@ -3070,7 +3192,7 @@ export function describeUnitOptions(state, unit) {
     const skillTargets = {};
     const aoeTargets = {};
     for (const skill of unit.skills || []) {
-        if (skill.uses <= 0) continue;
+        if (!hasUses(skill, unit)) continue;
         const area = normalizeArea(skill.area);
         if (area) {
             const primaries = [];
@@ -3106,7 +3228,22 @@ export function describeUnitOptions(state, unit) {
             .map(target => target.id);
         skillTargets[skill.id] = options;
     }
-    return { reachableCells: reachable, attackTargets, skillTargets, aoeTargets };
+    const itemTargets = {};
+    for (const item of unit.items || []) {
+        if (!hasUses(item, unit)) continue;
+        const mode = String(item.target || 'ally').toLowerCase();
+        const range = Math.max(0, Number(item.range) || 0);
+        itemTargets[item.id] = state.units
+            .filter(target => !target.defeated && !target.fled)
+            .filter(target => {
+                if (mode === 'enemy') return target.id !== unit.id && isHostile(unit.side, target.side);
+                if (mode === 'any') return true;
+                return isFriendly(unit.side, target.side);
+            })
+            .filter(target => (unit.id === target.id ? 0 : chebyshev(unit, target)) <= range)
+            .map(target => target.id);
+    }
+    return { reachableCells: reachable, attackTargets, skillTargets, itemTargets, aoeTargets };
 }
 
 /**
@@ -3166,6 +3303,8 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         defeatedBy: unit.defeatCause || '',
         ac: getEffectiveAc(state, unit),
         attackBonus: getEffectiveAttackBonus(state, unit),
+        spellAttackBonus: unit.spellAttackBonus ?? null,
+        spellSaveDC: unit.spellSaveDC ?? null,
         attackRange: unit.attackRange,
         damage: unit.damage,
         attackResource: unit.attackResource || 'hp',
@@ -3187,40 +3326,60 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             behavior: status.behavior || '',
             stacks: status.stacks || 1,
         })),
+        spellSlots: Object.fromEntries(
+            Object.entries(unit.spellSlots || {}).map(([key, pool]) => [key, {
+                current: Math.max(0, Number(pool?.current) || 0),
+                max: Math.max(0, Number(pool?.max) || 0),
+            }]),
+        ),
         stats: unit.stats,
         initiative: unit.initiative,
-        skills: (unit.skills || []).map(skill => ({
-            id: skill.id,
-            name: skill.name,
-            kind: skill.kind,
-            resource: skill.resource || 'hp',
-            range: skill.range,
-            area: skill.area || null,
-            damage: skill.damage,
-            willpowerDamage: skill.willpowerDamage || '',
-            willpowerOutcome: skill.willpowerOutcome || 'defeat',
-            heal: skill.heal,
-            uses: skill.uses,
-            maxUses: skill.maxUses,
-            bonusAction: skill.bonusAction,
-            description: skill.description,
-            usable: true,
-            resolvable: skill.kind === 'special',
-        })),
-        items: (unit.items || []).map(item => ({
-            id: item.id,
-            name: item.name,
-            kind: item.kind,
-            resource: item.resource || 'hp',
-            target: item.target || 'ally',
-            area: item.area || null,
-            uses: item.uses,
-            maxUses: item.maxUses,
-            amount: item.amount,
-            description: item.description,
-            usable: true,
-            resolvable: item.kind === 'special',
-        })),
+        skills: (unit.skills || []).map(skill => {
+            const resourceState = describeResource(skill, unit);
+            return {
+                id: skill.id,
+                name: skill.name,
+                kind: skill.kind,
+                resource: skill.resource || 'hp',
+                range: skill.range,
+                area: skill.area || null,
+                damage: skill.damage,
+                willpowerDamage: skill.willpowerDamage || '',
+                willpowerOutcome: skill.willpowerOutcome || 'defeat',
+                heal: skill.heal,
+                slotLevel: skill.slotLevel,
+                slotKey: skill.slotKey || '',
+                spell: skill.spell === true,
+                save: skill.save || '',
+                uses: resourceState.current,
+                maxUses: resourceState.max,
+                unlimited: resourceState.unlimited,
+                usesLabel: resourceState.label,
+                bonusAction: skill.bonusAction,
+                description: skill.description,
+                usable: hasUses(skill, unit),
+                resolvable: skill.kind === 'special',
+            };
+        }),
+        items: (unit.items || []).map(item => {
+            const resourceState = describeResource(item, unit);
+            return {
+                id: item.id,
+                name: item.name,
+                kind: item.kind,
+                resource: item.resource || 'hp',
+                target: item.target || 'ally',
+                area: item.area || null,
+                uses: resourceState.current,
+                maxUses: resourceState.max,
+                unlimited: resourceState.unlimited,
+                usesLabel: resourceState.label,
+                amount: item.amount,
+                description: item.description,
+                usable: hasUses(item, unit),
+                resolvable: item.kind === 'special',
+            };
+        }),
         ...(compact ? {} : {
             inventory: (unit.inventory || []).slice(0, 24).map(entry => ({
                 name: entry.name,
@@ -3246,7 +3405,11 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             reachableCells: options.reachableCells,
             attackTargets: options.attackTargets,
             skillTargets: options.skillTargets,
+            itemTargets: options.itemTargets,
             ...(Object.keys(options.aoeTargets).length ? { aoeTargets: options.aoeTargets } : {}),
+            actionUsed: !!unit.actionUsed,
+            bonusUsed: !!unit.bonusUsed,
+            doneForRound: !!unit.doneForRound,
         };
     }).filter(Boolean);
 
@@ -3450,21 +3613,46 @@ export function getPendingAgentUnitIds(state) {
 export function hydrateEncounterState(state) {
     if (!state || !Array.isArray(state.units)) return state;
     state.version = TC_VERSION;
+    state.log = Array.isArray(state.log) ? state.log : [];
+    state.actionCatalog = Array.isArray(state.actionCatalog) && state.actionCatalog.length
+        ? state.actionCatalog
+        : DEFAULT_TACTICAL_ACTION_CATALOG.map(entry => ({ ...entry }));
+    state.rules = state.rules && typeof state.rules === 'object' ? state.rules : {};
+    state.round = clampIntOr(state.round, 1, 1, 999);
+    state.phase = ['player', 'enemy', 'ended'].includes(state.phase) ? state.phase : 'player';
+    state.initiativeOrder = Array.isArray(state.initiativeOrder) ? state.initiativeOrder : [];
+    state.pendingAgentUnitIds = Array.isArray(state.pendingAgentUnitIds) ? state.pendingAgentUnitIds : [];
+    state.turnIndex = clampIntOr(state.turnIndex, 0, 0, Math.max(0, state.initiativeOrder.length - 1));
+    state.deployment = state.deployment && typeof state.deployment === 'object' ? state.deployment : null;
+    state.preparing = state.preparing && typeof state.preparing === 'object' ? state.preparing : null;
+    state.finalization = state.finalization && typeof state.finalization === 'object' ? state.finalization : null;
     for (const unit of state.units) {
         unit.stats = unit.stats && typeof unit.stats === 'object' ? unit.stats : {};
-        if (!Number.isFinite(Number(unit.willpowerSave))) {
+        if (unit.willpowerSave == null || String(unit.willpowerSave).trim() === '' || !Number.isFinite(Number(unit.willpowerSave))) {
             unit.willpowerSave = Number.isFinite(Number(unit.willSave ?? unit.stats.willSave))
                 ? clampInt(unit.willSave ?? unit.stats.willSave, -10, 30)
                 : 0;
         }
-        if (!Number.isFinite(Number(unit.maxWillpower))) {
-            const explicit = Number(unit.maxWill ?? unit.maxWillpower);
+        if (unit.spellAttackBonus != null && String(unit.spellAttackBonus).trim() !== '' && Number.isFinite(Number(unit.spellAttackBonus))) {
+            unit.spellAttackBonus = clampInt(unit.spellAttackBonus, -10, 30);
+        } else {
+            unit.spellAttackBonus = null;
+        }
+        if (unit.spellSaveDC != null && String(unit.spellSaveDC).trim() !== '' && Number.isFinite(Number(unit.spellSaveDC))) {
+            unit.spellSaveDC = clampInt(unit.spellSaveDC, 1, 40);
+        } else {
+            unit.spellSaveDC = null;
+        }
+        if (unit.maxWillpower == null || String(unit.maxWillpower).trim() === '' || !Number.isFinite(Number(unit.maxWillpower))) {
+            const explicitSource = unit.maxWill ?? unit.maxWillpower;
+            const explicit = explicitSource == null || String(explicitSource).trim() === '' ? NaN : Number(explicitSource);
             unit.maxWillpower = Number.isFinite(explicit)
                 ? clampInt(explicit, 0, 99)
                 : deriveMaxWillpower(unit.maxHp, unit.stats.wisMod, unit.willpowerSave, state.rules?.willpowerMaxPercent);
         }
-        if (!Number.isFinite(Number(unit.willpower))) {
-            const explicit = Number(unit.will ?? unit.willpower);
+        if (unit.willpower == null || String(unit.willpower).trim() === '' || !Number.isFinite(Number(unit.willpower))) {
+            const explicitSource = unit.will ?? unit.willpower;
+            const explicit = explicitSource == null || String(explicitSource).trim() === '' ? NaN : Number(explicitSource);
             unit.willpower = Number.isFinite(explicit) ? clampInt(explicit, 0, unit.maxWillpower) : unit.maxWillpower;
         }
         unit.willpowerImmune = Number(unit.maxWillpower) === 0;
@@ -3487,6 +3675,7 @@ export function hydrateEncounterState(state) {
         unit.statuses = (Array.isArray(unit.statuses) ? unit.statuses : []).map(status => normalizeStatus(status)).filter(Boolean);
         unit.skills = (Array.isArray(unit.skills) ? unit.skills : []).map((skill, index) => normalizeSkill(skill, index, unit.side)).filter(Boolean);
         unit.items = (Array.isArray(unit.items) ? unit.items : []).map((item, index) => normalizeItem(item, index)).filter(Boolean);
+        ensureSpellSlots(unit);
     }
     return state;
 }

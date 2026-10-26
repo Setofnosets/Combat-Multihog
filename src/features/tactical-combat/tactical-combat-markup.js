@@ -14,6 +14,7 @@ import {
     TC_TURN_STYLES,
     describeArea,
 } from './tactical-combat-constants.js';
+import { describeResource, hasUses } from './tactical-combat-resources.js';
 
 export function escapeHtml(value) {
     return String(value ?? '')
@@ -272,12 +273,13 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-subtitle">Skills & spells</div>
         <div class="rt-tc-skill-list">${skills.map(skill => {
             const areaLabel = skill.area ? describeArea(skill.area) : '';
+            const resource = describeResource(skill, unit);
             const title = `${skill.description || skill.name}${areaLabel ? ` (${areaLabel}: affects every eligible unit in the burst.)` : ''}`;
             return `
-            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(title)}" ${!canAct || skill.uses <= 0 ? 'disabled' : ''}>
+            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(title)}" ${!canAct || !hasUses(skill, unit) ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
                 <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}${skill.bonusAction ? ' · bonus' : ''}</span>
-                <span class="rt-tc-skill-uses">${Number(skill.uses) || 0}/${Number(skill.maxUses) || 0}</span>
+                <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
         }).join('')}</div>
     </div>` : '';
@@ -286,11 +288,12 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-subtitle">Items</div>
         <div class="rt-tc-skill-list">${items.map(item => {
             const areaLabel = item.area ? describeArea(item.area) : '';
+            const resource = describeResource(item, unit);
             return `
-            <button type="button" class="rt-tc-skill" data-tc-action="select-item" data-tc-item-id="${escapeHtml(item.id)}" ${!canAct || item.uses <= 0 ? 'disabled' : ''}>
+            <button type="button" class="rt-tc-skill" data-tc-action="select-item" data-tc-item-id="${escapeHtml(item.id)}" ${!canAct || !hasUses(item, unit) ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(item.name)}</span>
                 <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL ${item.amount || ''}` : item.kind === 'special' ? 'SPECIAL' : 'ITEM')}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}</span>
-                <span class="rt-tc-skill-uses">${Number(item.uses) || 0}/${Number(item.maxUses) || 0}</span>
+                <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
         }).join('')}</div>
     </div>` : '';

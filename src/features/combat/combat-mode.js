@@ -61,3 +61,23 @@ export function isTacticalCombatMode(settings) {
 export function isTraditionalCombatMode(settings) {
     return resolveCombatStyle(settings) === 'traditional';
 }
+
+/**
+ * True when any saved board for any chat is still active or preparing. Style
+ * switching is blocked while this is true so a hidden board cannot keep
+ * [COMBAT] ACTIVE while the newly selected mode starts a second encounter.
+ * @param {Record<string, any>|null|undefined} settings
+ * @returns {boolean}
+ */
+export function hasActiveCombatBoard(settings) {
+    const maps = [settings?.tacticalCombatByChat, settings?.traditionalCombatByChat];
+    for (const map of maps) {
+        if (!map || typeof map !== 'object') continue;
+        for (const state of Object.values(map)) {
+            if (!state || typeof state !== 'object') continue;
+            if (state.status === 'active' || state.preparing?.active) return true;
+            if (state.finalization?.finalizing) return true;
+        }
+    }
+    return false;
+}

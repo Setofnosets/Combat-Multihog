@@ -21,6 +21,8 @@ import {
     getEffectiveAttackBonus,
     getPendingAgentUnitIds,
     getUnitById,
+    isFriendlySide,
+    isHostileSide,
     hydrateEncounterState,
     livingUnits,
     makeRng,
@@ -35,6 +37,7 @@ import {
 } from '../tactical-combat/tactical-combat-engine.js';
 import { describeActionCatalog, getEnabledActions, parseActionCatalog } from '../tactical-combat/tactical-combat-actions.js';
 import { selectEncounterEnemies } from '../tactical-combat/tactical-combat-context.js';
+import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
 import {
     DEFAULT_TRADITIONAL_ACTION_CATALOG,
     TRADITIONAL_ACTION_TYPES,
@@ -42,8 +45,6 @@ import {
     TRADITIONAL_STATE_FORMAT,
     TRADITIONAL_VERSION,
 } from './traditional-combat-constants.js';
-
-const FRIENDLY_SIDES = new Set(['player', 'ally']);
 
 function cloneCatalog(catalog) {
     return (Array.isArray(catalog) ? catalog : DEFAULT_TRADITIONAL_ACTION_CATALOG)
@@ -72,16 +73,6 @@ export function getTraditionalActionCatalog(settings) {
     };
 }
 
-function isHostileSide(attackerSide, targetSide) {
-    return (FRIENDLY_SIDES.has(attackerSide) && targetSide === 'enemy')
-        || (attackerSide === 'enemy' && FRIENDLY_SIDES.has(targetSide));
-}
-
-function isFriendlySide(attackerSide, targetSide) {
-    return attackerSide === targetSide
-        || (FRIENDLY_SIDES.has(attackerSide) && FRIENDLY_SIDES.has(targetSide));
-}
-
 /**
  * Build the legal target lists for one unit without any range/LOS checks.
  * @param {object} state
@@ -95,7 +86,7 @@ export function describeTraditionalUnitOptions(state, unit) {
         .map(target => target.id);
     const skillTargets = {};
     for (const skill of unit.skills || []) {
-        if (Number(skill.uses) <= 0) continue;
+        if (!hasUses(skill, unit)) continue;
         let ids = [];
         if (String(skill.target || '').toLowerCase() === 'self') {
             ids = [unit.id];
@@ -112,7 +103,7 @@ export function describeTraditionalUnitOptions(state, unit) {
     }
     const itemTargets = {};
     for (const item of unit.items || []) {
-        if (Number(item.uses) <= 0) continue;
+        if (!hasUses(item, unit)) continue;
         const targetMode = String(item.target || 'ally').toLowerCase();
         let ids = [];
         if (targetMode === 'enemy') {
@@ -153,6 +144,8 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
         defeatedBy: unit.defeatCause || '',
         ac: getEffectiveAc(state, unit),
         attackBonus: getEffectiveAttackBonus(state, unit),
+        spellAttackBonus: unit.spellAttackBonus ?? null,
+        spellSaveDC: unit.spellSaveDC ?? null,
         damage: unit.damage,
         attackResource: unit.attackResource || 'hp',
         willpowerDamage: unit.willpowerDamage || '',
@@ -174,36 +167,56 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
             stacks: status.stacks || 1,
         })),
         stats: unit.stats,
-        skills: (unit.skills || []).map(skill => ({
-            id: skill.id,
-            name: skill.name,
-            kind: skill.kind,
-            resource: skill.resource || 'hp',
-            target: skill.target || '',
-            damage: skill.damage,
-            willpowerDamage: skill.willpowerDamage || '',
-            willpowerOutcome: skill.willpowerOutcome || 'defeat',
-            heal: skill.heal,
-            uses: skill.uses,
-            maxUses: skill.maxUses,
-            bonusAction: !!skill.bonusAction,
-            description: skill.description,
-            usable: Number(skill.uses) > 0,
-            resolvable: skill.kind === 'special',
-        })),
-        items: (unit.items || []).map(item => ({
-            id: item.id,
-            name: item.name,
-            kind: item.kind,
-            resource: item.resource || 'hp',
-            target: item.target || 'ally',
-            uses: item.uses,
-            maxUses: item.maxUses,
-            amount: item.amount,
-            description: item.description,
-            usable: Number(item.uses) > 0,
-            resolvable: item.kind === 'special',
-        })),
+        spellSlots: Object.fromEntries(
+            Object.entries(unit.spellSlots || {}).map(([key, pool]) => [key, {
+                current: Math.max(0, Number(pool?.current) || 0),
+                max: Math.max(0, Number(pool?.max) || 0),
+            }]),
+        ),
+        skills: (unit.skills || []).map(skill => {
+            const resource = describeResource(skill, unit);
+            return {
+                id: skill.id,
+                name: skill.name,
+                kind: skill.kind,
+                resource: skill.resource || 'hp',
+                target: skill.target || '',
+                damage: skill.damage,
+                willpowerDamage: skill.willpowerDamage || '',
+                willpowerOutcome: skill.willpowerOutcome || 'defeat',
+                heal: skill.heal,
+                slotLevel: skill.slotLevel,
+                slotKey: skill.slotKey || '',
+                spell: skill.spell === true,
+                save: skill.save || '',
+                uses: resource.current,
+                maxUses: resource.max,
+                unlimited: resource.unlimited,
+                usesLabel: resource.label,
+                bonusAction: !!skill.bonusAction,
+                description: skill.description,
+                usable: hasUses(skill, unit),
+                resolvable: skill.kind === 'special',
+            };
+        }),
+        items: (unit.items || []).map(item => {
+            const resource = describeResource(item, unit);
+            return {
+                id: item.id,
+                name: item.name,
+                kind: item.kind,
+                resource: item.resource || 'hp',
+                target: item.target || 'ally',
+                uses: resource.current,
+                maxUses: resource.max,
+                unlimited: resource.unlimited,
+                usesLabel: resource.label,
+                amount: item.amount,
+                description: item.description,
+                usable: hasUses(item, unit),
+                resolvable: item.kind === 'special',
+            };
+        }),
         inventory: options.compact ? undefined : (unit.inventory || []).slice(0, 24).map(entry => ({
             name: entry.name,
             description: entry.description,
@@ -440,6 +453,7 @@ export function buildTraditionalEncounterFromContext(context, settings, options 
     const selection = selectEncounterEnemies(context, settings, { ...options, source });
     const { enemies, warnings, agentEncounter } = selection;
     const playerUnits = (context.playerUnits || []).map(unit => ({ ...unit, side: 'player', source: unit.source || 'memo' }));
+    if (!playerUnits.length) throw new Error('No living player characters are available for combat.');
     const allies = (context.allies || []).map(unit => ({ ...unit, side: 'ally', source: unit.source || 'memo' }));
     const allUnits = [...playerUnits, ...allies, ...enemies];
     const seed = Number(options.seed) || (Date.now() & 0x7fffffff);

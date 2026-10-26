@@ -8,6 +8,7 @@
 
 import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
+import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
 
 function pct(value, max) {
     const n = Number(value) || 0;
@@ -185,22 +186,29 @@ function renderSelectedPanel(state, view) {
 
     const skills = view.mode === 'skill' && isPlayer ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Skills & spells</div>
-        <div class="rt-tc-skill-list">${(unit.skills || []).map(skill => `
-            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-trad-action="select-skill" data-trad-skill-id="${escapeHtml(skill.id)}" ${!canAct || Number(skill.uses) <= 0 || (skill.bonusAction ? unit.bonusUsed : unit.actionUsed) ? 'disabled' : ''}>
+        <div class="rt-tc-skill-list">${(unit.skills || []).map(skill => {
+            const resource = describeResource(skill, unit);
+            const areaNote = skill.area ? ' · AOE IGNORED' : '';
+            return `
+            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-trad-action="select-skill" data-trad-skill-id="${escapeHtml(skill.id)}" ${!canAct || !hasUses(skill, unit) || (skill.bonusAction ? unit.bonusUsed : unit.actionUsed) ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'}${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? 'SPECIAL' : 'BUFF')}${skill.bonusAction ? ' · bonus' : ''}</span>
-                <span class="rt-tc-skill-uses">${Number(skill.uses) || 0}/${Number(skill.maxUses) || 0}</span>
-            </button>`).join('')}</div>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'}${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? 'SPECIAL' : 'BUFF'}${skill.bonusAction ? ' · bonus' : ''}${areaNote}`)}</span>
+                <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
+            </button>`;
+        }).join('')}</div>
     </div>` : '';
 
     const items = view.mode === 'item' && isPlayer ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Items</div>
-        <div class="rt-tc-skill-list">${(unit.items || []).map(item => `
-            <button type="button" class="rt-tc-skill ${view.selectedItemId === item.id ? 'is-selected' : ''}" data-trad-action="select-item" data-trad-item-id="${escapeHtml(item.id)}" ${!canAct || Number(item.uses) <= 0 || unit.actionUsed ? 'disabled' : ''}>
+        <div class="rt-tc-skill-list">${(unit.items || []).map(item => {
+            const resource = describeResource(item, unit);
+            return `
+            <button type="button" class="rt-tc-skill ${view.selectedItemId === item.id ? 'is-selected' : ''}" data-trad-action="select-item" data-trad-item-id="${escapeHtml(item.id)}" ${!canAct || !hasUses(item, unit) || unit.actionUsed ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(item.name)}</span>
                 <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL${item.amount ? ` · ${item.amount}` : ''}` : item.kind === 'special' ? 'SPECIAL' : 'ITEM')}</span>
-                <span class="rt-tc-skill-uses">${Number(item.uses) || 0}/${Number(item.maxUses) || 0}</span>
-            </button>`).join('')}</div>
+                <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
+            </button>`;
+        }).join('')}</div>
     </div>` : '';
 
     const canEndUnit = state.status === 'active' && state.turnStyle === 'initiative' && state.phase === 'player' && view.activeUnitId === unit.id && isPlayer;

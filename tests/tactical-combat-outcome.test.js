@@ -4,6 +4,7 @@ import {
     closeCombatBlockInMemo,
     clearNarrationAfterGeneration,
     queueCombatOutcome,
+    requeueCombatOutcomeIfMissing,
 } from '../src/features/tactical-combat/tactical-combat-outcome.js';
 import {
     clearPendingNarration,
@@ -211,5 +212,50 @@ describe('tactical combat per-chat store', () => {
         retreatEncounter(state);
         expect(state.outcome.label).toBe('Retreat');
         expect(state.outcome.details.join(' ')).toMatch(/withdraw|escape/i);
+    });
+});
+
+describe('per-chat narration handoff', () => {
+    it('keeps pending results for separate chats instead of overwriting the first', () => {
+        const settings = {};
+        setPendingNarration(settings, { chatId: 'chat-A', stateId: 'a', outcome: { label: 'Victory A' } }, { persist: false });
+        setPendingNarration(settings, { chatId: 'chat-B', stateId: 'b', outcome: { label: 'Victory B' } }, { persist: false });
+        expect(getPendingNarration(settings, 'chat-A')).toMatchObject({ stateId: 'a' });
+        expect(getPendingNarration(settings, 'chat-B')).toMatchObject({ stateId: 'b' });
+        // Legacy mirror still points at the most recently queued result.
+        expect(settings.tacticalCombatReturn.stateId).toBe('b');
+        clearPendingNarration(settings, { chatId: 'chat-A', persist: false });
+        expect(getPendingNarration(settings, 'chat-A')).toBeNull();
+        expect(getPendingNarration(settings, 'chat-B')).toMatchObject({ stateId: 'b' });
+    });
+
+    it('only renders a result for the chat that owns it', () => {
+        const state = makeState('chat-A');
+        const settings = { tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT };
+        setPendingNarration(settings, {
+            chatId: 'chat-A',
+            stateId: state.id,
+            outcome: state.outcome,
+        }, { persist: false });
+        expect(buildNarrationBlock(settings, 'chat-A')).toContain('TACTICAL_COMBAT_CONTEXT');
+        expect(buildNarrationBlock(settings, 'chat-B')).toBe('');
+    });
+
+    it('requeues a lost payload when a board is already marked narrationQueued', () => {
+        const state = makeState();
+        state.finalization = {
+            narrationQueued: true,
+            queuedAt: Date.now(),
+            payload: {
+                chatId: 'chat-A',
+                stateId: state.id,
+                kind: 'tactical',
+                outcome: state.outcome,
+            },
+        };
+        const settings = {};
+        expect(requeueCombatOutcomeIfMissing(state, settings)).toBe(true);
+        expect(getPendingNarration(settings, 'chat-A')).toMatchObject({ stateId: state.id });
+        expect(requeueCombatOutcomeIfMissing(state, settings)).toBe(false);
     });
 });

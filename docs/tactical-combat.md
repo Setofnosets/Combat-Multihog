@@ -22,7 +22,7 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 
 | Setting | Purpose |
 |---|---|
-| **Enable Tactical Combat** | Master switch. The board can be opened for inspection while disabled, but a new encounter cannot start. |
+| **Combat style** | **Narration**, **Tactical grid**, or **Traditional turn-based**. The selected style owns the board, narrator tool, and system-prompt override. Switching is blocked while a saved board is active, preparing, or finalizing. |
 | **Grid dimensions** | 10×10, 15×15, 20×20, **Dynamic** (8×8 to 24×24 based on roster size), or **Custom** (5–40 rows/columns). |
 | **Turn style** | **Phased** — every player unit acts in any order, then every agent unit; or **Initiative** — 1d20 + modifier, one unit at a time. |
 | **Terrain theme** | Auto (matches location keywords) or Dungeon / Forest / Cave / City / Interior / Plain. |
@@ -30,7 +30,7 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 | **Movement per turn** | Default speed in cells for units without an explicit speed. Diagonals cost 1; difficult terrain costs 2. |
 | **Auto-start on hostile actions** | When enabled, the narrator opens the board only after a real attack, hostile spell, charge, ambush, or `COMBAT STATE: HOSTILE/ACTIVE`. Disable to require the Start encounter button. |
 | **Derived Willpower %** | Percentage of max HP used by the deterministic max Willpower fallback. Default 30%. Explicit `Willpower:`/`maxWillpower` values always win. |
-| **Recover Willpower after combat** | Restores current Willpower to max in `[CHARACTER]`/`[PARTY]` at combat end. Disable to keep persistent Willpower loss. |
+| **Recover Willpower after combat** | Restores current Willpower to max for units that ended the fight intact. Defeated, fled, and Willpower-broken units keep their final Willpower and terminal Status. Disable to keep persistent Willpower loss for everyone. |
 | **Maximum special resolutions** | Maximum unique enemy special abilities sent through the resolver per activation batch. Deterministic Willpower attacks and pre-authored effect templates do not count. |
 | **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
@@ -43,10 +43,21 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 | **Prompt Templates** | Editable tactical agent, encounter architect, outcome-to-narration, and special-ability resolver prompts. Reset restores the shipped template. |
 | **Special ability resolver prompt** | Used only when a non-standard ability/spell/item is cast. Converts freeform effects (summoning, terrain, control) into engine primitives. |
 | **Action Catalogue & Game State** | JSON editor for the legal action vocabulary. Labels/descriptions can be changed; `"enabled": false` removes an action from the board and the agent contract. Unknown action types are rejected at runtime. |
-| **Loadout Classifiers** | JSON editor for ability/spell classification rules, buff AC/attack/duration defaults, ranged/bonus-action keywords, and inventory consumable/healing/special keywords. |
+| **Loadout Classifiers** | Shared JSON editor for ability/spell classification rules, attack keywords, buff AC/attack/duration defaults, ranged/bonus-action keywords, inventory consumable/healing/special keywords, and Willpower damage/outcome keywords. |
+| **Spell Compendium** | Shared JSON editor for spell mechanics. Shipped definitions cover common tabletop spells; this JSON can override or extend them. Spell names found in the current memo without a definition are inferred from their name and spell level. |
 | **Terrain Key** | Static reference for every terrain type, colour, glyph, and effect. |
 
-All tactical settings are global. Each chat gets its own board, stored in `extension_settings.rpg_tracker.tacticalCombatByChat[chatId]`.
+Tactical, Traditional, and shared settings are global. Each chat gets its own board, stored in `extension_settings.rpg_tracker.tacticalCombatByChat[chatId]` (and `traditionalCombatByChat[chatId]` for the no-grid mode).
+
+### Spell slots, ability uses, and at-will abilities
+
+The memo format distinguishes three resource shapes:
+
+- `Spells: Level 1 (2/2): Magic Missile, Shield` is **one shared pool** for that level. Casting either spell spends one of the two slots; every spell in the line reads the same pool.
+- `Abilities: Action Surge (extra action; 1/1 per rest)` is a **per-ability** pool. The current value is the first number, not the maximum.
+- `Abilities: Silver Tongue (a quick lie)` has no usage notation and is **at-will**.
+
+Cantrips are unlimited. Item lines use their quantity as the remaining uses. At combat end the board writes final HP, terminal Status, spell-slot lines, ability usage, and inventory quantities back into `[CHARACTER]`/`[PARTY]`, `[SPELLS]`/`[ABILITIES]`, and `[INVENTORY]`. Defeated, fled, and Willpower-broken units keep their final Willpower and do not recover it.
 
 ---
 
@@ -140,7 +151,7 @@ Mechanical fields:
 
 ### Area abilities
 
-Skills and heal/buff items can include an optional `area` template. Only burst templates are supported in this version:
+Skills and heal/buff items can include an optional `area` template. Only burst templates are supported in this version. Hostile areas exclude allies unless `friendlyFire` is true; the caster is only a legal area effect target for support auras. Terrain effects returned by the special resolver are confined to the resolved area and cannot entomb a living unit:
 
 ```json
 {
@@ -414,7 +425,7 @@ When combat ends:
 
 1. Final party HP is patched directly from the board into `[CHARACTER]`/`[PARTY]`, and `[COMBAT]` is closed with `[COMBAT]END_COMBAT[/COMBAT]`. This happens before the narrator sees the result.
 2. If the State Tracker is enabled and **Update State Tracker before narration** is on, a finalization pass applies the authoritative final-state report before the result is queued.
-3. A payload is queued in `settings.tacticalCombatReturn` with the title, location, outcome, rounds, player/ally/enemy survivors, fallen, fled, defeated enemies, opening action, highlights, and compact final unit state.
+3. A payload is queued in `settings.tacticalCombatReturnByChat[chatId]` with the title, location, outcome, rounds, player/ally/enemy survivors, fallen, fled, defeated enemies, opening action, highlights, compact final unit state, and the resource ledger. `settings.tacticalCombatReturn` remains a legacy mirror of the most recently queued payload.
 4. The board shows a result dialog. **Return to narration** closes the board and calls the main `generate('normal')`. If automatic return is enabled, this happens after the tracker sync and a short delay.
 5. On the next real narrator generation, `rpgTrackerInterceptor` appends the rendered outcome as a dedicated system/narrator message at the end of the prompt. A short notice in the user message states that the previous player action was already resolved. The payload is cleared only after a real assistant message consumes it; stopped, quiet/impersonate, or failed generations keep it queued.
 6. If automatic return is disabled or generation is busy, the payload stays queued for the user's next message.
