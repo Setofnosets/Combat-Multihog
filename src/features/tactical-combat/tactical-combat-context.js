@@ -17,6 +17,7 @@ import {
     isRangedAbility,
     matchesAny,
     matchesAnyWord,
+    parseAreaKeywords,
     willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
 import {
@@ -145,6 +146,35 @@ function parseDice(text) {
     return match ? match[1].replace(/\s+/g, '') : '';
 }
 
+/**
+ * Read an explicit range from ability text. Bare "N cells" phrases are common
+ * range notation in the tracker memo; radius context is excluded so an AoE
+ * template does not turn its radius into range.
+ * @param {string} text
+ * @returns {number|null}
+ */
+function parseExplicitRange(text) {
+    const source = String(text || '');
+    const explicit = source.match(/\brange\s*(?:of|:)?\s*(\d+)\s*(?:(ft|feet|foot)\b)?/i)
+        || source.match(/\b(\d+)\s*(?:(ft|feet|foot)\b)?\s*[-\s]?(?:cell|square|tile|space)s?\s+(?:range|reach)\b/i);
+    if (explicit) {
+        const value = Math.round(Number(explicit[1]));
+        return Math.max(1, Math.min(24, explicit[2] ? Math.ceil(value / 5) : value));
+    }
+
+    for (const match of source.matchAll(/\b(\d+)\s*[-\s]?(?:cell|square|tile|space)s?\b/gi)) {
+        const before = source.slice(Math.max(0, match.index - 28), match.index).toLowerCase();
+        const after = source.slice(match.index + match[0].length, match.index + match[0].length + 24).toLowerCase();
+        if (/\bradius\b/i.test(after)) continue;
+        if (/\b(?:radius|burst|aura|area|aoe|within|all|every|each|in)\s*$/.test(before)) continue;
+        return Math.max(1, Math.min(24, Math.round(Number(match[1]))));
+    }
+
+    const feet = source.match(/\b(\d+)\s*(?:ft|feet|foot)\b(?!\s*radius)/i);
+    if (feet) return Math.max(1, Math.min(24, Math.ceil(Number(feet[1]) / 5)));
+    return null;
+}
+
 function buildSkillFromName(name, description, options = {}) {
     const cleanedName = cleanText(name).slice(0, 80);
     if (!cleanedName || cleanedName.length < 2) return null;
@@ -184,7 +214,19 @@ function buildSkillFromName(name, description, options = {}) {
     }
 
     const ranged = isRangedAbility(cleanedName, description, classifier) || options.ranged === true;
+    const area = parseAreaKeywords(cleanedName, description, classifier);
+    const explicitRange = parseExplicitRange(`${cleanedName} ${description}`);
     const buff = kind === 'buff' ? buffModifiers(cleanedName, description, classifier) : { acBonus: 0, attackBonus: 0, rounds: 2 };
+    let range;
+    if (area?.origin === 'self') {
+        range = 0;
+    } else if (kind === 'attack') {
+        range = explicitRange ?? (ranged ? 6 : 1);
+    } else if (kind === 'special') {
+        range = explicitRange ?? (options.range == null ? 6 : clampInt(options.range, 1, 24));
+    } else {
+        range = explicitRange ?? (area ? 6 : (ranged ? 6 : 0));
+    }
     return {
         id: `skill-${cleanedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`,
         name: cleanedName,
@@ -192,7 +234,8 @@ function buildSkillFromName(name, description, options = {}) {
         kind,
         resource,
         target: kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally',
-        range: kind === 'attack' ? (ranged ? 6 : 1) : kind === 'special' ? (options.range == null ? 6 : clampInt(options.range, 1, 24)) : (ranged ? 6 : 0),
+        range,
+        area,
         damage,
         willpowerDamage,
         willpowerOutcome,
@@ -618,6 +661,7 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
         if (!healing && !willpowerHealing && !matchesAnyWord(name, itemRules.specialItemKeywords)) continue;
         const id = `item-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 30)}`;
         if (items.some(item => item.id === id)) continue;
+        const itemArea = parseAreaKeywords(name, description, classifier);
         items.push((healing || willpowerHealing) ? {
             id,
             name: name.slice(0, 80),
@@ -627,7 +671,8 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
             amount: /greater|superior|supreme/i.test(name) ? '4d4+4' : '2d4+2',
             maxUses: quantity,
             uses: quantity,
-            range: 0,
+            range: itemArea ? (itemArea.origin === 'self' ? 0 : 6) : 0,
+            area: itemArea,
         } : {
             id,
             name: name.slice(0, 80),
@@ -637,6 +682,7 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
             maxUses: quantity,
             uses: quantity,
             range: 6,
+            area: itemArea,
         });
         if (items.length >= 6) break;
     }

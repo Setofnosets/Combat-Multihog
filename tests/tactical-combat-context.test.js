@@ -484,6 +484,49 @@ Status: Healthy
         expect(context.summary.enemies[0]).toContain('0/0 WP');
     });
 
+    it('parses authored area templates and explicit ranges without confusing radius for range', () => {
+        const memo = `[CHARACTER]
+Aria (Wizard): 30/30 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Fireball (6d6 fire, 8 cells, 1/1; Area: burst 2)
+- Rallying Aura (allies within 2 cells gain +1 AC, 2/2; Area: aura 2)
+- Piercing Shot (1d8 piercing, 6 cells, 2/2)
+- Focused Bolt (2d6 force, 6 cells, 1/1; single target)
+[/ABILITIES]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'area-parse', chat: [] });
+        const skills = Object.fromEntries(context.playerUnits[0].skills.map(skill => [skill.name, skill]));
+        expect(skills.Fireball).toMatchObject({
+            kind: 'attack',
+            range: 8,
+            area: { shape: 'burst', radius: 2, origin: 'target', friendlyFire: false },
+        });
+        expect(skills['Rallying Aura']).toMatchObject({
+            kind: 'buff',
+            range: 0,
+            area: { shape: 'burst', radius: 2, origin: 'self', friendlyFire: false },
+        });
+        expect(skills['Piercing Shot'].range).toBe(6);
+        expect(skills['Piercing Shot'].area).toBeNull();
+        expect(skills['Focused Bolt'].area).toBeNull();
+    });
+
+    it('parses common area keywords and friendly-fire opt-in', () => {
+        const memo = `[CHARACTER]
+Aria (Wizard): 30/30 HP
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Cinder Burst (4d6 fire, 8 cells, 1/1; all enemies within 2 cells; indiscriminate)
+[/ABILITIES]`;
+        const context = collectEncounterContext({ ...BASE_SETTINGS, currentMemo: memo }, { name1: 'Aria', chatId: 'area-keywords', chat: [] });
+        const skill = context.playerUnits[0].skills.find(entry => entry.name === 'Cinder Burst');
+        expect(skill.area).toMatchObject({ shape: 'burst', radius: 2, origin: 'target', friendlyFire: true });
+    });
+
     it('provides a usable fallback player', () => {
         const player = buildFallbackPlayer({ name1: 'Rook' }, 5);
         expect(player.name).toBe('Rook');

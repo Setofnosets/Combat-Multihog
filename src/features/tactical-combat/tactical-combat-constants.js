@@ -270,6 +270,64 @@ export function clampIntOr(value, fallback, min, max) {
 }
 
 /**
+ * Normalize an authored area template. A missing/invalid template means the
+ * source stays single-target. Only burst templates are supported for now;
+ * `origin: "self"` expresses a self-centered aura.
+ *
+ * @param {unknown} raw
+ * @param {{ defaultRadius?: number, maxRadius?: number, defaultOrigin?: 'target'|'self' }} [options]
+ * @returns {{ shape: 'burst', radius: number, origin: 'target'|'self', friendlyFire: boolean }|null}
+ */
+export function normalizeArea(raw, options = {}) {
+    if (raw == null || raw === false) return null;
+    let value = raw;
+    if (typeof value === 'number') value = { shape: 'burst', radius: value };
+    if (typeof value === 'string') {
+        const text = value.trim().toLowerCase();
+        if (!text) return null;
+        const match = text.match(/\b(burst|aura|sphere|radius)\s*(\d+)?\b/i);
+        if (!match) return null;
+        value = {
+            shape: match[1].toLowerCase() === 'aura' ? 'aura' : 'burst',
+            radius: match[2] ? Number(match[2]) : undefined,
+            friendlyFire: /\bfriendly\s*fire\b|\bindiscriminate\b|\ball\s+creatures\b/i.test(text),
+        };
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const rawShape = String(value.shape || value.type || 'burst').trim().toLowerCase();
+    const sphereAliases = new Set(['burst', 'aura', 'sphere', 'radius', 'circle', 'aoe']);
+    if (!sphereAliases.has(rawShape)) return null;
+    const explicitOrigin = String(value.origin || '').trim().toLowerCase();
+    const originSelf = rawShape === 'aura'
+        || explicitOrigin === 'self'
+        || (explicitOrigin !== 'target' && (value.centeredOnSelf === true || options.defaultOrigin === 'self'));
+    return {
+        shape: 'burst',
+        radius: clampIntOr(
+            value.radius ?? value.size ?? value.areaRadius ?? value.aoeRadius,
+            clampIntOr(options.defaultRadius, TC_AREA_DEFAULT_RADIUS, 1, TC_AREA_MAX_RADIUS),
+            1,
+            clampIntOr(options.maxRadius, TC_AREA_MAX_RADIUS, 1, 24),
+        ),
+        origin: originSelf ? 'self' : 'target',
+        friendlyFire: value.friendlyFire === true
+            || value.friendly_fire === true
+            || value.hitsAllies === true,
+    };
+}
+
+/**
+ * Human-readable label used by the board and combat log.
+ * @param {object|null} area
+ * @returns {string}
+ */
+export function describeArea(area) {
+    const normalized = normalizeArea(area);
+    if (!normalized) return '';
+    return `${normalized.origin === 'self' ? 'Aura' : 'Burst'} ${normalized.radius}`;
+}
+
+/**
  * Resolve configured grid dimensions. Dynamic mode scales with the roster so
  * large parties still get room to maneuver.
  *
@@ -311,6 +369,11 @@ export function terrainChar(id) {
  */
 export const TC_ACTION_TYPES = ['move', 'attack', 'skill', 'item', 'defend', 'wait', 'flee'];
 
+/** Area templates currently supported by the tactical engine. */
+export const TC_AREA_SHAPES = ['burst'];
+export const TC_AREA_DEFAULT_RADIUS = 1;
+export const TC_AREA_MAX_RADIUS = 6;
+
 export const DEFAULT_TACTICAL_ACTION_CATALOG = [
     {
         type: 'move',
@@ -328,7 +391,7 @@ export const DEFAULT_TACTICAL_ACTION_CATALOG = [
         type: 'skill',
         label: 'Use Skill',
         enabled: true,
-        description: 'Spend a listed ability or spell. Bonus-action skills do not consume your main action.',
+        description: 'Spend a listed ability or spell. Bonus-action skills do not consume your main action. Area skills affect every eligible unit in the burst.',
     },
     {
         type: 'item',

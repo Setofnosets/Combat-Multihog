@@ -43,6 +43,23 @@ export const DEFAULT_LOADOUT_CLASSIFIER_CONFIG = {
     },
     rangedKeywords: ['ranged', 'range', 'ranged attack', 'at range', 'bolt', 'arrow', 'missile', 'blast', 'ray', 'cone', 'line', 'ft'],
     bonusActionKeyword: 'bonus action',
+    area: {
+        burstKeywords: [
+            'fireball', 'explosion', 'explode', 'detonation', 'nova', 'shockwave', 'eruption',
+            'area of effect', 'aoe', 'burst', 'blast radius', 'radius', 'all enemies within',
+            'all allies within', 'all creatures within', 'every enemy within', 'every ally within',
+            'hits all', 'hits every', 'each creature within',
+        ],
+        selfKeywords: [
+            'aura', 'emanation', 'around you', 'around yourself', 'centered on you',
+            'centred on you', 'within range of you', 'centered on yourself', 'centred on yourself',
+            'around the caster', 'centered on the caster', 'centred on the caster', 'from the caster',
+        ],
+        friendlyFireKeywords: ['friendly fire', 'indiscriminate', 'all creatures', 'including allies', 'including your allies'],
+        singleTargetKeywords: ['single target', 'one target', 'single creature', 'one creature', 'one enemy', 'one ally'],
+        defaultRadius: 1,
+        maxRadius: 6,
+    },
     items: {
         usableKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'scroll', 'bomb', 'flask', 'powder', 'poison', 'poultice', 'ration', 'food', 'vial', 'restoration', 'curative', 'draught'],
         healingKeywords: ['potion', 'elixir', 'tonic', 'salve', 'remedy', 'antidote', 'heal', 'cure', 'restore', 'poultice', 'ration', 'food'],
@@ -118,6 +135,7 @@ export function normalizeClassifierConfig(raw) {
         return { ok: false, config: defaults, error: 'Classifier config must be a JSON object.', usingDefault: true };
     }
     const buff = value.buff && typeof value.buff === 'object' ? value.buff : {};
+    const area = value.area && typeof value.area === 'object' && !Array.isArray(value.area) ? value.area : {};
     const items = value.items && typeof value.items === 'object' ? value.items : {};
     const config = {
         skillRules: normalizeSkillRules(value.skillRules, defaults.skillRules),
@@ -130,6 +148,14 @@ export function normalizeClassifierConfig(raw) {
         },
         rangedKeywords: keywordList(value.rangedKeywords, defaults.rangedKeywords),
         bonusActionKeyword: String(value.bonusActionKeyword || defaults.bonusActionKeyword).trim().toLowerCase() || defaults.bonusActionKeyword,
+        area: {
+            burstKeywords: keywordList(area.burstKeywords, defaults.area.burstKeywords),
+            selfKeywords: keywordList(area.selfKeywords, defaults.area.selfKeywords),
+            friendlyFireKeywords: keywordList(area.friendlyFireKeywords, defaults.area.friendlyFireKeywords),
+            singleTargetKeywords: keywordList(area.singleTargetKeywords, defaults.area.singleTargetKeywords),
+            defaultRadius: numberOr(area.defaultRadius, defaults.area.defaultRadius, 1, defaults.area.maxRadius),
+            maxRadius: numberOr(area.maxRadius, defaults.area.maxRadius, 1, 6),
+        },
         items: {
             usableKeywords: [...new Set([...keywordList(items.usableKeywords, defaults.items.usableKeywords), ...defaults.items.usableKeywords])],
             healingKeywords: [...new Set([...keywordList(items.healingKeywords, defaults.items.healingKeywords), ...defaults.items.healingKeywords])],
@@ -231,6 +257,67 @@ export function buffModifiers(name, description, config = DEFAULT_LOADOUT_CLASSI
 
 export function isRangedAbility(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
     return matchesAny(`${name || ''} ${description || ''}`, config?.rangedKeywords);
+}
+
+/**
+ * Infer an area template from ability/item text. Explicit `Area: burst N` /
+ * `Area: aura N` syntax always wins; otherwise conservative keywords are used.
+ * A plain "N cells" phrase is treated as range, not radius, so it is ignored
+ * here. Returns null for ordinary single-target sources.
+ *
+ * @param {string} name
+ * @param {string} description
+ * @param {object} [config]
+ * @returns {{ shape: 'burst', radius: number, origin: 'target'|'self', friendlyFire: boolean }|null}
+ */
+export function parseAreaKeywords(name, description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {
+    const areaConfig = config?.area || DEFAULT_LOADOUT_CLASSIFIER_CONFIG.area;
+    const text = `${name || ''} ${description || ''}`.toLowerCase();
+    if (!text.trim()) return null;
+
+    const explicitArea = /\b(?:area|aoe)\s*:\s*(?:burst|aura|sphere|radius)\b/i.test(text);
+    if (matchesAny(text, areaConfig.singleTargetKeywords || []) && !explicitArea) return null;
+
+    const selfMatched = matchesAny(text, areaConfig.selfKeywords || []);
+    const burstMatched = matchesAny(text, areaConfig.burstKeywords || []);
+    if (!explicitArea && !selfMatched && !burstMatched) return null;
+
+    const maxRadius = Math.max(1, Math.min(24, Math.round(Number(areaConfig.maxRadius) || 6)));
+    const defaultRadius = Math.max(1, Math.min(maxRadius, Math.round(Number(areaConfig.defaultRadius) || 1)));
+    const explicitShape = text.match(/\b(?:area|aoe)\s*:\s*(burst|aura|sphere|radius)\b/i);
+    const explicitShapeValue = String(explicitShape?.[1] || '').toLowerCase();
+    const origin = explicitShapeValue === 'aura'
+        ? 'self'
+        : explicitShapeValue
+            ? 'target'
+            : (selfMatched ? 'self' : 'target');
+
+    const radiusPatterns = [
+        { pattern: /\b(?:area|aoe)\s*:\s*(?:burst|aura|sphere|radius)\s*(\d+)/i, feet: false },
+        { pattern: /\b(?:burst|aura|sphere)\s+(?:of\s*)?(\d+)\b/i, feet: false },
+        { pattern: /\bradius\s*(?:of\s*)?(\d+)\s*(?:ft|feet|foot)\b/i, feet: true },
+        { pattern: /\b(\d+)\s*(?:ft|feet|foot)\s*radius\b/i, feet: true },
+        { pattern: /\bradius\s*(?:of\s*)?(\d+)/i, feet: false },
+        { pattern: /\b(\d+)\s*[-\s]?(?:cell|square|tile|space)s?\s*radius\b/i, feet: false },
+        { pattern: /\b(?:all|every|each)\s+(?:enemies|allies|creatures|units)\s+(?:within|in)\s+(\d+)\s*(?:-|\s*)?(?:cells?|squares?|tiles?|spaces?)/i, feet: false },
+        { pattern: /\b(?:area|aoe)\s*:\s*(?:burst|aura|sphere)\s*(?:of\s*)?(\d+)\s*(?:-|\s*)?(?:cells?|squares?|tiles?|spaces?)\b/i, feet: false },
+    ];
+    let radius = defaultRadius;
+    for (const entry of radiusPatterns) {
+        const match = text.match(entry.pattern);
+        if (!match) continue;
+        const parsed = Math.round(Number(match[1]));
+        if (!Number.isFinite(parsed) || parsed <= 0) continue;
+        radius = Math.max(1, Math.min(maxRadius, entry.feet ? Math.ceil(parsed / 5) : parsed));
+        break;
+    }
+
+    return {
+        shape: 'burst',
+        radius,
+        origin,
+        friendlyFire: matchesAny(text, areaConfig.friendlyFireKeywords || []),
+    };
 }
 
 export function isBonusAction(description, config = DEFAULT_LOADOUT_CLASSIFIER_CONFIG) {

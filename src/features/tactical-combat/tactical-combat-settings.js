@@ -160,6 +160,7 @@ function syncControls(settings) {
     setChecked(el('rpg_tactical_combat_deployment_phase'), settings.tacticalCombatDeploymentPhase !== false);
     setChecked(el('rpg_tactical_combat_sync_tracker_before_narration'), settings.tacticalCombatSyncTrackerBeforeNarration !== false);
     setChecked(el('rpg_tactical_combat_show_coordinates'), !!settings.tacticalCombatShowCoordinates);
+    setChecked(el('rpg_tactical_combat_show_targeting_previews'), settings.tacticalCombatShowTargetingPreviews !== false);
     setValue(el('rpg_tactical_combat_max_tokens'), settings.tacticalCombatMaxTokens ?? 6000);
     setValue(el('rpg_tactical_combat_agent_prompt'), settings.tacticalCombatAgentPrompt || DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT);
     setValue(el('rpg_tactical_combat_encounter_prompt'), settings.tacticalCombatEncounterPrompt || DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT);
@@ -299,6 +300,7 @@ export function bindTacticalCombatSettings(deps) {
         ['rpg_tactical_combat_deployment_phase', 'tacticalCombatDeploymentPhase'],
         ['rpg_tactical_combat_sync_tracker_before_narration', 'tacticalCombatSyncTrackerBeforeNarration'],
         ['rpg_tactical_combat_show_coordinates', 'tacticalCombatShowCoordinates'],
+        ['rpg_tactical_combat_show_targeting_previews', 'tacticalCombatShowTargetingPreviews'],
     ]) {
         const node = el(id);
         if (!node) continue;

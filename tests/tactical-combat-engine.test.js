@@ -23,10 +23,15 @@ import {
     getEffectiveAc,
     getPendingAgentUnitIds,
     getUnitById,
+    getAbilityRangeCells,
+    getAreaCells,
+    getAreaTargets,
+    describeUnitOptions,
     hasLineOfSight,
     interpretActions,
     pathCost,
     retreatEncounter,
+    resolveEffectTemplate,
     rollDice,
     serializeAgentGameState,
 } from '../src/features/tactical-combat/tactical-combat-engine.js';
@@ -64,6 +69,233 @@ function makeState({ turnStyle = 'phase', units = null, rows = ROWS, cols = COLS
 const lowRoll = () => 0.25; // d20 = 6, d8 = 3
 const midRoll = () => 0.5; // d20 = 11, d8 = 5
 const highRoll = () => 0.99; // d20 = 20 (crit), d8 = 8
+
+function makeAreaState() {
+    const state = createEncounterState({
+        seed: 4321,
+        grid: { rows: ROWS, cols: COLS },
+        terrainRows: openTerrain(),
+        terrainTheme: 'dungeon',
+        turnStyle: 'phase',
+        movement: 6,
+        units: [
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 30, hp: 30, ac: 12, attackBonus: 20, damage: '1d6', initiativeBonus: 5 },
+            { id: 'pc-2', name: 'Borin', side: 'player', maxHp: 30, hp: 30, ac: 14, attackBonus: 4, damage: '1d6', initiativeBonus: 1 },
+            { id: 'enemy-1', name: 'Goblin A', side: 'enemy', maxHp: 30, hp: 30, ac: 10, attackBonus: 3, damage: '1d6', initiativeBonus: 0 },
+            { id: 'enemy-2', name: 'Goblin B', side: 'enemy', maxHp: 30, hp: 30, ac: 10, attackBonus: 3, damage: '1d6', initiativeBonus: 0 },
+            { id: 'enemy-3', name: 'Goblin C', side: 'enemy', maxHp: 30, hp: 30, ac: 10, attackBonus: 3, damage: '1d6', initiativeBonus: 0 },
+        ],
+    });
+    const positions = {
+        'pc-1': [1, 1],
+        'pc-2': [1, 2],
+        'enemy-1': [3, 1],
+        'enemy-2': [3, 2],
+        'enemy-3': [5, 5],
+    };
+    for (const unit of state.units) {
+        const [x, y] = positions[unit.id];
+        unit.x = x;
+        unit.y = y;
+        unit.skills = [];
+        unit.items = [];
+    }
+    state.terrain = openTerrain().map(row => row.split('').map(() => 'floor'));
+    return state;
+}
+
+function fireballSkill(overrides = {}) {
+    return {
+        id: 'fireball',
+        name: 'Fireball',
+        kind: 'attack',
+        range: 6,
+        damage: '1d6',
+        resource: 'hp',
+        maxUses: 2,
+        uses: 2,
+        area: { shape: 'burst', radius: 1, origin: 'target', friendlyFire: false },
+        ...overrides,
+    };
+}
+
+describe('tactical combat area effects', () => {
+    it('builds bounds-safe burst cells and self-aura range cells', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        expect(getAreaCells(state, { x: 4, y: 4 }, { shape: 'burst', radius: 2 })).toHaveLength(25);
+        const aura = { shape: 'burst', radius: 1, origin: 'self' };
+        const range = getAbilityRangeCells(state, caster, { kind: 'attack', range: 0, area: aura });
+        expect(range).toHaveLength(9);
+        expect(range).toContainEqual({ x: 1, y: 1 });
+        expect(range).not.toContainEqual({ x: 3, y: 3 });
+    });
+
+    it('hits every hostile in a burst once per target with one action and one use', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        const e1 = getUnitById(state, 'enemy-1');
+        const e2 = getUnitById(state, 'enemy-2');
+        const e3 = getUnitById(state, 'enemy-3');
+        const skill = fireballSkill();
+        caster.skills.push(skill);
+        const result = applyAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetCell: { x: 4, y: 1 },
+        }, { actorSide: 'player', rng: midRoll });
+        expect(result.ok).toBe(true);
+        expect(e1.hp).toBeLessThan(30);
+        expect(e2.hp).toBeLessThan(30);
+        expect(e3.hp).toBe(30);
+        expect(caster.actionUsed).toBe(true);
+        expect(skill.uses).toBe(1);
+        expect(result.log).toMatch(/2 targets/);
+    });
+
+    it('excludes allies by default and includes them with friendlyFire', () => {
+        const safe = makeAreaState();
+        const safeCaster = getUnitById(safe, 'pc-1');
+        const safeAlly = getUnitById(safe, 'pc-2');
+        safeAlly.x = 3;
+        safeAlly.y = 3;
+        safeCaster.skills.push(fireballSkill());
+        const safeResult = applyAction(safe, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetId: 'enemy-2',
+        }, { actorSide: 'player', rng: midRoll });
+        expect(safeResult.ok).toBe(true);
+        expect(safeAlly.hp).toBe(30);
+
+        const risky = makeAreaState();
+        const riskyCaster = getUnitById(risky, 'pc-1');
+        const riskyAlly = getUnitById(risky, 'pc-2');
+        riskyAlly.x = 3;
+        riskyAlly.y = 3;
+        riskyCaster.skills.push(fireballSkill({ area: { shape: 'burst', radius: 1, origin: 'target', friendlyFire: true } }));
+        const riskyResult = applyAction(risky, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetId: 'enemy-2',
+        }, { actorSide: 'player', rng: midRoll });
+        expect(riskyResult.ok).toBe(true);
+        expect(riskyAlly.hp).toBeLessThan(30);
+    });
+
+    it('heals every ally in a self-centered aura but not enemies', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        const ally = getUnitById(state, 'pc-2');
+        const enemy = getUnitById(state, 'enemy-1');
+        caster.hp = 5;
+        ally.hp = 5;
+        enemy.hp = 5;
+        caster.skills.push({
+            id: 'rally', name: 'Rallying Aura', kind: 'heal', heal: '1d8+2', range: 0,
+            resource: 'hp', maxUses: 1, uses: 1,
+            area: { shape: 'burst', radius: 2, origin: 'self' },
+        });
+        const result = applyAction(state, { type: 'skill', unitId: 'pc-1', skillId: 'rally' }, {
+            actorSide: 'player', rng: midRoll,
+        });
+        expect(result.ok).toBe(true);
+        expect(caster.hp).toBe(12);
+        expect(ally.hp).toBe(12);
+        expect(enemy.hp).toBe(5);
+        expect(caster.actionUsed).toBe(true);
+    });
+
+    it('rejects an empty or out-of-range area without consuming resources', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        const skill = fireballSkill({ range: 3 });
+        caster.skills.push(skill);
+        const empty = applyAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetCell: { x: 6, y: 6 },
+        }, { actorSide: 'player', rng: midRoll });
+        expect(empty.ok).toBe(false);
+        expect(skill.uses).toBe(2);
+        expect(caster.actionUsed).toBe(false);
+
+        const far = applyAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetCell: { x: 7, y: 7 },
+        }, { actorSide: 'player', rng: midRoll });
+        expect(far.ok).toBe(false);
+        expect(far.error).toMatch(/range/i);
+        expect(skill.uses).toBe(2);
+    });
+
+    it('blocks a hostile burst whose center or targets are behind a wall', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        caster.skills.push(fireballSkill());
+        state.terrain[1][2] = 'wall';
+        const blocked = applyAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'fireball', targetCell: { x: 3, y: 1 },
+        }, { actorSide: 'player', rng: midRoll });
+        expect(blocked.ok).toBe(false);
+        expect(blocked.error).toMatch(/line of sight/i);
+    });
+
+    it('heals multiple allies with an area item', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        const ally = getUnitById(state, 'pc-2');
+        caster.hp = 5;
+        ally.hp = 5;
+        caster.items.push({
+            id: 'aura-potion', name: 'Aura Potion', kind: 'heal', amount: '1d8+2', range: 6,
+            maxUses: 1, uses: 1, resource: 'hp',
+            area: { shape: 'burst', radius: 1, origin: 'target' },
+        });
+        const result = applyAction(state, {
+            type: 'item', unitId: 'pc-1', itemId: 'aura-potion', targetCell: { x: 1, y: 2 },
+        }, { actorSide: 'player', rng: midRoll });
+        expect(result.ok).toBe(true);
+        expect(caster.hp).toBeGreaterThan(5);
+        expect(ally.hp).toBeGreaterThan(5);
+        expect(caster.actionUsed).toBe(true);
+        expect(caster.items[0].uses).toBe(0);
+    });
+
+    it('expands $target template effects once per area target', () => {
+        const effects = resolveEffectTemplate([
+            { type: 'damage', targetId: '$target', amount: '1d6' },
+            { type: 'log', text: '$caster calls down fire.' },
+        ], { casterId: 'pc-1', targetIds: ['enemy-1', 'enemy-2'] });
+        expect(effects).toHaveLength(3);
+        expect(effects.filter(effect => effect.type === 'damage').map(effect => effect.targetId))
+            .toEqual(['enemy-1', 'enemy-2']);
+        expect(effects.filter(effect => effect.type === 'log')).toHaveLength(1);
+    });
+
+    it('resolves an area opening action and then resets the actor budget', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        const e1 = getUnitById(state, 'enemy-1');
+        const e2 = getUnitById(state, 'enemy-2');
+        caster.skills.push(fireballSkill());
+        const result = applyOpeningAction(state, {
+            text: 'I cast Fireball at the goblins.',
+            actorName: 'Aria',
+            skillName: 'Fireball',
+            targetId: 'enemy-1',
+        }, { rng: midRoll });
+        expect(result.ok).toBe(true);
+        expect(e1.hp).toBeLessThan(30);
+        expect(e2.hp).toBeLessThan(30);
+        expect(caster.actionUsed).toBe(false);
+        expect(caster.skills[0].uses).toBe(1);
+    });
+
+    it('exposes primary targets and affected ids for the combat agent', () => {
+        const state = makeAreaState();
+        const caster = getUnitById(state, 'pc-1');
+        caster.skills.push(fireballSkill());
+        const options = describeUnitOptions(state, caster);
+        expect(options.skillTargets.fireball).toEqual(expect.arrayContaining(['enemy-1', 'enemy-2']));
+        expect(options.aoeTargets.fireball['enemy-1']).toEqual(expect.arrayContaining(['enemy-1', 'enemy-2']));
+        expect(options.aoeTargets.fireball['enemy-3']).toEqual(['enemy-3']);
+        const payload = buildAgentGameState(state, ['enemy-3']);
+        expect(payload.rules.area).toMatch(/aoeTargets/i);
+        expect(payload.units.find(unit => unit.id === 'pc-1').skills[0].area).toMatchObject({ shape: 'burst', radius: 1 });
+    });
+});
 
 describe('tactical combat grid & encounter construction', () => {
     it('creates deterministic procedural terrain with the requested dimensions and clear deployment lanes', () => {

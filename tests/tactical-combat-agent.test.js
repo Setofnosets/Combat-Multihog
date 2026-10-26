@@ -112,6 +112,19 @@ describe('tactical action response parsing', () => {
         expect(parseActionsResponse('{"foo":1}').error).toMatch(/actions/i);
     });
 
+    it('normalizes fields and keeps targetCell for area abilities', () => {
+        const result = sanitizeActionsPayload([{
+            type: 'skill', unitId: 'enemy-2', skillId: 'fireball', targetCell: { x: 3, y: 4 },
+        }], { unitIds: ['enemy-2'] });
+        expect(result.actions).toHaveLength(1);
+        expect(result.actions[0]).toMatchObject({ type: 'skill', skillId: 'fireball', targetCell: { x: 3, y: 4 } });
+        const malformed = sanitizeActionsPayload([{
+            type: 'skill', unitId: 'enemy-2', skillId: 'fireball', targetCell: { x: 'bad' },
+        }], { unitIds: ['enemy-2'] });
+        expect(malformed.actions).toHaveLength(0);
+        expect(malformed.rejected[0].error).toMatch(/targetCell/i);
+    });
+
     it('normalizes fields and enforces the units-to-move allow-list', () => {
         const sanitized = sanitizeActionsPayload([
             { type: 'move', unitId: 'enemy-2', to: { x: '3', y: 4 } },
@@ -162,6 +175,48 @@ describe('tactical encounter architect payloads', () => {
         expect(result.encounter.enemies[0].maxHp).toBe(14);
         expect(result.encounter.enemies[0].initiativeBonus).toBe(0);
         expect(result.encounter.enemies[1].skills[0].maxUses).toBe(2);
+    });
+
+    it('normalizes architect area templates end-to-end', () => {
+        const normalized = normalizeEncounterPayload({
+            title: 'Cinder Hall',
+            enemies: [{
+                name: 'Cinder Adept',
+                maxHp: 20,
+                ac: 12,
+                attackBonus: 4,
+                damage: '1d6',
+                skills: [{
+                    name: 'Cinder Burst',
+                    kind: 'attack',
+                    range: 8,
+                    damage: '3d6',
+                    area: { shape: 'burst', radius: 2, origin: 'target', friendlyFire: true },
+                    maxUses: 1,
+                }, {
+                    name: 'Burning Aura',
+                    kind: 'buff',
+                    range: 0,
+                    acBonus: 1,
+                    area: { shape: 'aura', radius: 1 },
+                    maxUses: 1,
+                }],
+            }],
+        });
+        expect(normalized.ok).toBe(true);
+        const [burst, aura] = normalized.encounter.enemies[0].skills;
+        expect(burst.area).toMatchObject({ shape: 'burst', radius: 2, origin: 'target', friendlyFire: true });
+        expect(aura.area).toMatchObject({ shape: 'burst', radius: 1, origin: 'self', friendlyFire: false });
+        const state = createEncounterState({
+            seed: 1,
+            grid: { rows: 8, cols: 8 },
+            terrainRows: Array.from({ length: 8 }, () => '........'),
+            units: normalized.encounter.enemies,
+        });
+        const payload = buildAgentGameState(state, [state.units[0].id]);
+        expect(payload.rules.area).toMatch(/aoeTargets/i);
+        expect(payload.units[0].skills[0].area).toMatchObject({ radius: 2, origin: 'target' });
+        expect(payload.units[0].skills[1].area).toMatchObject({ origin: 'self' });
     });
 
     it('reports missing titles/enemies and invalid terrain widths', () => {
@@ -224,6 +279,24 @@ describe('tactical encounter architect payloads', () => {
         expect(normalized.effects[1]).toMatchObject({ type: 'terrain', cells: [{ x: 3, y: 3, terrain: 'water' }] });
         expect(normalized.rejected.join(' ')).toMatch(/missing/);
         expect(normalized.log).toContain('Water bursts');
+    });
+
+    it('honours an area target allow-list and a larger effect cap', () => {
+        const state = makeState();
+        const effect = id => ({ type: 'damage', targetId: id, amount: '1d6' });
+        const normalized = normalizeSpecialEffects({
+            effects: [effect('pc-1'), effect('missing'), ...Array.from({ length: 8 }, () => effect('pc-1'))],
+        }, state, {
+            maxEffects: 10,
+            allowedTargetIds: ['pc-1'],
+        });
+        expect(normalized.effects).toHaveLength(9);
+        expect(normalized.rejected.join(' ')).toMatch(/unknown target/i);
+        const denied = normalizeSpecialEffects({ effects: [effect('enemy-2')] }, state, {
+            allowedTargetIds: ['pc-1'],
+        });
+        expect(denied.effects).toHaveLength(0);
+        expect(denied.rejected[0]).toMatch(/outside the ability's area/i);
     });
 
     it('normalizes Willpower, defeat, transform, and status behavior effects', () => {
@@ -348,6 +421,39 @@ describe('tactical encounter architect payloads', () => {
         expect(enemy.skills[0].uses).toBe(0);
     });
 
+    it('sends area targets and limit metadata to the special resolver', async () => {
+        sendStateRequest.mockReset();
+        const state = makeState();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            log: 'Fire washes over the goblin.',
+            effects: [{ type: 'damage', targetId: 'enemy-2', amount: '1d6' }],
+        }));
+        const result = await resolveSpecialEffectWithAgent(
+            state,
+            state.units[0],
+            { kind: 'skill', name: 'Cinder Burst', description: 'A burst of flame.', area: { shape: 'burst', radius: 1 } },
+            state.units[1],
+            SETTINGS,
+            {
+                targets: [state.units[1]],
+                area: { shape: 'burst', radius: 1 },
+                anchor: { x: 2, y: 1 },
+                areaCells: [{ x: 2, y: 1 }],
+                maxEffects: 8,
+            },
+        );
+        expect(result.ok).toBe(true);
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        const prompt = sendStateRequest.mock.calls[0][2];
+        const payload = JSON.parse(prompt.match(/```json\n([\s\S]*?)\n```/)[1]);
+        expect(payload.ability.area).toMatchObject({ shape: 'burst', radius: 1 });
+        expect(payload.areaTargets).toHaveLength(1);
+        expect(payload.areaTargets[0].id).toBe('enemy-2');
+        expect(payload.anchor).toEqual({ x: 2, y: 1 });
+        expect(payload.limits.maxEffects).toBe(8);
+        expect(payload.rules.areaTargets).toMatch(/areaTargets/i);
+    });
+
     it('resolves a special ability through the compact resolver call', async () => {
         sendStateRequest.mockReset();
         const state = makeState();
@@ -385,6 +491,40 @@ describe('tactical local AI & agent turn execution', () => {
         const applied = interpretActions(state, actions, { unitIds: ['enemy-2'], actorSide: 'agent', source: 'agent', rng: () => 0.5 });
         expect(applied.applied.length).toBeGreaterThan(0);
         expect(applied.rejected).toEqual([]);
+    });
+
+    it('prefers a multi-target area skill when two enemies are clustered', () => {
+        const state = createEncounterState({
+            seed: 3,
+            grid: { rows: 8, cols: 8 },
+            terrainRows: Array.from({ length: 8 }, () => '........'),
+            turnStyle: 'phase',
+            units: [
+                { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 24, hp: 24, ac: 14, attackBonus: 5, damage: '1d8+2' },
+                { id: 'pc-2', name: 'Borin', side: 'player', maxHp: 24, hp: 24, ac: 14, attackBonus: 5, damage: '1d8+2' },
+                {
+                    id: 'enemy-2', name: 'Pyromancer', side: 'enemy', maxHp: 20, hp: 20, ac: 11, attackBonus: 3, damage: '1d6',
+                    skills: [{
+                        id: 'fireball', name: 'Fireball', kind: 'attack', range: 6, damage: '1d6', maxUses: 2, uses: 2,
+                        area: { shape: 'burst', radius: 1, origin: 'target', friendlyFire: false },
+                    }],
+                },
+            ],
+        });
+        const [pc1, pc2, enemy] = state.units;
+        enemy.x = 3; enemy.y = 3;
+        pc1.x = 2; pc1.y = 2;
+        pc2.x = 2; pc2.y = 3;
+        state.phase = 'enemy';
+        state.pendingAgentUnitIds = ['enemy-2'];
+        const actions = buildLocalAiActions(state, ['enemy-2']);
+        expect(actions.some(action => action.type === 'skill' && action.skillId === 'fireball')).toBe(true);
+        const applied = interpretActions(state, actions, {
+            unitIds: ['enemy-2'], actorSide: 'agent', source: 'agent', rng: () => 0.5,
+        });
+        expect(applied.rejected).toEqual([]);
+        expect(pc1.hp).toBeLessThan(24);
+        expect(pc2.hp).toBeLessThan(24);
     });
 
     it('uses the agent action list when the connection returns valid JSON', async () => {

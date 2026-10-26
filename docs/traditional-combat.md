@@ -50,7 +50,7 @@ Traditional combat uses the tactical engine's combat primitives through a theate
 - Initiative/phased turn flow and agent turn orchestration.
 - Memo synchronization, tracker finalization, and narration handoff.
 
-Only the state builder, agent payload/prompt, roster UI, and settings binder are new. The tactical engine's grid remains untouched for tactical mode.
+Only the state builder, agent payload/prompt, roster UI, and settings binder are new. The tactical engine's grid remains untouched for tactical mode. Tactical `area` templates are ignored in traditional combat; traditional actions remain single-target.
 
 ## Persistence
 

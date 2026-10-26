@@ -2,6 +2,16 @@
 
 All notable changes to the **Multihog D&D Framework** will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- Tactical combat now supports multi-target **area abilities** through an optional `area` template on skills and heal/buff items: `{"shape":"burst","radius":N,"origin":"target"|"self","friendlyFire":false}`. One cast hits every eligible unit in the burst while consuming one action and one use.
+- Self-centered auras (`origin: "self"`) for heals, buffs, and attacks; hostile areas exclude allies by default with an opt-in `friendlyFire` flag.
+- Area authoring from the memo: `Area: burst N` / `Area: aura N`, conservative keyword inference, and architect JSON support. `N cells` is treated as range, while `radius N` / `within N cells` patterns can define a burst.
+- The combat agent receives precomputed `aoeTargets` and can choose a primary target for each area skill; the local tactics fallback prefers multi-target attacks when two or more hostiles are clustered.
+- Area special abilities resolve every affected target in one resolver call with an engine-enforced target allow-list.
+- New board targeting previews: selected abilities always highlight their range, and hovering a cell previews the burst center, affected tiles, valid targets, blocked cells, and friendly-fire warnings. The hover overlay is controlled by **Show area-of-effect hover previews**.
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added

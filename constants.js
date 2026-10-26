@@ -253,7 +253,7 @@ Other Items:
 
 Non-spell class features and active abilities ONLY (e.g. Lay on Hands, Action Surge). NEVER mix these with spells. Format each entry as: \`Ability Name (brief description)\`.
 
-Every ability that is use-limited must have its uses in the parentheses, for example: "Silver-Tongued Pivot (Allows the reroll of a failed social check by seamlessly shifting the narrative framing, 1/1 per rest)". At-will / passive abilities omit a uses count.`,
+Every ability that is use-limited must have its uses in the parentheses, for example: "Silver-Tongued Pivot (Allows the reroll of a failed social check by seamlessly shifting the narrative framing, 1/1 per rest)". At-will / passive abilities omit a uses count. When an ability visibly covers an area, include \`Area: burst N\` (N-cell radius) or \`Area: aura N\` (centered on the user) inside the parentheses so tactical combat can resolve every affected subject.`,
   spells: `PLAYER CHARACTER ONLY: [SPELLS] describes {{user}}, not companions. Party members' spells belong inside their own [PARTY] entry; never copy a companion's spell here unless {{user}} also knows it.
 
 Spell slots and spells known, grouped by level. Format each line as: \`Level N (avail/max): Spell1, Spell2\`. For cantrips, use \`Cantrips: Spell1, Spell2\`. Track slot usage accurately. NEVER mix these with abilities.

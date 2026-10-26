@@ -18,6 +18,7 @@ import {
     TC_TERRAIN_CHARS,
     resolveGridDimensions,
     clampInt,
+    normalizeArea,
     terrainChar,
 } from './tactical-combat-constants.js';
 import {
@@ -48,6 +49,7 @@ import {
     buildAgentGameState,
     chebyshev,
     computeReachableCells,
+    getAreaTargets,
     getTerrain,
     hasLineOfSight,
     interpretActions,
@@ -153,6 +155,7 @@ function compactUnitForContext(unit) {
             kind: skill.kind,
             resource: skill.resource || 'hp',
             range: skill.range,
+            area: normalizeArea(skill.area ?? skill.aoe),
             damage: skill.damage,
             willpowerDamage: skill.willpowerDamage || '',
             willpowerOutcome: skill.willpowerOutcome || 'defeat',
@@ -222,6 +225,7 @@ export function buildEncounterRequestPayload(context, settings, options = {}) {
         payload.rules.targeting = 'All living units on the opposing side are legal attack targets. Range and line of sight are ignored.';
         return payload;
     }
+    payload.rules.area = 'Optional skill area template: {"shape":"burst","radius":1-6,"origin":"target"|"self","friendlyFire":false}. Radius uses grid cells (radius 1 = 3x3). Use origin "self" for auras centered on the caster. Hostile areas exclude allies unless friendlyFire is true.';
     const grid = resolveGridDimensions(settings, unitCount);
     payload.requestedGrid = {
         mode: grid.mode,
@@ -316,6 +320,7 @@ export function normalizeEncounterPayload(value, options = {}) {
                     : 'attack',
                 resource: normalizeWillpowerResource(skill.resource ?? skill.targetResource, 'hp'),
                 range: numberOr(skill.range, 1, 0, 24),
+                area: normalizeArea(skill.area ?? skill.aoe),
                 damage: String(skill.damage || '').slice(0, 40),
                 willpowerDamage: String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
                 willpowerOutcome: normalizeWillpowerOutcome(skill.willpowerOutcome ?? skill.willOutcome, 'defeat'),
@@ -435,6 +440,15 @@ const ENCOUNTER_JSON_SCHEMA = {
                                     kind: { type: 'string', enum: ['attack', 'heal', 'buff', 'special'] },
                                     resource: { type: 'string', enum: ['hp', 'willpower', 'both'] },
                                     range: { type: 'integer' },
+                                    area: {
+                                        type: 'object',
+                                        properties: {
+                                            shape: { type: 'string', enum: ['burst'] },
+                                            radius: { type: 'integer' },
+                                            origin: { type: 'string', enum: ['target', 'self'] },
+                                            friendlyFire: { type: 'boolean' },
+                                        },
+                                    },
                                     damage: { type: 'string' },
                                     willpowerDamage: { type: 'string' },
                                     willpowerOutcome: { type: 'string', enum: ['defeat', 'flee', 'switch_side', 'incapacitate', 'surrender'] },
@@ -474,6 +488,10 @@ const ACTIONS_JSON_SCHEMA = {
                             properties: { x: { type: 'integer' }, y: { type: 'integer' } },
                         },
                         targetId: { type: 'string' },
+                        targetCell: {
+                            type: 'object',
+                            properties: { x: { type: 'integer' }, y: { type: 'integer' } },
+                        },
                         skillId: { type: 'string' },
                         itemId: { type: 'string' },
                     },
@@ -664,7 +682,12 @@ export function normalizeSpecialEffects(value, state, options = {}) {
     if (payload && !Array.isArray(payload) && Array.isArray(payload.effects)) payload = payload.effects;
     const effects = [];
     const rejected = [];
-    const list = Array.isArray(payload) ? payload.slice(0, 6) : [];
+    const maxEffects = Math.max(1, Math.min(64, Number(options.maxEffects) || 6));
+    const allowed = Array.isArray(options.allowedTargetIds)
+        ? new Set(options.allowedTargetIds.map(id => String(id)))
+        : null;
+    const list = Array.isArray(payload) ? payload.slice(0, maxEffects) : [];
+    const targetAllowed = target => !allowed || allowed.has(String(target?.id || ''));
     for (const raw of list) {
         if (!raw || typeof raw !== 'object') continue;
         const type = String(raw.type || '').toLowerCase();
@@ -672,6 +695,10 @@ export function normalizeSpecialEffects(value, state, options = {}) {
             const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
+                continue;
+            }
+            if (!targetAllowed(target)) {
+                rejected.push(`${target.name} is outside the ability's area.`);
                 continue;
             }
             const resource = normalizeWillpowerResource(raw.resource ?? raw.stat, 'hp');
@@ -717,6 +744,10 @@ export function normalizeSpecialEffects(value, state, options = {}) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
                 continue;
             }
+            if (!targetAllowed(target)) {
+                rejected.push(`${target.name} is outside the ability's area.`);
+                continue;
+            }
             if (Number(target.willpower) > 0 && !target.willpowerBroken) {
                 rejected.push(`${target.name} still has Willpower; a defeat effect is not legal.`);
                 continue;
@@ -737,6 +768,10 @@ export function normalizeSpecialEffects(value, state, options = {}) {
             const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
+                continue;
+            }
+            if (!targetAllowed(target)) {
+                rejected.push(`${target.name} is outside the ability's area.`);
                 continue;
             }
             const skills = Array.isArray(raw.skills)
@@ -828,10 +863,10 @@ export function normalizeSpecialEffects(value, state, options = {}) {
  *
  * @param {object} state
  * @param {object} caster
- * @param {{ kind: 'skill'|'item', name: string, description: string }} source
+ * @param {{ kind: 'skill'|'item', name: string, description: string, area?: object }} source
  * @param {object|null} target
  * @param {Record<string, any>} settings
- * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional' }} [options]
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional', targets?: object[], area?: object, anchor?: object, areaCells?: object[], maxEffects?: number, allowedTargetIds?: string[] }} [options]
  * @returns {Promise<{ ok: boolean, effects?: object[], log?: string, error?: string }>}
  */
 export async function resolveSpecialEffectWithAgent(state, caster, source, target, settings, options = {}) {
@@ -839,6 +874,18 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
     const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const chatId = getActiveChatId();
     const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
+    const targets = Array.isArray(options.targets)
+        ? options.targets.filter(unit => unit && !unit.defeated && !unit.fled)
+        : (target ? [target] : []);
+    const area = mode === 'traditional' ? null : normalizeArea(options.area ?? source.area ?? source.aoe);
+    const areaTargets = area ? targets : [];
+    const allowedTargetIds = Array.isArray(options.allowedTargetIds)
+        ? options.allowedTargetIds.map(String)
+        : (area ? [...new Set([caster.id, ...areaTargets.map(unit => unit.id)])] : null);
+    const maxEffects = Math.max(
+        1,
+        Math.min(64, Number(options.maxEffects) || (area ? Math.min(24, 6 * Math.max(1, areaTargets.length)) : 6)),
+    );
     const payload = {
         ability: {
             kind: source.kind,
@@ -846,6 +893,7 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             description: String(source.description || '').slice(0, 700),
             resource: normalizeWillpowerResource(source.resource, 'hp'),
             willpowerOutcome: normalizeWillpowerOutcome(source.willpowerOutcome ?? source.willOutcome, 'defeat'),
+            area: mode === 'traditional' ? null : area,
         },
         caster: compactSpecialUnit(caster),
         target: target ? compactSpecialUnit(target) : null,
@@ -863,12 +911,20 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
                 terrain: state.terrain.map(row => row.map(id => terrainChar(id)).join('')),
                 units: state.units.filter(unit => !unit.defeated && !unit.fled).map(compactSpecialUnit),
             },
+        ...(mode === 'traditional' ? {} : {
+            areaTargets: areaTargets.map(compactSpecialUnit),
+            anchor: options.anchor || null,
+            areaCells: Array.isArray(options.areaCells) ? options.areaCells.slice(0, 169) : [],
+        }),
         rules: {
             actorSide: caster.side,
             willpower: 'Willpower is separate from HP. To break Willpower, apply damage with resource "willpower". Set willpowerOutcome on the damage effect. A defeat effect is only legal after Willpower is already 0.',
             permanentEnemyEffects: 'Permanent transformations are disabled for enemy-authored specials. Use temporary transformations unless the source is a player unit.',
+            ...(mode === 'traditional' ? {} : {
+                areaTargets: 'When ability.area is present, unit-targeted effects must use ids from areaTargets only. Apply the effect to each affected unit as appropriate. Do not damage allies unless friendlyFire is true.',
+            }),
         },
-        limits: { maxEffects: 6 },
+        limits: { maxEffects },
     };
     try {
         const raw = await sendStateRequest(
@@ -883,7 +939,11 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
         if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
         const parsed = parseTacticalResponse(raw, 'effects');
         if (!parsed.value) return { ok: false, error: parsed.error || 'The resolver returned no JSON.' };
-        const normalized = normalizeSpecialEffects(parsed.value, state, { theater: mode === 'traditional' });
+        const normalized = normalizeSpecialEffects(parsed.value, state, {
+            theater: mode === 'traditional',
+            maxEffects,
+            allowedTargetIds,
+        });
         if (!normalized.effects.length) {
             return { ok: false, error: normalized.rejected.join(' ') || 'The resolver returned no usable effects.' };
         }
@@ -911,6 +971,30 @@ function chooseStrategicCell(state, unit, target) {
         if (terrain.attackBonus > 0) score -= 3;
         if (terrain.id === 'hazard') score += 12;
         if (!best || score < best.score) best = { x, y, score, distance, cost };
+    }
+    return best;
+}
+
+function chooseBestAreaAttack(state, caster, unit, targets) {
+    let best = null;
+    for (const skill of unit.skills || []) {
+        const area = normalizeArea(skill.area);
+        if (skill.kind !== 'attack' || !area || skill.uses <= 0) continue;
+        if (skill.bonusAction ? unit.bonusUsed : unit.actionUsed) continue;
+        const anchors = area.origin === 'self'
+            ? [{ targetId: unit.id, cell: { x: caster.x, y: caster.y } }]
+            : targets.map(target => ({ targetId: target.id, cell: { x: target.x, y: target.y } }));
+        for (const anchor of anchors) {
+            const result = getAreaTargets(state, caster, skill, anchor.cell, { allowEmpty: false });
+            if (!result.ok) continue;
+            const hostiles = result.targets.filter(target => hostileTo(unit, target));
+            if (hostiles.length < 2) continue;
+            if (result.targets.some(target => !hostileTo(unit, target))) continue;
+            const score = hostiles.length * 100 + Math.max(0, Number(skill.damage ? 1 : 0));
+            if (!best || score > best.score) {
+                best = { skill, anchor, targets: hostiles, score };
+            }
+        }
     }
     return best;
 }
@@ -991,6 +1075,26 @@ export function buildLocalAiActions(state, unitIds, options = {}) {
             }
         }
 
+        if (canUse('skill') && !actionUsed) {
+            const areaAttack = chooseBestAreaAttack(
+                state,
+                projected,
+                { ...unit, actionUsed, bonusUsed },
+                targets,
+            );
+            if (areaAttack) {
+                actions.push({
+                    type: 'skill',
+                    unitId: unit.id,
+                    skillId: areaAttack.skill.id,
+                    targetId: areaAttack.anchor.targetId,
+                });
+                if (areaAttack.skill.bonusAction) bonusUsed = true;
+                else actionUsed = true;
+                performed = true;
+            }
+        }
+
         if (!actionUsed && isAdjacentEnough(state, projected, target)) {
             const willpowerSkill = canUse('skill') ? (unit.skills || []).find(skill =>
                 skill.kind === 'attack'
@@ -1051,12 +1155,25 @@ async function executeAgentAction(state, action, settings, options = {}) {
         return { result: { ok: false, error: prepared.error }, special: true, applied: [] };
     }
     const source = prepared.skill || prepared.item;
+    const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
+    const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(target => target.id)])];
+    const maxEffects = prepared.area
+        ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
+        : 6;
     const template = Array.isArray(source?.effectTemplate) ? source.effectTemplate : null;
     let effects = [];
     let log = '';
     if (template?.length) {
-        effects = resolveEffectTemplate(template, { casterId: prepared.unit.id, targetId: prepared.target.id });
-        const normalized = normalizeSpecialEffects({ effects }, state, { theater: state.theater === true });
+        effects = resolveEffectTemplate(template, {
+            casterId: prepared.unit.id,
+            targetId: prepared.target?.id || prepared.unit.id,
+            targetIds: prepared.area ? targets.map(target => target.id) : undefined,
+        });
+        const normalized = normalizeSpecialEffects({ effects }, state, {
+            theater: state.theater === true,
+            maxEffects: Math.max(6, effects.length),
+            allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+        });
         if (!normalized.effects.length) {
             return {
                 result: { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' },
@@ -1075,10 +1192,20 @@ async function executeAgentAction(state, action, settings, options = {}) {
                 description: source.description || '',
                 resource: source.resource,
                 willpowerOutcome: source.willpowerOutcome,
+                area: source.area,
             },
             prepared.target,
             settings,
-            { signal: options.signal, mode: options.mode },
+            {
+                signal: options.signal,
+                mode: options.mode,
+                targets,
+                area: prepared.area,
+                anchor: prepared.anchor,
+                areaCells: prepared.areaCells,
+                maxEffects,
+                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+            },
         );
         if (!resolved.ok) {
             return { result: { ok: false, error: resolved.error || 'The special resolver failed.' }, special: true, applied: [] };
@@ -1093,6 +1220,7 @@ async function executeAgentAction(state, action, settings, options = {}) {
         label: source.name,
         narrative: log,
         rng: options.rng,
+        maxEffects: Math.max(32, effects.length),
     });
     return {
         result: { ok: result.ok, error: result.error, ended: result.ended, applied: result.applied, rejected: result.rejected },

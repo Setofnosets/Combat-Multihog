@@ -23,6 +23,8 @@ import {
     describeUnitOptions,
     endTurn,
     finishDeployment,
+    getAbilityRangeCells,
+    getAreaTargets,
     getDeploymentCells,
     getPendingAgentUnitIds,
     prepareSpecialAction,
@@ -31,6 +33,7 @@ import {
     retreatEncounter,
     serializeAgentGameState,
 } from './tactical-combat-engine.js';
+import { describeArea, normalizeArea } from './tactical-combat-constants.js';
 import { getActionCatalog } from './tactical-combat-actions.js';
 import { buildTacticalCombatMarkup } from './tactical-combat-markup.js';
 import {
@@ -87,6 +90,9 @@ const ui = {
     architectStateId: '',
     architectToken: 0,
     autoNarrateTimer: null,
+    hoverKey: '',
+    hoverFrame: null,
+    pendingAnchor: null,
 };
 
 function toast(kind, message) {
@@ -135,8 +141,8 @@ export function liveUnitAtCell(state, x, y) {
     return state?.units?.find(unit => unit.x === x && unit.y === y && !unit.defeated && !unit.fled) || null;
 }
 
-function pickSelectedUnit(state) {
-    const current = state.units.find(unit => unit.id === ui.view.selectedUnitId);
+function pickSelectedUnit(state, preferredUnitId = ui.view.selectedUnitId) {
+    const current = state.units.find(unit => unit.id === preferredUnitId);
     const initiativeActive = state.turnStyle === 'initiative' && state.phase === 'player'
         ? state.units.find(unit => unit.id === activeUnitId(state))
         : null;
@@ -149,6 +155,16 @@ function pickSelectedUnit(state) {
 
 function skillResourceUsed(unit, skill) {
     return skill?.bonusAction ? !!unit?.bonusUsed : !!unit?.actionUsed;
+}
+
+function isSupportSource(source) {
+    if (!source) return false;
+    if (source.kind === 'heal' || source.kind === 'buff') return true;
+    if (source.kind === 'special' && normalizeArea(source.area)) {
+        const mode = String(source.target || '').toLowerCase();
+        return mode === 'ally' || mode === 'self';
+    }
+    return false;
 }
 
 function itemTargetCells(state, unit, item) {
@@ -169,21 +185,62 @@ function itemTargetCells(state, unit, item) {
     return cells;
 }
 
+function buildAreaPreviewView(state, caster, source, result) {
+    if (!result || (!result.ok && !Array.isArray(result.cells))) return null;
+    const targetMode = String(source?.target || '').toLowerCase();
+    const support = source?.kind === 'heal'
+        || source?.kind === 'buff'
+        || (source?.kind === 'special' && (targetMode === 'ally' || targetMode === 'self'));
+    const cells = new Set((result.cells || []).map(cell => `${cell.x},${cell.y}`));
+    const targetCells = new Set((result.targets || []).map(unit => `${unit.x},${unit.y}`));
+    const unitCell = id => {
+        const unit = state.units.find(candidate => candidate.id === id);
+        return unit ? `${unit.x},${unit.y}` : '';
+    };
+    const friendlySides = new Set(['player', 'ally']);
+    const isFriendly = unit => unit && caster && (unit.side === caster.side
+        || (friendlySides.has(unit.side) && friendlySides.has(caster.side)));
+    const blockedCells = new Set((result.blocked || []).map(entry => unitCell(entry.id)).filter(Boolean));
+    const warningCells = new Set(support
+        ? []
+        : (result.targets || []).filter(unit => isFriendly(unit)).map(unit => `${unit.x},${unit.y}`));
+    const count = (result.targets || []).length;
+    const label = describeArea(result.area);
+    const countLabel = support
+        ? (count ? `${count} all${count === 1 ? 'y' : 'ies'} in area` : 'no allies in area')
+        : (count ? `${count} target${count === 1 ? '' : 's'}` : 'no legal targets');
+    const warning = warningCells.size
+        ? ` · ${warningCells.size} allied target${warningCells.size === 1 ? '' : 's'} hit`
+        : '';
+    const actionHint = count ? ' · click to cast' : '';
+    return {
+        kind: support ? 'support' : 'hostile',
+        cells,
+        targetCells,
+        blockedCells,
+        warningCells,
+        anchor: result.anchor || null,
+        hint: `${label} · ${countLabel}${warning}${actionHint}`,
+    };
+}
+
 /**
  * Build the pure markup view for the current encounter.
  * @param {object} state
+ * @param {object} [viewOverrides] Optional view fields (used by tests and previews).
  * @returns {object}
  */
-export function buildTacticalView(state) {
+export function buildTacticalView(state, viewOverrides = null) {
     const settings = getSettings();
     const view = {
         ...ui.view,
+        ...(viewOverrides || {}),
         actionCatalog: state.actionCatalog || [],
         showCoords: !!settings.tacticalCombatShowCoordinates,
         compact: typeof window !== 'undefined' && window.innerWidth <= 640,
         activeUnitId: activeUnitId(state),
     };
-    let selected = pickSelectedUnit(state);
+    let selected = pickSelectedUnit(state, view.selectedUnitId);
     if (state.turnStyle === 'initiative' && state.phase === 'player') {
         const active = state.units.find(unit => unit.id === activeUnitId(state));
         if (active?.side === 'player') selected = active;
@@ -195,7 +252,7 @@ export function buildTacticalView(state) {
         return view;
     }
     view.selectedUnitId = selected.id;
-    view.mode = ui.view.mode || 'move';
+    view.mode = viewOverrides?.mode || ui.view.mode || 'move';
     view.deploymentActive = !!state.deployment?.active;
 
     if (view.deploymentActive) {
@@ -221,8 +278,13 @@ export function buildTacticalView(state) {
         && !ui.view.busy
         && (state.turnStyle !== 'initiative' || activeUnitId(state) === selected.id);
 
+    const previewEnabled = settings.tacticalCombatShowTargetingPreviews !== false;
     const reachable = new Set();
     const targets = new Set();
+    const range = new Set();
+    const anchors = new Set();
+    let area = null;
+    let areaSource = null;
     if (canAct) {
         if (view.mode === 'move') {
             const budget = (Number(selected.speed) || 0) - (Number(selected.movementUsed) || 0);
@@ -236,34 +298,176 @@ export function buildTacticalView(state) {
                     const target = state.units.find(unit => unit.id === id);
                     if (target) targets.add(`${target.x},${target.y}`);
                 }
+                for (const cell of getAbilityRangeCells(state, selected, {
+                    kind: 'attack',
+                    name: 'Attack',
+                    range: selected.attackRange,
+                })) {
+                    range.add(`${cell.x},${cell.y}`);
+                }
             }
         } else if (view.mode === 'skill') {
             const skill = (selected.skills || []).find(entry => entry.id === view.selectedSkillId);
             if (skill && skill.uses > 0 && !skillResourceUsed(selected, skill)) {
-                if (skill.kind === 'special') {
-                    for (const target of state.units) {
-                        if (target.defeated || target.fled) continue;
-                        const distance = target.id === selected.id ? 0 : Math.max(Math.abs(target.x - selected.x), Math.abs(target.y - selected.y));
-                        if (distance <= (Number(skill.range) || 6)) targets.add(`${target.x},${target.y}`);
-                    }
+                areaSource = skill;
+                area = normalizeArea(skill.area);
+                const options = describeUnitOptions(state, selected);
+                let targetIds = [];
+                if (area?.origin === 'self') {
+                    targetIds = [];
+                } else if (area) {
+                    targetIds = options.skillTargets?.[skill.id] || [];
+                } else if (skill.kind === 'special') {
+                    targetIds = state.units
+                        .filter(target => !target.defeated && !target.fled)
+                        .filter(target => (target.id === selected.id ? 0 : Math.max(Math.abs(target.x - selected.x), Math.abs(target.y - selected.y))) <= (Number(skill.range) || 6))
+                        .map(target => target.id);
                 } else {
-                    const options = describeUnitOptions(state, selected);
-                    for (const id of options.skillTargets?.[skill.id] || []) {
-                        const target = state.units.find(unit => unit.id === id);
-                        if (target) targets.add(`${target.x},${target.y}`);
-                    }
+                    targetIds = options.skillTargets?.[skill.id] || [];
+                }
+                for (const id of targetIds) {
+                    const target = state.units.find(unit => unit.id === id);
+                    if (target) targets.add(`${target.x},${target.y}`);
+                }
+                for (const cell of getAbilityRangeCells(state, selected, skill)) {
+                    range.add(`${cell.x},${cell.y}`);
                 }
             }
         } else if (view.mode === 'item') {
             const item = (selected.items || []).find(entry => entry.id === view.selectedItemId);
             if (item && item.uses > 0 && !selected.actionUsed) {
-                for (const key of itemTargetCells(state, selected, item)) targets.add(key);
+                areaSource = item;
+                area = normalizeArea(item.area);
+                if (area?.origin !== 'self') {
+                    for (const key of itemTargetCells(state, selected, item)) targets.add(key);
+                }
+                for (const cell of getAbilityRangeCells(state, selected, item)) {
+                    range.add(`${cell.x},${cell.y}`);
+                }
             }
         }
     }
     view.reachableCells = reachable;
     view.targetCells = targets;
+    view.supportTargets = new Set(isSupportSource(areaSource) ? targets : []);
+    view.area = area;
+    view.rangeCells = range;
+    view.anchorCells = area ? new Set(range) : new Set(targets);
+    view.aoePreview = null;
+    if (previewEnabled && area && areaSource && area.origin === 'self') {
+        const result = getAreaTargets(state, selected, areaSource, { x: selected.x, y: selected.y }, { allowEmpty: true });
+        view.aoePreview = buildAreaPreviewView(state, selected, areaSource, result);
+    }
+    if (view.mode === 'attack') {
+        view.targetHint = `Attack · range ${Number(selected.attackRange) || 1} · choose a target.`;
+    } else if (view.mode === 'skill' && areaSource) {
+        view.targetHint = area?.origin === 'self'
+            ? `${describeArea(area)} · click any highlighted cell to confirm.`
+            : area
+                ? `${describeArea(area)} · choose a center cell in range.`
+                : `Range ${Number(areaSource.range) || 0} · choose a target.`;
+    } else if (view.mode === 'item' && areaSource) {
+        view.targetHint = area?.origin === 'self'
+            ? `${describeArea(area)} · click any highlighted cell to confirm.`
+            : area
+                ? `${describeArea(area)} · choose a center cell in range.`
+                : 'Choose a target for the item.';
+    } else {
+        view.targetHint = '';
+    }
     return view;
+}
+
+function clearAoePreview(hostArg = null) {
+    const host = hostArg || ui.overlay?.querySelector?.(`#${HOST_ID}`);
+    if (host) {
+        host.querySelectorAll('.is-area-preview, .is-area-anchor, .is-area-hit, .is-area-heal, .is-area-warning, .is-area-blocked, .is-area-invalid')
+            .forEach(node => node.classList.remove(
+                'is-area-preview', 'is-area-anchor', 'is-area-hit', 'is-area-heal', 'is-area-warning', 'is-area-blocked', 'is-area-invalid',
+            ));
+        const hint = host.querySelector('#rt-tc-target-hint');
+        if (hint) hint.textContent = hint.dataset.defaultHint || '';
+    }
+    ui.hoverKey = '';
+}
+
+function addAoePreviewClasses(host, preview, anchorKey) {
+    if (!host || !preview) return;
+    host.querySelectorAll('.is-area-preview, .is-area-anchor, .is-area-hit, .is-area-heal, .is-area-warning, .is-area-blocked, .is-area-invalid')
+        .forEach(node => node.classList.remove(
+            'is-area-preview', 'is-area-anchor', 'is-area-hit', 'is-area-heal', 'is-area-warning', 'is-area-blocked', 'is-area-invalid',
+        ));
+    const apply = (keys, className) => {
+        for (const key of keys || []) {
+            const cell = host.querySelector(`[data-tc-cell="${key}"]`);
+            if (cell) cell.classList.add(className);
+        }
+    };
+    apply(preview.cells, 'is-area-preview');
+    apply(preview.targetCells, preview.kind === 'support' ? 'is-area-heal' : 'is-area-hit');
+    apply(preview.blockedCells, 'is-area-blocked');
+    apply(preview.warningCells, 'is-area-warning');
+    if (anchorKey) {
+        const anchor = host.querySelector(`[data-tc-cell="${anchorKey}"]`);
+        if (anchor) anchor.classList.add('is-area-anchor');
+    }
+    const hint = host.querySelector('#rt-tc-target-hint');
+    if (hint) hint.textContent = preview.hint || hint.dataset.defaultHint || '';
+}
+
+function previewAoeAtCell(x, y) {
+    if (ui.view.mode !== 'skill' && ui.view.mode !== 'item') return;
+    const state = getState();
+    const settings = getSettings();
+    if (!state || state.status !== 'active' || ui.view.busy) return;
+    if (settings.tacticalCombatShowTargetingPreviews === false) return;
+    const view = buildTacticalView(state);
+    if (view.mode !== 'skill' && view.mode !== 'item') return;
+    const selected = state.units.find(unit => unit.id === view.selectedUnitId);
+    if (!selected) return;
+    if (state.phase !== 'player' || selected.side !== 'player' || selected.doneForRound) return;
+    if (state.turnStyle === 'initiative' && activeUnitId(state) !== selected.id) return;
+    const source = view.mode === 'skill'
+        ? (selected.skills || []).find(skill => skill.id === view.selectedSkillId)
+        : (selected.items || []).find(item => item.id === view.selectedItemId);
+    if (!source) return;
+    if (source.uses <= 0) return;
+    const area = normalizeArea(source.area);
+    if (!area || area.origin === 'self') return;
+    if (view.mode === 'skill' && skillResourceUsed(selected, source)) return;
+    if (view.mode === 'item' && selected.actionUsed) return;
+
+    const host = ui.overlay?.querySelector?.(`#${HOST_ID}`);
+    const key = `${x},${y}`;
+    if (!host) return;
+    const result = getAreaTargets(state, selected, source, { x, y }, { allowEmpty: true });
+    if (!result.ok) {
+        clearAoePreview(host);
+        const cell = host.querySelector(`[data-tc-cell="${key}"]`);
+        if (cell) cell.classList.add('is-area-invalid');
+        const hint = host.querySelector('#rt-tc-target-hint');
+        if (hint) hint.textContent = result.error || 'That area is not valid.';
+        ui.hoverKey = key;
+        return;
+    }
+    const preview = buildAreaPreviewView(state, selected, source, result);
+    if (!preview) return;
+    ui.hoverKey = key;
+    addAoePreviewClasses(host, preview, key);
+}
+
+function scheduleAoePreview(x, y) {
+    const key = `${x},${y}`;
+    if (ui.hoverKey === key) return;
+    ui.pendingAnchor = { x, y };
+    if (ui.hoverFrame) return;
+    ui.hoverFrame = requestAnimationFrame(() => {
+        ui.hoverFrame = null;
+        const anchor = ui.pendingAnchor;
+        ui.pendingAnchor = null;
+        if (!anchor) return;
+        previewAoeAtCell(anchor.x, anchor.y);
+    });
 }
 
 function ensureOverlay() {
@@ -277,6 +481,10 @@ function ensureOverlay() {
     overlay.setAttribute('aria-hidden', 'true');
     overlay.innerHTML = `<div class="rt-tc-host" id="${HOST_ID}"></div>`;
     overlay.addEventListener('click', onOverlayClick);
+    overlay.addEventListener('pointermove', onOverlayPointerMove);
+    overlay.addEventListener('pointerleave', onOverlayPointerLeave);
+    overlay.addEventListener('focusin', onOverlayFocusIn);
+    overlay.addEventListener('focusout', onOverlayFocusOut);
     document.body.appendChild(overlay);
     ui.overlay = overlay;
     return overlay;
@@ -299,6 +507,12 @@ function render() {
     if (!ui.overlay || !ui.overlayOpen) return;
     const host = ui.overlay.querySelector(`#${HOST_ID}`);
     if (!host) return;
+    if (ui.hoverFrame) {
+        cancelAnimationFrame(ui.hoverFrame);
+        ui.hoverFrame = null;
+        ui.pendingAnchor = null;
+    }
+    ui.hoverKey = '';
     const previousWrap = host.querySelector('.rt-tc-grid-wrap');
     const previousScroll = previousWrap
         ? { left: previousWrap.scrollLeft, top: previousWrap.scrollTop }
@@ -348,6 +562,12 @@ function openBoard() {
 
 function closeBoard() {
     cancelAutoNarrate();
+    if (ui.hoverFrame) {
+        cancelAnimationFrame(ui.hoverFrame);
+        ui.hoverFrame = null;
+    }
+    ui.hoverKey = '';
+    ui.pendingAnchor = null;
     if (!ui.overlay) return;
     ui.overlayOpen = false;
     ui.overlay.classList.remove('is-open');
@@ -391,6 +611,12 @@ function resetViewSelection() {
     ui.view.selectedItemId = '';
     ui.view.dismissResult = false;
     ui.view.error = '';
+    ui.hoverKey = '';
+    ui.pendingAnchor = null;
+    if (ui.hoverFrame) {
+        cancelAnimationFrame(ui.hoverFrame);
+        ui.hoverFrame = null;
+    }
 }
 
 function selectUnit(unitId) {
@@ -400,7 +626,8 @@ function selectUnit(unitId) {
     if (!unit || unit.fled || unit.defeated) return;
     const view = buildTacticalView(state);
     const key = `${unit.x},${unit.y}`;
-    if (view.targetCells instanceof Set && view.targetCells.has(key)) {
+    if ((view.anchorCells instanceof Set && view.anchorCells.has(key))
+        || (view.targetCells instanceof Set && view.targetCells.has(key))) {
         handleCellClick(unit.x, unit.y);
         return;
     }
@@ -495,7 +722,7 @@ function handleAttack(targetId) {
     return ok;
 }
 
-function handleSkill(targetId) {
+function handleSkill(targetId, targetCell = null) {
     const state = getState();
     const view = buildTacticalView(state);
     if (!view.selectedUnitId || !view.selectedSkillId) {
@@ -505,7 +732,7 @@ function handleSkill(targetId) {
     const unit = playerUnitById(state, view.selectedUnitId);
     const skill = (unit?.skills || []).find(entry => entry.id === view.selectedSkillId);
     if (skill?.kind === 'special') {
-        void resolveSpecialPlayerAction('skill', skill, targetId || view.selectedUnitId);
+        void resolveSpecialPlayerAction('skill', skill, targetId || view.selectedUnitId, targetCell);
         return true;
     }
     const ok = applyPlayerAction({
@@ -513,6 +740,7 @@ function handleSkill(targetId) {
         unitId: view.selectedUnitId,
         skillId: view.selectedSkillId,
         targetId: targetId || view.selectedUnitId,
+        ...(targetCell ? { targetCell } : {}),
     });
     if (ok) {
         ui.view.selectedSkillId = '';
@@ -522,7 +750,7 @@ function handleSkill(targetId) {
     return ok;
 }
 
-function handleItem(targetId) {
+function handleItem(targetId, targetCell = null) {
     const state = getState();
     const view = buildTacticalView(state);
     if (!view.selectedUnitId || !view.selectedItemId) {
@@ -532,7 +760,7 @@ function handleItem(targetId) {
     const unit = playerUnitById(state, view.selectedUnitId);
     const item = (unit?.items || []).find(entry => entry.id === view.selectedItemId);
     if (item?.kind === 'special') {
-        void resolveSpecialPlayerAction('item', item, targetId || view.selectedUnitId);
+        void resolveSpecialPlayerAction('item', item, targetId || view.selectedUnitId, targetCell);
         return true;
     }
     const ok = applyPlayerAction({
@@ -540,6 +768,7 @@ function handleItem(targetId) {
         unitId: view.selectedUnitId,
         itemId: view.selectedItemId,
         targetId: targetId || view.selectedUnitId,
+        ...(targetCell ? { targetCell } : {}),
     });
     if (ok) {
         ui.view.selectedItemId = '';
@@ -554,7 +783,7 @@ function handleItem(targetId) {
  * pure engine apply the returned primitives. Ordinary abilities never take this
  * path, so token usage stays limited to genuinely unusual effects.
  */
-async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
+async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCell = null) {
     if (ui.view.busy) return;
     const state = getState();
     const settings = getSettings();
@@ -574,18 +803,27 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
         toast('warning', `${source.name} has no uses left.`);
         return;
     }
-    const target = state.units.find(unit => unit.id === (targetId || caster.id)) || caster;
+    const area = normalizeArea(source.area);
+    const target = state.units.find(unit => unit.id === targetId)
+        || (area?.origin === 'self' ? caster : null)
+        || (area ? null : caster);
     const prepared = prepareSpecialAction(state, {
         type: sourceKind,
         unitId: caster.id,
         ...(sourceKind === 'skill' ? { skillId: source.id } : { itemId: source.id }),
-        targetId: target.id,
+        ...(target ? { targetId: target.id } : { targetId: caster.id }),
+        ...(targetCell ? { targetCell } : {}),
     }, { actorSide: 'player' });
     if (!prepared.ok) {
         toast('error', prepared.error || `${source.name} cannot be used that way.`);
         render();
         return;
     }
+    const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
+    const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(unit => unit.id)])];
+    const maxEffects = prepared.area
+        ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
+        : 6;
     const chatId = getActiveChatId();
     const controller = new AbortController();
     ui.abortController = controller;
@@ -595,8 +833,15 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
         let resolved;
         if (Array.isArray(prepared.skill?.effectTemplate) || Array.isArray(prepared.item?.effectTemplate)) {
             const template = prepared.skill?.effectTemplate || prepared.item?.effectTemplate;
-            const effects = resolveEffectTemplate(template, { casterId: prepared.unit.id, targetId: prepared.target.id });
-            const normalized = normalizeSpecialEffects({ effects }, state);
+            const effects = resolveEffectTemplate(template, {
+                casterId: prepared.unit.id,
+                targetId: prepared.target?.id || prepared.unit.id,
+                targetIds: prepared.area ? targets.map(unit => unit.id) : undefined,
+            });
+            const normalized = normalizeSpecialEffects({ effects }, state, {
+                maxEffects: Math.max(6, effects.length),
+                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+            });
             resolved = normalized.effects.length
                 ? { ok: true, effects: normalized.effects, log: '' }
                 : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
@@ -610,10 +855,19 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
                     description: source.description || source.amount || '',
                     resource: source.resource,
                     willpowerOutcome: source.willpowerOutcome,
+                    area: source.area,
                 },
                 prepared.target,
                 settings,
-                { signal: controller.signal },
+                {
+                    signal: controller.signal,
+                    targets,
+                    area: prepared.area,
+                    anchor: prepared.anchor,
+                    areaCells: prepared.areaCells,
+                    maxEffects,
+                    allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+                },
             );
         }
         if (controller.signal.aborted) return;
@@ -629,6 +883,7 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId) {
             label: source.name,
             narrative: resolved.log || '',
             rng: createStateRng(state),
+            maxEffects: Math.max(32, resolved.effects.length),
         });
         if (!applied.ok) {
             toast('error', applied.error || `${source.name} had no legal effect.`);
@@ -669,12 +924,36 @@ function handleCellClick(x, y) {
         handleAttack(unit.id);
         return;
     }
-    if (view.mode === 'skill' && view.targetCells.has(key)) {
-        handleSkill(unit?.id || view.selectedUnitId);
+    if (view.mode === 'skill') {
+        if (view.anchorCells?.has(key)) {
+            handleSkill(unit?.id || '', { x, y });
+            return;
+        }
+        if (unit) {
+            selectUnit(unit.id);
+            return;
+        }
+        toast('info', view.rangeCells?.has(key) ? 'No legal target there.' : 'That cell is out of range.');
         return;
     }
-    if (view.mode === 'item' && view.targetCells.has(key)) {
-        handleItem(unit?.id || view.selectedUnitId);
+    if (view.mode === 'item') {
+        if (view.anchorCells?.has(key)) {
+            handleItem(unit?.id || '', { x, y });
+            return;
+        }
+        if (unit) {
+            selectUnit(unit.id);
+            return;
+        }
+        toast('info', view.rangeCells?.has(key) ? 'No legal target there.' : 'That cell is out of range.');
+        return;
+    }
+    if (view.mode === 'attack' && unit) {
+        selectUnit(unit.id);
+        return;
+    }
+    if (view.mode === 'attack' && view.rangeCells?.has(key)) {
+        toast('info', 'No target there.');
         return;
     }
     if (view.mode === 'move' && !unit && view.reachableCells.has(key)) {
@@ -1141,19 +1420,70 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
     render();
     try {
         const source = item
-            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome }
-            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome };
+            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, area: item.area }
+            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, area: skill?.area };
+        let prepared;
+        if (skill || item) {
+            prepared = prepareSpecialAction(state, {
+                type: item ? 'item' : 'skill',
+                unitId: actor.id,
+                ...(item ? { itemId: item.id } : { skillId: skill.id }),
+                targetId: target?.id || actor.id,
+            }, {
+                actorSide: 'player',
+                ignoreTurn: true,
+                ignoreRange: true,
+                ignoreLineOfSight: true,
+            });
+            if (!prepared.ok) {
+                state.opening.error = prepared.error || 'The opening action could not be prepared.';
+                state.opening.requiresAgent = false;
+                addLog(state, 'opening', `Opening action needs manual resolution: ${state.opening.error}`, actor.id);
+                toast('warning', state.opening.error);
+                return false;
+            }
+        } else {
+            prepared = {
+                ok: true,
+                unit: actor,
+                skill: null,
+                item: null,
+                target: target || null,
+                targets: target ? [target] : [],
+                area: null,
+                anchor: null,
+                areaCells: [],
+            };
+        }
+        const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
+        const allowedTargetIds = [...new Set([prepared.unit.id, ...targets.map(unit => unit.id)])];
+        const maxEffects = prepared.area
+            ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
+            : 6;
         let resolved;
         if (Array.isArray(skill?.effectTemplate) || Array.isArray(item?.effectTemplate)) {
             const template = skill?.effectTemplate || item?.effectTemplate;
-            const effects = resolveEffectTemplate(template, { casterId: actor.id, targetId: target?.id || actor.id });
-            const normalized = normalizeSpecialEffects({ effects }, state);
+            const effects = resolveEffectTemplate(template, {
+                casterId: actor.id,
+                targetId: prepared.target?.id || actor.id,
+                targetIds: prepared.area ? targets.map(unit => unit.id) : undefined,
+            });
+            const normalized = normalizeSpecialEffects({ effects }, state, {
+                maxEffects: Math.max(6, effects.length),
+                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
+            });
             resolved = normalized.effects.length
                 ? { ok: true, effects: normalized.effects, log: '' }
                 : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
         } else {
-            resolved = await resolveSpecialEffectWithAgent(state, actor, source, target, settings, {
+            resolved = await resolveSpecialEffectWithAgent(state, actor, source, prepared.target, settings, {
                 signal: options.signal || null,
+                targets,
+                area: prepared.area,
+                anchor: prepared.anchor,
+                areaCells: prepared.areaCells,
+                maxEffects,
+                allowedTargetIds: prepared.area ? allowedTargetIds : undefined,
             });
         }
         if (getActiveChatId() !== state.chatId) return false;
@@ -1170,6 +1500,7 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
             itemId: item?.id || '',
             log: resolved.log || state.opening.text,
             narrative: resolved.log || '',
+            maxEffects: Math.max(32, (resolved.effects || []).length),
         });
         if (!applied.ok) {
             state.opening.error = applied.error || 'The opening action had no usable effects.';
@@ -1691,6 +2022,38 @@ function onOverlayClick(event) {
         const [x, y] = String(cellEl.dataset.tcCell || '').split(',').map(Number);
         if (Number.isFinite(x) && Number.isFinite(y)) handleCellClick(x, y);
     }
+}
+
+function cellFromEvent(event) {
+    const cell = event.target?.closest?.('[data-tc-cell]');
+    return cell && ui.overlay?.contains(cell) ? cell : null;
+}
+
+function onOverlayPointerMove(event) {
+    if (!ui.overlayOpen) return;
+    const cell = cellFromEvent(event);
+    if (!cell) {
+        if (ui.hoverKey) clearAoePreview();
+        return;
+    }
+    const [x, y] = String(cell.dataset.tcCell || '').split(',').map(Number);
+    if (Number.isFinite(x) && Number.isFinite(y)) scheduleAoePreview(x, y);
+}
+
+function onOverlayPointerLeave() {
+    if (ui.hoverKey) clearAoePreview();
+}
+
+function onOverlayFocusIn(event) {
+    const cell = cellFromEvent(event);
+    if (!cell) return;
+    const [x, y] = String(cell.dataset.tcCell || '').split(',').map(Number);
+    if (Number.isFinite(x) && Number.isFinite(y)) scheduleAoePreview(x, y);
+}
+
+function onOverlayFocusOut(event) {
+    const next = event.relatedTarget?.closest?.('[data-tc-cell]');
+    if (!next) clearAoePreview();
 }
 
 function onDocumentClick(event) {

@@ -70,6 +70,25 @@ function makeState(turnStyle = 'phase') {
 }
 
 describe('traditional combat theater engine', () => {
+    it('ignores tactical area metadata and keeps traditional actions single-target', () => {
+        const state = makeState();
+        const caster = getUnitById(state, 'pc-1');
+        const ally = getUnitById(state, 'pc-2');
+        caster.hp = 5;
+        ally.hp = 5;
+        caster.skills.push({
+            id: 'mass-mend', name: 'Mass Mend', kind: 'heal', heal: '1d8+2', range: 0,
+            maxUses: 1, uses: 1, area: { shape: 'burst', radius: 2, origin: 'self' },
+        });
+        const result = applyTraditionalAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'mass-mend', targetId: 'pc-1',
+        }, { actorSide: 'player', rng: () => 0.5 });
+        expect(result.ok).toBe(true);
+        expect(caster.hp).toBeGreaterThan(5);
+        expect(ally.hp).toBe(5);
+    });
+
+
     it('builds a no-grid state with theater invariants and no move action', () => {
         const state = makeState();
         expect(state.format).toBe('multihog-traditional-combat');
