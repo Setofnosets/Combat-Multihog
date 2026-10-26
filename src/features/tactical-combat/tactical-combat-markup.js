@@ -12,6 +12,7 @@ import {
     TC_TERRAIN,
     TC_TERRAIN_KEYS,
     TC_TURN_STYLES,
+    describeArea,
 } from './tactical-combat-constants.js';
 
 export function escapeHtml(value) {
@@ -120,6 +121,17 @@ export function buildCellMarkup(state, unit, x, y, view = {}, corpse = null) {
     const key = `${x},${y}`;
     const reachable = view.reachableCells instanceof Set ? view.reachableCells.has(key) : Array.isArray(view.reachableCells) && view.reachableCells.includes(key);
     const target = view.targetCells instanceof Set ? view.targetCells.has(key) : Array.isArray(view.targetCells) && view.targetCells.includes(key);
+    const supportTarget = view.supportTargets instanceof Set
+        ? view.supportTargets.has(key)
+        : Array.isArray(view.supportTargets) && view.supportTargets.includes(key);
+    const inRange = view.rangeCells instanceof Set ? view.rangeCells.has(key) : Array.isArray(view.rangeCells) && view.rangeCells.includes(key);
+    const preview = view.aoePreview || null;
+    const inArea = preview?.cells instanceof Set ? preview.cells.has(key) : false;
+    const areaTarget = preview?.targetCells instanceof Set ? preview.targetCells.has(key) : false;
+    const areaHeal = areaTarget && preview?.kind === 'support';
+    const areaBlocked = preview?.blockedCells instanceof Set ? preview.blockedCells.has(key) : false;
+    const areaWarning = preview?.warningCells instanceof Set ? preview.warningCells.has(key) : false;
+    const areaAnchor = preview?.anchor && Number(preview.anchor.x) === x && Number(preview.anchor.y) === y;
     // A defeated combatant is scenery, not an occupant. Callers may still pass
     // one as `unit`, so normalize it into the corpse slot defensively.
     const liveUnit = unit && !unit.defeated && !unit.fled ? unit : null;
@@ -134,7 +146,13 @@ export function buildCellMarkup(state, unit, x, y, view = {}, corpse = null) {
         occupied ? 'is-occupied' : '',
         hasCorpse ? 'has-corpse' : '',
         reachable ? 'is-reachable' : '',
-        target ? 'is-target' : '',
+        supportTarget ? 'is-support-target' : (target ? 'is-target' : ''),
+        inRange ? 'is-in-range' : '',
+        inArea ? 'is-area-preview' : '',
+        areaHeal ? 'is-area-heal' : (areaTarget ? 'is-area-hit' : ''),
+        areaBlocked ? 'is-area-blocked' : '',
+        areaWarning ? 'is-area-warning' : '',
+        areaAnchor ? 'is-area-anchor' : '',
         selected ? 'is-selected' : '',
         active ? 'is-active' : '',
         view.showCoords ? 'has-coords' : '',
@@ -163,7 +181,7 @@ export function buildCellMarkup(state, unit, x, y, view = {}, corpse = null) {
         content += `<span class="${broken ? 'rt-tc-broken' : 'rt-tc-corpse'}" title="${escapeHtml(corpseTitle)}" aria-hidden="true">${broken ? 'z' : '✕'}</span>`;
     }
     const coord = view.showCoords ? `<span class="rt-tc-coords">${x},${y}</span>` : '';
-    const label = `${terrain.label} at ${x},${y}${occupied ? `; ${liveUnit.name}` : hasCorpse ? `; defeated ${corpseUnit.name}` : ''}${reachable ? '; reachable' : ''}${target ? '; targetable' : ''}`;
+    const label = `${terrain.label} at ${x},${y}${occupied ? `; ${liveUnit.name}` : hasCorpse ? `; defeated ${corpseUnit.name}` : ''}${reachable ? '; reachable' : ''}${supportTarget ? '; support target' : target ? '; targetable' : ''}${inRange ? '; in ability range' : ''}${inArea ? '; area preview' : ''}${areaTarget ? '; area target' : ''}${areaBlocked ? '; blocked' : ''}`;
     return `<button type="button" class="${classes}" data-tc-cell="${key}" aria-label="${escapeHtml(label)}" title="${escapeHtml(label)}" style="--tc-terrain:${terrain.color};--tc-terrain-fg:${terrain.textColor}">${content}${coord}</button>`;
 }
 
@@ -183,7 +201,9 @@ function renderGrid(state, view) {
             cells.push(buildCellMarkup(state, liveByCell.get(key) || null, x, y, view, corpseByCell.get(key) || null));
         }
     }
-    return `<div class="rt-tc-grid-wrap">
+    const hint = view.aoePreview?.hint || view.targetHint || '';
+    return `<div class="rt-tc-target-hint" id="rt-tc-target-hint" data-default-hint="${escapeHtml(hint)}" aria-live="polite">${escapeHtml(hint)}</div>
+        <div class="rt-tc-grid-wrap">
         <div class="rt-tc-grid" role="grid" aria-label="Combat grid ${state.grid.cols} by ${state.grid.rows}" style="--tc-cols:${state.grid.cols};--tc-rows:${state.grid.rows}">
             ${cells.join('')}
         </div>
@@ -250,22 +270,29 @@ function renderUnitCard(state, view) {
 
     const skillList = skills.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Skills & spells</div>
-        <div class="rt-tc-skill-list">${skills.map(skill => `
-            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" ${!canAct || skill.uses <= 0 ? 'disabled' : ''}>
+        <div class="rt-tc-skill-list">${skills.map(skill => {
+            const areaLabel = skill.area ? describeArea(skill.area) : '';
+            const title = `${skill.description || skill.name}${areaLabel ? ` (${areaLabel}: affects every eligible unit in the burst.)` : ''}`;
+            return `
+            <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(title)}" ${!canAct || skill.uses <= 0 ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${skill.bonusAction ? ' · bonus' : ''}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}${skill.bonusAction ? ' · bonus' : ''}</span>
                 <span class="rt-tc-skill-uses">${Number(skill.uses) || 0}/${Number(skill.maxUses) || 0}</span>
-            </button>`).join('')}</div>
+            </button>`;
+        }).join('')}</div>
     </div>` : '';
 
     const itemList = items.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Items</div>
-        <div class="rt-tc-skill-list">${items.map(item => `
+        <div class="rt-tc-skill-list">${items.map(item => {
+            const areaLabel = item.area ? describeArea(item.area) : '';
+            return `
             <button type="button" class="rt-tc-skill" data-tc-action="select-item" data-tc-item-id="${escapeHtml(item.id)}" ${!canAct || item.uses <= 0 ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(item.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL ${item.amount || ''}` : item.kind === 'special' ? 'SPECIAL' : 'ITEM')}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(item.kind === 'heal' ? `HEAL ${item.amount || ''}` : item.kind === 'special' ? 'SPECIAL' : 'ITEM')}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}</span>
                 <span class="rt-tc-skill-uses">${Number(item.uses) || 0}/${Number(item.maxUses) || 0}</span>
-            </button>`).join('')}</div>
+            </button>`;
+        }).join('')}</div>
     </div>` : '';
 
     const inventory = unit.inventory || [];

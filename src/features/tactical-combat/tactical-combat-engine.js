@@ -12,6 +12,7 @@ import {
     DEFAULT_TACTICAL_ACTION_CATALOG,
     TC_DEFAULT_MOVEMENT,
     TC_DEFAULT_TERRAIN_DENSITY,
+    TC_AREA_MAX_RADIUS,
     TC_MAX_DIMENSION,
     TC_MAX_LOG_ENTRIES,
     TC_MIN_DIMENSION,
@@ -26,6 +27,8 @@ import {
     TC_VERSION,
     clampInt,
     clampIntOr,
+    describeArea,
+    normalizeArea,
     terrainChar,
 } from './tactical-combat-constants.js';
 import { describeActionCatalog, isActionEnabled, getEnabledActions } from './tactical-combat-actions.js';
@@ -301,6 +304,203 @@ export function hasLineOfSight(state, from, to) {
     return false;
 }
 
+// ── Area templates ───────────────────────────────────────────────────────────
+
+/**
+ * Whether a source has a supported area template.
+ * @param {object|null} source
+ * @returns {boolean}
+ */
+export function isAreaSource(source) {
+    return Boolean(normalizeArea(source?.area ?? source?.aoe));
+}
+
+/**
+ * Cells covered by a burst. Radius uses Chebyshev distance, matching the
+ * engine's movement and range rules. Results are row-major for deterministic
+ * tests and rendering.
+ *
+ * @param {object} state
+ * @param {{x:number,y:number}} anchor
+ * @param {object} area
+ * @returns {{x:number,y:number}[]}
+ */
+export function getAreaCells(state, anchor, area) {
+    const normalized = normalizeArea(area);
+    if (!normalized || !state?.grid) return [];
+    const ax = Number(anchor?.x);
+    const ay = Number(anchor?.y);
+    if (!Number.isInteger(ax) || !Number.isInteger(ay)) return [];
+    const cells = [];
+    for (let dy = -normalized.radius; dy <= normalized.radius; dy += 1) {
+        for (let dx = -normalized.radius; dx <= normalized.radius; dx += 1) {
+            const x = ax + dx;
+            const y = ay + dy;
+            if (inBounds(state, x, y)) cells.push({ x, y });
+        }
+    }
+    return cells;
+}
+
+function blockedByMentalLink(caster, target) {
+    const charmed = getStatusBehavior(caster, 'charmed');
+    const frightened = getStatusBehavior(caster, 'frightened');
+    return Boolean(
+        (charmed?.sourceId && charmed.sourceId === target.id)
+        || (frightened?.sourceId && frightened.sourceId === target.id),
+    );
+}
+
+function isAreaTargetEligible(caster, target, source, area) {
+    if (!target || target.defeated || target.fled) return false;
+    if (source.kind === 'attack') {
+        if (target.id === caster.id) return false;
+        if (blockedByMentalLink(caster, target)) return false;
+        if (getStatusBehavior(caster, 'berserk')) return true;
+        return isHostile(caster.side, target.side) || area.friendlyFire === true;
+    }
+    if (source.kind === 'heal' || source.kind === 'buff') {
+        return target.id === caster.id || isFriendly(caster.side, target.side);
+    }
+    const mode = String(source.target || 'any').toLowerCase();
+    if (mode === 'enemy') return target.id !== caster.id && isHostile(caster.side, target.side);
+    if (mode === 'self') return target.id === caster.id;
+    if (mode === 'ally') return isFriendly(caster.side, target.side);
+    return true;
+}
+
+/**
+ * Resolve an area template into its affected cells and eligible combatants.
+ * This is the single source of truth used by the engine, the agent payload, and
+ * the board preview.
+ *
+ * @param {object} state
+ * @param {object} caster
+ * @param {object} source
+ * @param {{x:number,y:number}|null} anchor
+ * @param {{ ignoreRange?: boolean, ignoreLineOfSight?: boolean, allowEmpty?: boolean }} [options]
+ * @returns {{
+ *   ok: boolean,
+ *   error?: string,
+ *   anchor?: {x:number,y:number},
+ *   area?: object,
+ *   cells?: {x:number,y:number}[],
+ *   targets?: object[],
+ *   blocked?: {id:string,name:string,reason:string}[],
+ *   friendly?: {id:string,name:string}[]
+ * }}
+ */
+export function getAreaTargets(state, caster, source, anchor, options = {}) {
+    const area = normalizeArea(source?.area ?? source?.aoe);
+    if (!state?.grid || !caster || !area) return { ok: false, error: 'No area template is available.' };
+    const origin = area.origin === 'self' ? { x: caster.x, y: caster.y } : anchor;
+    if (!origin || !Number.isInteger(Number(origin.x)) || !Number.isInteger(Number(origin.y))) {
+        return { ok: false, error: 'Area action needs a target cell.' };
+    }
+    const resolvedAnchor = { x: Number(origin.x), y: Number(origin.y) };
+    if (!inBounds(state, resolvedAnchor.x, resolvedAnchor.y)) {
+        return { ok: false, error: 'The area center is outside the grid.' };
+    }
+    const range = Math.max(0, Number(source.range) || 0);
+    if (area.origin !== 'self' && !options.ignoreRange) {
+        const distance = chebyshev(caster, resolvedAnchor);
+        if (distance > range) {
+            return {
+                ok: false,
+                error: `That area center is out of ${source.name || 'the ability'}'s range (${distance} cells, range ${range}).`,
+            };
+        }
+    }
+    const needsLos = source.kind === 'attack' && !options.ignoreLineOfSight;
+    if (needsLos && area.origin !== 'self' && !hasLineOfSight(state, caster, resolvedAnchor)) {
+        return { ok: false, error: 'Line of sight to the area center is blocked.' };
+    }
+    const rawCells = getAreaCells(state, resolvedAnchor, area);
+    const cells = needsLos
+        ? rawCells.filter(cell => hasLineOfSight(state, caster, cell))
+        : rawCells;
+    const cellKeys = new Set(cells.map(cell => cellKey(cell.x, cell.y)));
+    const rawKeys = new Set(rawCells.map(cell => cellKey(cell.x, cell.y)));
+    const targets = [];
+    const blocked = [];
+    const friendly = [];
+    for (const unit of state.units) {
+        if (unit.defeated || unit.fled) continue;
+        const key = cellKey(unit.x, unit.y);
+        const rawHit = rawKeys.has(key);
+        const losHit = cellKeys.has(key);
+        const friendlyUnit = unit.id === caster.id || isFriendly(caster.side, unit.side);
+        if (rawHit && friendlyUnit) friendly.push({ id: unit.id, name: unit.name });
+        if (!rawHit) continue;
+        if (!losHit) {
+            blocked.push({ id: unit.id, name: unit.name, reason: 'line of sight' });
+            continue;
+        }
+        if (!isAreaTargetEligible(caster, unit, source, area)) {
+            if (unit.id !== caster.id) {
+                blocked.push({ id: unit.id, name: unit.name, reason: 'target rule' });
+            }
+            continue;
+        }
+        targets.push(unit);
+    }
+    targets.sort((a, b) => a.id.localeCompare(b.id));
+    const ok = targets.length > 0 || options.allowEmpty === true;
+    return {
+        ok,
+        error: ok ? '' : `No legal targets in ${describeArea(area)}.`,
+        anchor: resolvedAnchor,
+        area,
+        cells,
+        targets,
+        blocked,
+        friendly,
+    };
+}
+
+/**
+ * All cells that can be targeted by an action. For burst abilities these are
+ * valid anchor cells; for self-origin auras they are the affected aura cells.
+ * Attack ranges require line of sight; heals/buffs do not, matching the
+ * single-target rules.
+ *
+ * @param {object} state
+ * @param {object} caster
+ * @param {{kind?:string,range?:number,area?:object}} source
+ * @param {{ ignoreRange?: boolean, ignoreLineOfSight?: boolean }} [options]
+ * @returns {{x:number,y:number}[]}
+ */
+export function getAbilityRangeCells(state, caster, source, options = {}) {
+    if (!state?.grid || !caster || !source) return [];
+    const area = normalizeArea(source.area ?? source.aoe);
+    const range = Math.max(0, Number(source.range) || 0);
+    if (area) {
+        if (area.origin === 'self') {
+            const cells = getAreaCells(state, caster, area);
+            return source.kind === 'attack' && !options.ignoreLineOfSight
+                ? cells.filter(cell => hasLineOfSight(state, caster, cell))
+                : cells;
+        }
+        if (options.ignoreRange) {
+            const cells = [];
+            for (let y = 0; y < state.grid.rows; y += 1) {
+                for (let x = 0; x < state.grid.cols; x += 1) cells.push({ x, y });
+            }
+            return cells;
+        }
+    }
+    const cells = [];
+    for (let y = 0; y < state.grid.rows; y += 1) {
+        for (let x = 0; x < state.grid.cols; x += 1) {
+            if (chebyshev(caster, { x, y }) > range) continue;
+            if (source.kind === 'attack' && !options.ignoreLineOfSight && (area || range > 1)
+                && !hasLineOfSight(state, caster, { x, y })) continue;
+            cells.push({ x, y });
+        }
+    }
+    return cells;
+}
+
 // ── Terrain generation ───────────────────────────────────────────────────────
 
 function weightedTerrainPick(pools, rng) {
@@ -465,18 +665,26 @@ function normalizeSkill(raw, index, side) {
     const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
     const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
-    const range = kind === 'buff' ? clampInt(raw.range, 0, 24)
-        : kind === 'special' ? (raw.range == null ? 6 : clampInt(raw.range, 1, 24))
-            : clampInt(raw.range, 1, 24) || 1;
     const resource = normalizeWillpowerResource(raw.resource ?? raw.targetResource ?? raw.stat, 'hp');
+    const target = String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase();
+    const area = normalizeArea(raw.area ?? raw.aoe ?? raw.areaTemplate, {
+        defaultOrigin: target === 'self' ? 'self' : 'target',
+        maxRadius: TC_AREA_MAX_RADIUS,
+    });
+    const range = area && area.origin === 'target' && raw.range == null
+        ? 6
+        : kind === 'buff' ? clampInt(raw.range, 0, 24)
+            : kind === 'special' ? (raw.range == null ? 6 : clampInt(raw.range, 1, 24))
+                : clampInt(raw.range, 1, 24) || 1;
     return {
         id: String(raw.id || `skill-${slug(name, `skill-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || raw.effect || '').slice(0, 500),
         kind,
         resource,
-        target: String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase(),
+        target,
         range,
+        area,
         damage: String(raw.damage || (kind === 'attack' ? '1d8' : '')).trim().slice(0, 40),
         willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').trim().slice(0, 40),
         willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
@@ -499,6 +707,11 @@ function normalizeItem(raw, index) {
     const name = String(raw.name || `Item ${index + 1}`).trim().slice(0, 80);
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
     const rawTarget = String(raw.target || 'ally').toLowerCase();
+    const target = ['ally', 'enemy', 'any'].includes(rawTarget) ? rawTarget : 'ally';
+    const area = normalizeArea(raw.area ?? raw.aoe ?? raw.areaTemplate, {
+        defaultOrigin: target === 'self' ? 'self' : 'target',
+        maxRadius: TC_AREA_MAX_RADIUS,
+    });
     return {
         id: String(raw.id || `item-${slug(name, `item-${index + 1}`)}`).slice(0, 60),
         name,
@@ -507,11 +720,12 @@ function normalizeItem(raw, index) {
             ? String(raw.kind).toLowerCase()
             : 'heal',
         resource: normalizeWillpowerResource(raw.resource ?? raw.stat, 'hp'),
-        target: ['ally', 'enemy', 'any'].includes(rawTarget) ? rawTarget : 'ally',
+        target,
         amount: String(raw.amount || raw.heal || ((raw.kind || 'heal') === 'heal' ? '2d4+2' : '')).slice(0, 40),
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
-        range: raw.range == null ? 0 : clampInt(raw.range, 0, 12),
+        range: raw.range == null ? (area && area.origin === 'target' ? 6 : 0) : clampInt(raw.range, 0, 12),
+        area,
     };
 }
 
@@ -1205,6 +1419,7 @@ export function applyWillpowerDamageToUnit(state, target, amount, sourceLabel = 
             outcome: options.outcome ?? options.willpowerOutcome,
             source: sourceLabel || options.source || '',
             casterId: options.casterId,
+            deferEndCheck: options.deferEndCheck === true,
         });
         return 0;
     }
@@ -1224,6 +1439,7 @@ export function applyWillpowerDamageToUnit(state, target, amount, sourceLabel = 
             outcome: options.outcome ?? options.willpowerOutcome,
             source: sourceLabel || options.source || '',
             casterId: options.casterId,
+            deferEndCheck: options.deferEndCheck === true,
         });
     }
     return dealt;
@@ -1295,7 +1511,7 @@ export function breakWillpower(state, target, options = {}) {
         `${target.name}'s Willpower breaks — ${willpowerOutcomeLabel(outcome)}.`,
         target.id,
     );
-    checkEncounterEnd(state);
+    if (!options.deferEndCheck) checkEncounterEnd(state);
     return true;
 }
 
@@ -1783,7 +1999,8 @@ export function applySpecialEffects(state, effects, options = {}) {
     const narrative = options.narrative || '';
     const applied = [];
     const rejected = [];
-    const list = Array.isArray(effects) ? effects.slice(0, 8) : [];
+    const maxEffects = Math.max(1, Math.min(64, Number(options.maxEffects) || 32));
+    const list = Array.isArray(effects) ? effects.slice(0, maxEffects) : [];
 
     for (const effect of list) {
         if (!effect || typeof effect !== 'object') {
@@ -2044,8 +2261,8 @@ function findItem(unit, itemId) {
  *
  * @param {object} state
  * @param {object} action
- * @param {{ actorSide?: 'player'|'agent', ignoreTurn?: boolean, ignoreRange?: boolean, ignoreDeployment?: boolean }} [options]
- * @returns {{ ok: boolean, error?: string, unit?: object, skill?: object|null, item?: object|null, target?: object, label?: string }}
+ * @param {{ actorSide?: 'player'|'agent', ignoreTurn?: boolean, ignoreRange?: boolean, ignoreDeployment?: boolean, ignoreLineOfSight?: boolean }} [options]
+ * @returns {{ ok: boolean, error?: string, unit?: object, skill?: object|null, item?: object|null, target?: object|null, targets?: object[], anchor?: object, areaCells?: object[], area?: object|null, label?: string }}
  */
 export function prepareSpecialAction(state, action, options = {}) {
     if (!state || state.status !== 'active') return { ok: false, error: 'The encounter is over.' };
@@ -2066,6 +2283,39 @@ export function prepareSpecialAction(state, action, options = {}) {
     const resourceKey = skill?.bonusAction ? 'bonusUsed' : 'actionUsed';
     if (unit[resourceKey]) {
         return { ok: false, error: skill?.bonusAction ? `${unit.name} has already used a bonus action.` : `${unit.name} has already used their action.` };
+    }
+    const area = normalizeArea(source.area ?? source.aoe);
+    if (area && !state.theater && state.grid) {
+        let anchor = null;
+        if (area.origin === 'self') {
+            anchor = { x: unit.x, y: unit.y };
+        } else if (action.targetCell && Number.isInteger(Number(action.targetCell.x)) && Number.isInteger(Number(action.targetCell.y))) {
+            anchor = { x: Number(action.targetCell.x), y: Number(action.targetCell.y) };
+        } else {
+            const targetId = String(action.targetId || '').trim();
+            const primary = targetId ? getUnitById(state, targetId) : null;
+            if (primary?.defeated || primary?.fled) {
+                return { ok: false, error: `${primary.name} is not a valid target.` };
+            }
+            if (!primary) return { ok: false, error: `${source.name} needs a target or targetCell.` };
+            anchor = { x: primary.x, y: primary.y };
+        }
+        const areaResult = getAreaTargets(state, unit, source, anchor, { ...options, allowEmpty: true });
+        if (!areaResult.ok) return { ok: false, error: areaResult.error || `${source.name} has no legal area.` };
+        return {
+            ok: true,
+            unit,
+            skill,
+            item,
+            target: areaResult.targets[0] || null,
+            targets: areaResult.targets,
+            anchor: areaResult.anchor,
+            areaCells: areaResult.cells,
+            area: areaResult.area,
+            blocked: areaResult.blocked,
+            friendly: areaResult.friendly,
+            label: source.name,
+        };
     }
     const targetId = String(action.targetId || unit.id).trim();
     const target = getUnitById(state, targetId);
@@ -2094,25 +2344,39 @@ export function prepareSpecialAction(state, action, options = {}) {
 
 /**
  * Replace $caster / $target placeholders in a pre-authored effect template.
+ * When `targetIds` is supplied, every entry containing `$target` is expanded
+ * once per affected target; entries without it (terrain, summon, log) stay
+ * single. This lets one area template affect every unit in a burst.
+ *
  * @param {object[]} effects
- * @param {{ casterId?: string, targetId?: string }} ids
+ * @param {{ casterId?: string, targetId?: string, targetIds?: string[] }} ids
  * @returns {object[]}
  */
 export function resolveEffectTemplate(effects, ids = {}) {
     const source = Array.isArray(effects) ? effects : [];
-    const replace = value => {
+    const targetIds = Array.isArray(ids.targetIds) ? ids.targetIds.map(String).filter(Boolean) : [];
+    const replace = (value, targetId) => {
         if (typeof value === 'string') {
             if (value === '$caster') return ids.casterId || '';
-            if (value === '$target') return ids.targetId || '';
+            if (value === '$target') return targetId || '';
             return value;
         }
-        if (Array.isArray(value)) return value.map(replace);
+        if (Array.isArray(value)) return value.map(entry => replace(entry, targetId));
         if (value && typeof value === 'object') {
-            return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replace(entry)]));
+            return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replace(entry, targetId)]));
         }
         return value;
     };
-    return cloneJson(source.map(replace));
+    const list = [];
+    for (const entry of source) {
+        const usesTarget = JSON.stringify(entry).includes('$target');
+        if (usesTarget && targetIds.length) {
+            for (const targetId of targetIds) list.push(replace(entry, targetId));
+        } else {
+            list.push(replace(entry, ids.targetId || ''));
+        }
+    }
+    return cloneJson(list);
 }
 
 function resolveTarget(state, unit, action, options) {
@@ -2121,7 +2385,113 @@ function resolveTarget(state, unit, action, options) {
     const target = getUnitById(state, targetId);
     if (!target) return { target: null, error: `Unknown target "${targetId}".` };
     if (target.defeated) return { target: null, error: `${target.name} is already defeated.` };
+    if (target.fled) return { target: null, error: `${target.name} has fled.` };
     return { target };
+}
+
+function resolveAreaAction(state, unit, source, action, options = {}) {
+    const area = normalizeArea(source?.area ?? source?.aoe);
+    if (!area || state.theater || !state.grid) return null;
+    let anchor = null;
+    if (area.origin === 'self') {
+        anchor = { x: unit.x, y: unit.y };
+    } else if (action?.targetCell && Number.isInteger(Number(action.targetCell.x)) && Number.isInteger(Number(action.targetCell.y))) {
+        anchor = { x: Number(action.targetCell.x), y: Number(action.targetCell.y) };
+    } else {
+        const targetResult = resolveTarget(state, unit, action, options);
+        if (!targetResult.target) {
+            return { ok: false, error: targetResult.error || `${source.name} needs a target cell.` };
+        }
+        anchor = { x: targetResult.target.x, y: targetResult.target.y };
+    }
+    return getAreaTargets(state, unit, source, anchor, options);
+}
+
+function resolveAreaAttack(state, unit, source, areaResult, options, rng, sourceLabel) {
+    const label = source.name;
+    addLog(
+        state,
+        'attack',
+        `${unit.name} uses ${label} (${describeArea(areaResult.area)}) at (${areaResult.anchor.x},${areaResult.anchor.y}), catching ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'}.`,
+        unit.id,
+    );
+    let hits = 0;
+    for (const target of areaResult.targets) {
+        if (target.defeated || target.fled) continue;
+        const result = resolveAttack(state, unit, target, {
+            rng,
+            source: sourceLabel,
+            attackBonus: getEffectiveAttackBonus(state, unit, source.attackBonus || 0),
+            damage: source.damage || '1d6',
+            resource: source.resource,
+            willpowerDamage: source.willpowerDamage,
+            willpowerOutcome: source.willpowerOutcome,
+            label,
+            consumeAction: false,
+            deferEndCheck: true,
+        });
+        if (result.ok && result.hit) hits += 1;
+    }
+    checkEncounterEnd(state);
+    return {
+        ok: true,
+        log: `${label} resolved against ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'} (${hits} hit).`,
+        ended: state.status !== 'active',
+        area: areaResult,
+    };
+}
+
+function resolveAreaHeal(state, unit, source, areaResult, rng) {
+    const label = source.name;
+    const amount = rollDice(source.heal || source.amount || '1d8+2', rng).total;
+    addLog(
+        state,
+        'skill',
+        `${unit.name} uses ${label} (${describeArea(areaResult.area)}) on ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'}.`,
+        unit.id,
+    );
+    for (const target of areaResult.targets) {
+        if (source.resource === 'both') {
+            healUnit(state, target, amount, label, 'hp');
+            healUnit(state, target, amount, label, 'willpower');
+        } else {
+            healUnit(state, target, amount, label, source.resource);
+        }
+    }
+    checkEncounterEnd(state);
+    return {
+        ok: true,
+        log: `${label} healed ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'}.`,
+        ended: state.status !== 'active',
+        area: areaResult,
+    };
+}
+
+function resolveAreaBuff(state, unit, source, areaResult) {
+    const label = source.name;
+    addLog(
+        state,
+        'skill',
+        `${unit.name} uses ${label} (${describeArea(areaResult.area)}) on ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'}.`,
+        unit.id,
+    );
+    for (const target of areaResult.targets) {
+        addStatus(target, {
+            id: slug(label, 'buff'),
+            label,
+            rounds: source.rounds || 2,
+            acBonus: source.acBonus,
+            attackBonus: source.attackBonus,
+            description: source.description,
+        });
+    }
+    checkEncounterEnd(state);
+    return {
+        ok: true,
+        log: `${label} affected ${areaResult.targets.length} target${areaResult.targets.length === 1 ? '' : 's'}.`,
+        ended: state.status !== 'active',
+        area: areaResult,
+    };
 }
 
 /**
@@ -2218,6 +2588,15 @@ export function applyAction(state, action, options = {}) {
                     ? `${unit.name} has already used a bonus action.`
                     : `${unit.name} has already used their action.`, source);
             }
+            const areaResult = resolveAreaAction(state, unit, skill, action, options);
+            if (areaResult) {
+                if (!areaResult.ok) return rejectAction(state, action, areaResult.error || `No legal targets for ${skill.name}.`, source);
+                unit[resourceKey] = true;
+                skill.uses = Math.max(0, Number(skill.uses) - 1);
+                if (skill.kind === 'attack') return resolveAreaAttack(state, unit, skill, areaResult, options, rng, source);
+                if (skill.kind === 'heal') return resolveAreaHeal(state, unit, skill, areaResult, rng);
+                return resolveAreaBuff(state, unit, skill, areaResult);
+            }
             const wantsSelf = skill.target === 'self' || (skill.kind !== 'attack' && !action.targetId);
             const targetResult = wantsSelf ? { target: unit } : resolveTarget(state, unit, action, options);
             const target = targetResult.target;
@@ -2279,6 +2658,14 @@ export function applyAction(state, action, options = {}) {
                 return rejectAction(state, action, `${item.name} requires special resolution by the combat agent.`, source);
             }
             if (item.uses <= 0) return rejectAction(state, action, `${item.name} has no uses left.`, source);
+            const areaResult = resolveAreaAction(state, unit, item, action, options);
+            if (areaResult) {
+                if (!areaResult.ok) return rejectAction(state, action, areaResult.error || `No legal targets for ${item.name}.`, source);
+                unit.actionUsed = true;
+                item.uses = Math.max(0, Number(item.uses) - 1);
+                if (item.kind === 'heal') return resolveAreaHeal(state, unit, item, areaResult, rng);
+                return resolveAreaBuff(state, unit, item, areaResult);
+            }
             const targetResult = action.targetId ? resolveTarget(state, unit, action, options) : { target: unit };
             const target = targetResult.target;
             if (!target) return rejectAction(state, action, targetResult.error || 'Item target is invalid.', source);
@@ -2599,8 +2986,8 @@ function resolveAttack(state, unit, target, options) {
 
     if (miss) {
         if (options.consumeAction !== false) unit.actionUsed = true;
-        checkEncounterEnd(state);
-        return { ok: true, log: 'Missed.', ended: state.status !== 'active' };
+        if (!options.deferEndCheck) checkEncounterEnd(state);
+        return { ok: true, log: 'Missed.', hit: false, ended: state.status !== 'active' };
     }
 
     const resource = normalizeWillpowerResource(options.resource, 'hp');
@@ -2616,14 +3003,15 @@ function resolveAttack(state, unit, target, options) {
         applyWillpowerDamageToUnit(state, target, willpowerDamage, `${unit.name}'s ${label}`, {
             outcome: options.willpowerOutcome,
             casterId: unit.id,
+            deferEndCheck: options.deferEndCheck === true,
         });
     }
     if (options.consumeAction !== false) unit.actionUsed = true;
-    checkEncounterEnd(state);
+    if (!options.deferEndCheck) checkEncounterEnd(state);
     const parts = [];
     if (hpDamage) parts.push(`${hpDamage} HP`);
     if (willpowerDamage) parts.push(`${willpowerDamage} Willpower`);
-    return { ok: true, log: parts.length ? `Hit for ${parts.join(' and ')}.` : 'Hit.', ended: state.status !== 'active' };
+    return { ok: true, log: parts.length ? `Hit for ${parts.join(' and ')}.` : 'Hit.', hit: true, ended: state.status !== 'active' };
 }
 
 /**
@@ -2669,7 +3057,7 @@ export function interpretActions(state, actions, options = {}) {
  * Compact, model-friendly list of legal targets/reachable cells for a unit.
  * @param {object} state
  * @param {object} unit
- * @returns {{ reachableCells: string[], attackTargets: string[], skillTargets: Record<string,string[]> }}
+ * @returns {{ reachableCells: string[], attackTargets: string[], skillTargets: Record<string,string[]>, aoeTargets: Record<string,Record<string,string[]>> }}
  */
 export function describeUnitOptions(state, unit) {
     const reachable = [...computeReachableCells(state, unit).keys()]
@@ -2680,8 +3068,36 @@ export function describeUnitOptions(state, unit) {
         .filter(target => (Number(unit.attackRange) || 1) <= 1 || hasLineOfSight(state, unit, target))
         .map(target => target.id);
     const skillTargets = {};
+    const aoeTargets = {};
     for (const skill of unit.skills || []) {
         if (skill.uses <= 0) continue;
+        const area = normalizeArea(skill.area);
+        if (area) {
+            const primaries = [];
+            const byPrimary = {};
+            if (area.origin === 'self') {
+                const result = getAreaTargets(state, unit, skill, { x: unit.x, y: unit.y }, { allowEmpty: true });
+                if (result.ok && (result.targets || []).length) {
+                    primaries.push(unit.id);
+                    byPrimary[unit.id] = result.targets.map(target => target.id);
+                }
+            } else {
+                for (const target of state.units) {
+                    if (target.defeated || target.fled) continue;
+                    if (!isAreaTargetEligible(unit, target, skill, area)) continue;
+                    if (chebyshev(unit, target) > (Number(skill.range) || 0)) continue;
+                    if (skill.kind === 'attack' && (Number(skill.range) || 0) > 1
+                        && !hasLineOfSight(state, unit, target)) continue;
+                    const result = getAreaTargets(state, unit, skill, { x: target.x, y: target.y }, { allowEmpty: true });
+                    if (!result.ok || !(result.targets || []).length) continue;
+                    primaries.push(target.id);
+                    byPrimary[target.id] = result.targets.map(entry => entry.id);
+                }
+            }
+            skillTargets[skill.id] = primaries;
+            if (Object.keys(byPrimary).length) aoeTargets[skill.id] = byPrimary;
+            continue;
+        }
         const options = state.units
             .filter(target => !target.defeated && !target.fled)
             .filter(target => skill.kind === 'special' || canTarget(unit, target, skill.kind))
@@ -2690,7 +3106,7 @@ export function describeUnitOptions(state, unit) {
             .map(target => target.id);
         skillTargets[skill.id] = options;
     }
-    return { reachableCells: reachable, attackTargets, skillTargets };
+    return { reachableCells: reachable, attackTargets, skillTargets, aoeTargets };
 }
 
 /**
@@ -2779,6 +3195,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             kind: skill.kind,
             resource: skill.resource || 'hp',
             range: skill.range,
+            area: skill.area || null,
             damage: skill.damage,
             willpowerDamage: skill.willpowerDamage || '',
             willpowerOutcome: skill.willpowerOutcome || 'defeat',
@@ -2796,6 +3213,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             kind: item.kind,
             resource: item.resource || 'hp',
             target: item.target || 'ally',
+            area: item.area || null,
             uses: item.uses,
             maxUses: item.maxUses,
             amount: item.amount,
@@ -2828,6 +3246,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             reachableCells: options.reachableCells,
             attackTargets: options.attackTargets,
             skillTargets: options.skillTargets,
+            ...(Object.keys(options.aoeTargets).length ? { aoeTargets: options.aoeTargets } : {}),
         };
     }).filter(Boolean);
 
@@ -2855,6 +3274,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             victory: 'Defeat every enemy unit.',
             defeat: 'All player units are defeated.',
             willpower: 'Willpower is a morale pool. Ordinary attacks target HP only. Skills/items with resource "willpower" or "both" damage it. At 0 Willpower the unit breaks according to willpowerOutcome. Willpower recovers after combat.',
+            area: 'Skills/items may include an "area" object. Choose a primary targetId from skillTargets; the engine centers the burst there and affects every eligible unit listed in aoeTargets. Never assume only the primary target is hit. Hostile areas exclude allies unless friendlyFire is true. Self-origin auras are centered on the caster.',
             actions: describeActionCatalog(catalog),
             actionTypes: getEnabledActions(catalog).map(entry => entry.type),
         },

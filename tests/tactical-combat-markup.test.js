@@ -89,6 +89,62 @@ describe('tactical combat markup', () => {
         expect(html).toContain('rt-tc-hpbar');
     });
 
+    it('renders range, area preview, anchor, target, and blocked classes', () => {
+        const state = makeState();
+        const view = {
+            rangeCells: new Set(['2,1']),
+            aoePreview: {
+                cells: new Set(['2,1', '2,2']),
+                targetCells: new Set(['2,2']),
+                blockedCells: new Set(['3,1']),
+                warningCells: new Set(),
+                anchor: { x: 2, y: 1 },
+                hint: 'Burst 1 · 1 target',
+            },
+        };
+        const anchorCell = buildCellMarkup(state, null, 2, 1, view);
+        expect(anchorCell).toContain('is-in-range');
+        expect(anchorCell).toContain('is-area-preview');
+        expect(anchorCell).toContain('is-area-anchor');
+        expect(anchorCell).toContain('area preview');
+        const hitCell = buildCellMarkup(state, null, 2, 2, view);
+        expect(hitCell).toContain('is-area-preview');
+        expect(hitCell).toContain('is-area-hit');
+        const blockedCell = buildCellMarkup(state, null, 3, 1, view);
+        expect(blockedCell).toContain('is-area-blocked');
+        const supportCell = buildCellMarkup(state, null, 2, 1, {
+            aoePreview: {
+                kind: 'support',
+                cells: new Set(['2,1']),
+                targetCells: new Set(['2,1']),
+                blockedCells: new Set(),
+                warningCells: new Set(),
+                anchor: { x: 2, y: 1 },
+            },
+        });
+        expect(supportCell).toContain('is-area-heal');
+    });
+
+    it('shows area badges and the targeting hint', () => {
+        const state = makeState();
+        getUnitById(state, 'pc-1').skills.push({
+            id: 'fireball', name: 'Fireball', kind: 'attack', range: 6, damage: '2d6', uses: 1, maxUses: 1,
+            area: { shape: 'burst', radius: 2, origin: 'target', friendlyFire: false },
+        });
+        const html = buildTacticalCombatMarkup(state, {
+            selectedUnitId: 'pc-1',
+            mode: 'skill',
+            selectedSkillId: 'fireball',
+            rangeCells: new Set(['2,1', '2,2']),
+            targetCells: new Set(['2,1']),
+            targetHint: 'Burst 2 · choose a center cell in range.',
+        });
+        expect(html).toContain('BURST 2');
+        expect(html).toContain('id="rt-tc-target-hint"');
+        expect(html).toContain('Burst 2 · choose a center cell in range.');
+        expect(html).toContain('is-in-range');
+    });
+
     it('renders the action bar, skills, items, and turn controls for the selected player unit', () => {
         const state = makeState();
         const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1', mode: 'move' });

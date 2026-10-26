@@ -34,6 +34,7 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 | **Maximum special resolutions** | Maximum unique enemy special abilities sent through the resolver per activation batch. Deterministic Willpower attacks and pre-authored effect templates do not count. |
 | **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
+| **Show area-of-effect hover previews** | Previews the burst covered by a hovered cell. Selected abilities always show their range; turn this off only for the hover overlay. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
 | **Resolve declared opening actions** | Applies the player's declared spell, ambush, charge, or attack before Round 1. Ambushes cost the enemy their first activation. |
 | **Deploy player units before battle** | Opens a deployment step where player units can be repositioned inside the left deployment lane. Press **Start battle** to begin Round 1. |
@@ -75,7 +76,7 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 - **Damage** accepts `XdY+Z` expressions. Natural 20 is a critical (damage dice are doubled, modifier once); natural 1 always misses.
 - **Actions**: Move, Attack, Skill, Item, Defend, Wait, Flee. A unit can move before or after its main action. Bonus-action skills consume the bonus slot instead.
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
-- **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, and bonus-action usage. A class-appropriate fallback skill is granted if nothing parses.
+- **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, bonus-action usage, and optional burst/aura area templates. A class-appropriate fallback skill is granted if nothing parses.
 - **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
 - **Inventory ownership**: every combatant now exposes gear parsed from their own `Gear:`/`Att/def:` line in the board's Inventory panel. The player character's dedicated `[INVENTORY]` block is merged on top of their sheet gear, and only its consumables become clickable items.
 - **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` describe the player character only and are parsed independently of `[CHARACTER]`. Companion abilities and spells belong inside each companion's `[PARTY]` entry. The board filters companion-owned duplicates out of the player character's standalone loadout, so a stray party spell cannot become a PC spell. Both the encounter architect and the combat agent still receive every unit's own abilities, spells, consumables, and inventory context. Gear and other inventory entries are shown in the board's Inventory panel; consumables/scrolls/vials become usable board items. Items such as a Restoration Vial use the special resolver with `cure` effects.
@@ -137,6 +138,45 @@ Mechanical fields:
 
 `resource: "both"` uses `damage` for HP and `willpowerDamage` for Willpower. The engine uses one attack roll; a critical doubles each damage pool. Basic attacks use `attackResource` / `willpowerDamage` / `attackWillpowerOutcome`. The agent cannot choose to redirect an ordinary attack into Willpower.
 
+### Area abilities
+
+Skills and heal/buff items can include an optional `area` template. Only burst templates are supported in this version:
+
+```json
+{
+  "name": "Fireball",
+  "kind": "attack",
+  "range": 8,
+  "damage": "6d6",
+  "area": {
+    "shape": "burst",
+    "radius": 2,
+    "origin": "target",
+    "friendlyFire": false
+  }
+}
+```
+
+- `radius` is measured in cells with Chebyshev distance (diagonals count as one). Radius 1 covers a 3×3 area; the maximum is 6.
+- `origin: "target"` centers the burst on the chosen cell or primary target. `origin: "self"` is a self-centered aura.
+- Hostile areas affect only units hostile to the caster unless `friendlyFire` is true. Heals and buffs affect friendly units and include the caster when inside the radius.
+- Attacks roll separately against every affected target's AC; crits, cover, Willpower damage, and defeat work per target. A heal rolls once and applies the same amount to every affected ally.
+- Hostile attack areas require line of sight from the caster to each affected cell. Cells behind walls are previewed as blocked and excluded. Heals, buffs, and special/resolver effects follow their own targeting rules.
+- One cast consumes one skill use and one action/bonus action. An empty area is rejected without consuming either.
+- Basic weapon attacks remain single-target. Multi-target attacks are authored as `kind: "attack"` skills with an `area`.
+
+Authoring examples:
+
+```text
+Abilities: Fireball (6d6 fire, 8 cells, 1/1; Area: burst 2)
+Abilities: Rallying Aura (allies within 2 cells gain +1 AC, 2/2; Area: aura 2)
+Abilities: Whirlwind (1d8 slashing, self, 1/1; Area: aura 1, friendly fire)
+```
+
+Explicit `Area: burst N` / `Area: aura N` syntax wins. Common keywords such as `fireball`, `nova`, `shockwave`, `radius`, and `all enemies within N cells` are also recognized conservatively; a plain `N cells` phrase is treated as range, not radius. Use `Area: aura N` when the ability is centered on the caster; `Area: burst N` always centers on a chosen cell/target. Add `friendly fire` or `indiscriminate` to let a hostile area include allies.
+
+When a skill is selected, the board highlights its range. Hovering a cell previews the center and every affected tile, including valid targets in red, support targets in green, blocked cells with a hatch pattern, and allied units that would be caught by `friendlyFire` in the warning colour. The **Show area-of-effect hover previews** setting disables only the hover overlay.
+
 ### Combat engagement state
 
 `[COMBAT]` distinguishes an encounter roster from active combat:
@@ -188,6 +228,14 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
   },
   "rangedKeywords": ["ranged", "bolt", "arrow", "ray"],
   "bonusActionKeyword": "bonus action",
+  "area": {
+    "burstKeywords": ["fireball", "explosion", "nova", "shockwave", "radius", "all enemies within"],
+    "selfKeywords": ["aura", "emanation", "around you", "centered on you"],
+    "friendlyFireKeywords": ["friendly fire", "indiscriminate", "all creatures"],
+    "singleTargetKeywords": ["single target", "one target", "one creature"],
+    "defaultRadius": 1,
+    "maxRadius": 6
+  },
   "items": {
     "usableKeywords": ["potion", "scroll", "bomb"],
     "healingKeywords": ["potion", "heal", "cure"],
@@ -207,7 +255,7 @@ While Tactical Combat is enabled, ordinary narrative combat is disabled:
 }
 ```
 
-`skillRules` are evaluated in order; the first keyword match decides `heal`, `buff`, or `special`, and unmatched abilities become `attack`. The `buff` block sets the actual AC bonus, attack bonus, and duration applied by parsed buffs. Inventory keywords decide which lines become usable healing items versus special items. `willpower` maps mental/morale keywords to break outcomes. Invalid JSON falls back to the shipped rules and shows an error in the settings tab. Changes apply to the next encounter.
+`skillRules` are evaluated in order; the first keyword match decides `heal`, `buff`, or `special`, and unmatched abilities become `attack`. The `buff` block sets the actual AC bonus, attack bonus, and duration applied by parsed buffs. The `area` block controls conservative burst/aura inference: explicit `Area: burst N` / `Area: aura N` syntax always wins, `radius`/`within`/shape keywords are recognized, and `singleTargetKeywords` suppress accidental inference. Inventory keywords decide which lines become usable healing items versus special items. `willpower` maps mental/morale keywords to break outcomes. Invalid JSON falls back to the shipped rules and shows an error in the settings tab. Changes apply to the next encounter.
 
 ### Narrator tool
 
@@ -257,6 +305,8 @@ The agent never mutates the board. It receives a JSON game state and returns a d
     "allowFlee": true,
     "victory": "Defeat every enemy unit.",
     "defeat": "All player units are defeated.",
+    "willpower": "Willpower is a morale pool ...",
+    "area": "Area skills include an 'area' object. Choose a primary targetId; the engine centers the burst and hits every eligible unit in aoeTargets.",
     "actions": "- move: Move — ...",
     "actionTypes": ["move", "attack", "skill", "item", "defend", "wait", "flee"]
   },
@@ -272,7 +322,10 @@ The agent never mutates the board. It receives a JSON game state and returns a d
       "speed": 6, "movementUsed": 0, "movementLeft": 6,
       "actionUsed": false, "bonusUsed": false,
       "statuses": [], "stats": { "str": 10, "dex": 14 },
-      "skills": [{ "id": "aimed-shot", "name": "Aimed Shot", "kind": "attack", "resource": "hp", "range": 6, "damage": "1d8", "uses": 2, "maxUses": 2 }],
+      "skills": [
+        { "id": "aimed-shot", "name": "Aimed Shot", "kind": "attack", "resource": "hp", "range": 6, "damage": "1d8", "uses": 2, "maxUses": 2, "area": null },
+        { "id": "fireball", "name": "Fireball", "kind": "attack", "resource": "hp", "range": 8, "damage": "4d6", "uses": 1, "maxUses": 1, "area": { "shape": "burst", "radius": 2, "origin": "target", "friendlyFire": false } }
+      ],
       "items": []
     }
   ],
@@ -281,7 +334,8 @@ The agent never mutates the board. It receives a JSON game state and returns a d
       "unitId": "enemy-3",
       "reachableCells": [[11, 7], [12, 8]],
       "attackTargets": ["pc-1"],
-      "skillTargets": { "aimed-shot": ["pc-1"] }
+      "skillTargets": { "aimed-shot": ["pc-1"] },
+      "aoeTargets": { "fireball": { "pc-1": ["pc-1", "pc-2"] } }
     }
   ],
   "activationOrder": ["enemy-3"],
@@ -299,6 +353,7 @@ The agent never mutates the board. It receives a JSON game state and returns a d
     { "type": "move", "unitId": "enemy-3", "to": { "x": 11, "y": 7 } },
     { "type": "attack", "unitId": "enemy-3", "targetId": "pc-1" },
     { "type": "skill", "unitId": "enemy-4", "skillId": "aimed-shot", "targetId": "pc-2" },
+    { "type": "skill", "unitId": "enemy-4", "skillId": "fireball", "targetCell": { "x": 12, "y": 7 } },
     { "type": "item", "unitId": "enemy-5", "itemId": "potion", "targetId": "enemy-5" },
     { "type": "defend", "unitId": "enemy-6" },
     { "type": "wait", "unitId": "enemy-7" },
@@ -308,6 +363,7 @@ The agent never mutates the board. It receives a JSON game state and returns a d
 ```
 
 - Only units listed in `unitsToMove` may be controlled.
+- For an area skill, `targetId` selects the primary target and the engine centers the burst on it. `targetCell` is accepted as an alternative center for precise placement. The affected ids are precomputed in `aoeTargets`; the agent never declares the full list.
 - `move` accepts an optional `path`; otherwise the engine finds the shortest legal path to `to`.
 - The parser tolerates markdown fences, leading/trailing prose, bare arrays, and one correction retry with the validation error appended.
 - If the connection fails or returns no usable actions, a deterministic local tactics AI takes over for the remaining units. Combat never stalls because a model is offline.
@@ -383,7 +439,7 @@ When combat ends:
 | `tactical-combat-willpower.js` | Willpower vocabulary, derived max values, resource/outcome normalization. |
 | `tactical-combat-prompts.js` | Shipped prompt templates + placeholder renderer. |
 | `tactical-combat-actions.js` | Catalogue validation, response parsing, action normalization/allow-lists. |
-| `tactical-combat-engine.js` | Pure grid/dice/rules engine: terrain, placement, movement, LOS, attacks, skills, items, turn flow, outcomes, agent state. |
+| `tactical-combat-engine.js` | Pure grid/dice/rules engine: terrain, placement, movement, LOS, attacks, burst/area templates, skills, items, turn flow, outcomes, agent state. |
 | `tactical-combat-context.js` | Memo parsing (`[CHARACTER]`, `[PARTY]`, `[COMBAT]`, `[INVENTORY]`), location/theme inference, fallback roster/encounters. |
 | `tactical-combat-agent.js` | Encounter architect + tactical agent requests, correction retries, local tactics fallback, connection probe. |
 | `tactical-combat-store.js` | Per-chat board and pending-narration persistence. |
@@ -403,7 +459,7 @@ Integration points: `index.js` (init, connection binder, chat switch), `narrativ
 npx vitest run --pool=threads
 ```
 
-The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, settings/UI contracts, Willpower derivation/breaks, side switching, transformations, and enemy special resolution.
+The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, burst/aura area resolution and previews, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, settings/UI contracts, Willpower derivation/breaks, side switching, transformations, and enemy special resolution.
 
 > On Android/Termux the default Vitest `forks` pool cannot spawn workers; use `--pool=threads`. The `vitest.config.js` in this fork sets `pool: 'threads'` so `npm test` works there too.
 
@@ -411,7 +467,7 @@ The tactical suites cover terrain/grid generation, placement, movement and diffi
 
 ## Current limitations
 
-- Skills are single-target; area-of-effect templates are not implemented.
+- Areas support burst/aura templates only; line, cone, and custom-cell templates are not implemented yet.
 - Reactions/opportunity attacks are tracked but not yet used by an action.
 - The memo parser is tolerant but heuristic; it prioritizes listed totals (`Total AC`, melee/ranged attack values) and falls back to derived values.
 - Enemy `[COMBAT]` skill text is parsed heuristically; ambiguous abilities may become a generic attack or buff.

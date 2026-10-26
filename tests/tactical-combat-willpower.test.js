@@ -253,6 +253,31 @@ describe('special Willpower effects and transformations', () => {
 });
 
 describe('special action preparation', () => {
+    it('returns every affected target for an area special', () => {
+        const state = makeState([
+            { id: 'pc-1', name: 'Aria', side: 'player', maxHp: 40, hp: 40, ac: 12, attackBonus: 20, damage: '1d8' },
+            { id: 'enemy-2', name: 'Cultist A', side: 'enemy', maxHp: 15, hp: 15, ac: 10, attackBonus: 3, damage: '1d6' },
+            { id: 'enemy-3', name: 'Cultist B', side: 'enemy', maxHp: 15, hp: 15, ac: 10, attackBonus: 3, damage: '1d6' },
+        ]);
+        const caster = state.units[0];
+        state.units[1].x = 3;
+        state.units[1].y = 1;
+        state.units[2].x = 3;
+        state.units[2].y = 2;
+        caster.skills.push({
+            id: 'cinder-burst', name: 'Cinder Burst', kind: 'special', range: 6, maxUses: 1, uses: 1,
+            area: { shape: 'burst', radius: 1, origin: 'target' },
+        });
+        const prepared = prepareSpecialAction(state, {
+            type: 'skill', unitId: 'pc-1', skillId: 'cinder-burst', targetCell: { x: 4, y: 1 },
+        }, { actorSide: 'player' });
+        expect(prepared.ok).toBe(true);
+        expect(prepared.anchor).toEqual({ x: 4, y: 1 });
+        expect(prepared.targets.map(target => target.id)).toEqual(['enemy-2', 'enemy-3']);
+        expect(prepared.area).toMatchObject({ shape: 'burst', radius: 1 });
+    });
+
+
     it('validates special uses and consumes nothing before resolution', () => {
         const state = makeState();
         const caster = state.units[0];

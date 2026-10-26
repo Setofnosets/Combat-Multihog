@@ -172,12 +172,26 @@ export function normalizeCombatAction(raw) {
         action.skillId = skillId;
         const targetId = String(raw.targetId || raw.target || '').trim();
         if (targetId) action.targetId = targetId;
+        const cell = raw.targetCell || raw.center || raw.cell;
+        if (cell && typeof cell === 'object' && !Array.isArray(cell)) {
+            const x = asInt(cell.x);
+            const y = asInt(cell.y);
+            if (x == null || y == null) return { action: null, error: 'Skill targetCell needs integer x and y.' };
+            action.targetCell = { x, y };
+        }
     } else if (type === 'item') {
         const itemId = String(raw.itemId || raw.item || '').trim();
         if (!itemId) return { action: null, error: 'Item action is missing itemId.' };
         action.itemId = itemId;
         const targetId = String(raw.targetId || raw.target || '').trim();
         if (targetId) action.targetId = targetId;
+        const cell = raw.targetCell || raw.center || raw.cell;
+        if (cell && typeof cell === 'object' && !Array.isArray(cell)) {
+            const x = asInt(cell.x);
+            const y = asInt(cell.y);
+            if (x == null || y == null) return { action: null, error: 'Item targetCell needs integer x and y.' };
+            action.targetCell = { x, y };
+        }
     }
     // defend / wait / flee need no extra fields.
     return { action, error: '' };
