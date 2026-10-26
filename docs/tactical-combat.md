@@ -22,7 +22,7 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 
 | Setting | Purpose |
 |---|---|
-| **Combat style** | **Narration**, **Tactical grid**, or **Traditional turn-based**. The selected style owns the board, narrator tool, and system-prompt override. Switching is blocked while a saved board is active, preparing, or finalizing. |
+| **Combat style** | **Narration**, **Tactical grid**, or **Traditional turn-based**. The selected style owns the board, narrator tool, and system-prompt override. Switching is blocked while a saved board is still running (active, preparing, or finalizing). The pane lists every open encounter with its chat name so a board in another — or deleted — chat is visible; **Clear open encounters** removes those boards and applies the style you tried to pick. Markers left by a previous page session are ignored, and a stuck finalization expires after 90 seconds. |
 | **Grid dimensions** | 10×10, 15×15, 20×20, **Dynamic** (8×8 to 24×24 based on roster size), or **Custom** (5–40 rows/columns). |
 | **Turn style** | **Phased** — every player unit acts in any order, then every agent unit; or **Initiative** — 1d20 + modifier, one unit at a time. |
 | **Terrain theme** | Auto (matches location keywords) or Dungeon / Forest / Cave / City / Interior / Plain. |

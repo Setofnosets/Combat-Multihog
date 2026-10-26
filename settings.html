@@ -2339,6 +2339,15 @@
                         <div class="rt-tc-settings-note">Only the selected style's board, narrator tool, and system-prompt override are active. Existing saved boards remain available when you switch back.</div>
                     </div>
 
+                    <div class="rt-tc-field" id="rpg_combat_active_encounters" style="display: none;">
+                        <label>Open encounters</label>
+                        <div id="rpg_combat_active_encounters_list" class="rt-tc-open-encounters"></div>
+                        <div class="rt-tc-settings-actions">
+                            <button type="button" id="rpg_combat_clear_encounters" class="menu_button interactable"><i class="fa-solid fa-broom"></i> Clear open encounters</button>
+                        </div>
+                        <div class="rt-tc-settings-note">Every chat keeps its own board, so an encounter can stay open in a chat you are not looking at — including a deleted chat or an interrupted preparation. Switching styles is blocked until those boards are cleared; finished boards are kept.</div>
+                    </div>
+
                     <div id="rpg_combat_narrative_pane" style="display: none;">
                         <div class="rt-tc-settings-note">Narration mode uses the normal <code>&lt;combat&gt;</code> rules. The narrator describes attacks, damage, saves, and enemy turns. No board opens and no combat tool is registered.</div>
                     </div>

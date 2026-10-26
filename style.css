@@ -12582,6 +12582,34 @@ body.rt-tc-modal-open {
     opacity: 0.55;
 }
 
+.rt-tc-open-encounters {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 2px 0 4px;
+}
+
+.rt-tc-open-encounter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 8px;
+    padding: 5px 8px;
+    border: 1px solid rgba(240, 179, 90, 0.28);
+    border-radius: 6px;
+    background: rgba(240, 179, 90, 0.07);
+    font-size: 0.82em;
+    line-height: 1.35;
+}
+
+.rt-tc-open-encounter-name {
+    font-weight: 600;
+}
+
+.rt-tc-open-encounter-detail {
+    opacity: 0.7;
+}
+
 .rt-tc-setting-status {
     margin: 6px 0 8px;
     padding: 6px 8px;

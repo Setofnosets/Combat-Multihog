@@ -12,6 +12,9 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 - Area special abilities resolve every affected target in one resolver call with an engine-enforced target allow-list.
 - New board targeting previews: selected abilities always highlight their range, and hovering a cell previews the burst center, affected tiles, valid targets, blocked cells, and friendly-fire warnings. The hover overlay is controlled by **Show area-of-effect hover previews**.
 
+### Fixed
+- Switching **Combat style** no longer gets stuck behind an encounter you cannot find. The guard now ignores `preparing`/`finalizing` markers left by a previous page session (the job that owned them died with the reload) and expires a stuck finalization after 90 seconds. Real open boards still block the switch, but the Combat pane lists each one with its chat name and offers **Clear open encounters**, which removes those boards, cleans the active chat's `[COMBAT]` block and pending narration, and then applies the style you selected. Finished boards are kept.
+
 ## [2026.10.3] - 2026-10-25
 
 ### Added
