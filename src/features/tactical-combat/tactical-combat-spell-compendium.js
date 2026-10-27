@@ -21,6 +21,10 @@ import {
     parseAreaKeywords,
     willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
+import {
+    normalizeEffectCheck,
+    sanitizeEffectTemplate,
+} from './tactical-combat-effect-template.js';
 
 const CORE_SPELLS = {
     fireball: {
@@ -148,6 +152,10 @@ function normalizeEntry(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
     const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
+    const typeRaw = String(raw.category || raw.skillType || raw.type || (raw.spell === true ? 'spell' : '')).toLowerCase();
+    const type = ['spell', 'ability', 'item', 'trait', 'technique', 'class-feature'].includes(typeRaw)
+        ? typeRaw
+        : (raw.spell === true ? 'spell' : 'ability');
     const resource = ['hp', 'willpower', 'both'].includes(String(raw.resource || '').toLowerCase())
         ? String(raw.resource).toLowerCase()
         : 'hp';
@@ -155,8 +163,10 @@ function normalizeEntry(raw) {
     const target = ['enemy', 'ally', 'self', 'any'].includes(String(raw.target || '').toLowerCase())
         ? String(raw.target).toLowerCase()
         : (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally');
+    const effectTemplate = sanitizeEffectTemplate(raw.effectTemplate ?? raw.effects ?? raw.template, { max: 16 });
     return {
         kind,
+        type,
         resource,
         damage: String(raw.damage || '').slice(0, 40),
         willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').slice(0, 40),
@@ -172,45 +182,94 @@ function normalizeEntry(raw) {
         save: ['dex', 'con', 'will', 'str', 'int', 'cha'].includes(String(raw.save || '').toLowerCase())
             ? String(raw.save).toLowerCase()
             : '',
+        check: normalizeEffectCheck(raw.check ? {
+            ...raw.check,
+            save: raw.check.save ?? raw.save,
+            type: raw.check.type ?? (raw.save ? 'save' : undefined),
+        } : { type: raw.save ? 'save' : undefined, save: raw.save }),
         utility: raw.utility === true,
-        description: String(raw.description || '').slice(0, 400),
+        description: String(raw.description || raw.brief || '').slice(0, 400),
+        aliases: Array.isArray(raw.aliases)
+            ? raw.aliases.map(alias => String(alias || '').trim()).filter(Boolean).slice(0, 12)
+            : [],
+        tags: Array.isArray(raw.tags)
+            ? raw.tags.map(tag => String(tag || '').trim()).filter(Boolean).slice(0, 20)
+            : [],
+        maxUses: raw.maxUses == null ? null : Math.max(0, Math.min(99, Math.round(Number(raw.maxUses)) || 0)),
+        unlimited: raw.unlimited === true,
+        effectTemplate: effectTemplate.length ? effectTemplate : null,
+        registryId: String(raw.registryId || '').slice(0, 80),
+        status: String(raw.status || '').slice(0, 20),
         source: String(raw.source || 'config'),
     };
 }
 
 /**
  * @param {unknown} raw
- * @returns {{ ok:boolean, config:{spells:Record<string,object>}, error:string, usingDefault:boolean }}
+ * @returns {{ ok:boolean, config:{spells:Record<string,object>, skills:Record<string,object>}, error:string, usingDefault:boolean }}
  */
-export function normalizeSpellCompendium(raw) {
+export function normalizeSkillCompendium(raw) {
     const defaults = Object.fromEntries(
         Object.entries(CORE_SPELLS).map(([name, entry]) => [normalizeKey(name), normalizeEntry(entry)]),
     );
     if (raw == null || String(raw).trim() === '') {
-        return { ok: true, config: { spells: defaults }, error: '', usingDefault: true };
+        return {
+            ok: true,
+            config: { spells: defaults, skills: defaults },
+            error: '',
+            usingDefault: true,
+        };
     }
     let value = raw;
     if (typeof value === 'string') {
         try {
             value = JSON.parse(value);
         } catch (error) {
-            return { ok: false, config: { spells: defaults }, error: `Invalid JSON: ${error.message}`, usingDefault: true };
+            return {
+                ok: false,
+                config: { spells: defaults, skills: defaults },
+                error: `Invalid JSON: ${error.message}`,
+                usingDefault: true,
+            };
         }
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return { ok: false, config: { spells: defaults }, error: 'Spell compendium must be a JSON object.', usingDefault: true };
+        return {
+            ok: false,
+            config: { spells: defaults, skills: defaults },
+            error: 'Skill compendium must be a JSON object.',
+            usingDefault: true,
+        };
     }
-    const source = value.spells && typeof value.spells === 'object' && !Array.isArray(value.spells)
-        ? value.spells
-        : value;
+    const sectionKeys = ['skills', 'spells', 'abilities', 'items'];
+    const hasSections = sectionKeys.some(key => value[key] && typeof value[key] === 'object' && !Array.isArray(value[key]));
+    const sources = [];
+    if (hasSections) {
+        for (const key of sectionKeys) {
+            const section = value[key];
+            if (section && typeof section === 'object' && !Array.isArray(section)) sources.push(section);
+        }
+    } else {
+        sources.push(value);
+    }
     const spells = { ...defaults };
-    for (const [name, entry] of Object.entries(source)) {
-        if (!name || name === 'spells') continue;
-        const normalized = normalizeEntry(entry);
-        if (normalized) spells[normalizeKey(name)] = normalized;
+    for (const source of sources) {
+        for (const [name, entry] of Object.entries(source)) {
+            if (!name || sectionKeys.includes(name)) continue;
+            const normalized = normalizeEntry(entry);
+            if (normalized) spells[normalizeKey(name)] = normalized;
+        }
     }
-    return { ok: true, config: { spells }, error: '', usingDefault: false };
+    return {
+        ok: true,
+        config: { spells, skills: spells },
+        error: '',
+        usingDefault: false,
+    };
 }
+
+/** Legacy name kept for imports and settings from older builds. */
+export const normalizeSpellCompendium = normalizeSkillCompendium;
 
 /**
  * Extract every spell name mentioned in a memo. Used to build a per-encounter
@@ -358,3 +417,8 @@ export const DEFAULT_SPELL_COMPENDIUM_JSON = JSON.stringify(
     null,
     2,
 );
+
+/** General-purpose aliases. The legacy spell names remain for compatibility. */
+export const DEFAULT_SKILL_COMPENDIUM_JSON = DEFAULT_SPELL_COMPENDIUM_JSON;
+export const getSkillDefinition = getSpellDefinition;
+export const buildSkillCompendium = buildSpellCompendium;

@@ -61,6 +61,13 @@ import {
     prepareSpecialAction,
     resolveEffectTemplate,
 } from './tactical-combat-engine.js';
+import {
+    findSkillRegistryEntry,
+    getSkillRegistry,
+    registryEntryToDefinition,
+    rememberSpecialResolution,
+} from '../skill-registry/skill-registry.js';
+import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
 
 const MAX_CORRECTION_ATTEMPTS = 2;
 const MAX_SPECIAL_RESOLUTIONS_PER_TURN = 2;
@@ -71,6 +78,13 @@ function maxSpecialResolutionsFor(settings, mode = 'tactical') {
         : settings?.tacticalCombatMaxSpecialResolutions);
     if (!Number.isFinite(configured)) return MAX_SPECIAL_RESOLUTIONS_PER_TURN;
     return Math.max(0, Math.min(4, Math.round(configured)));
+}
+
+function hasDeterministicSpecialRecipe(settings, source) {
+    if (!source) return false;
+    if (Array.isArray(source.effectTemplate) && source.effectTemplate.length) return true;
+    const entry = findSkillRegistryEntry(settings, source.name);
+    return !!entry?.mechanics?.effectTemplate?.length;
 }
 
 /**
@@ -191,6 +205,31 @@ function compactUnitForContext(unit) {
 }
 
 /**
+ * Compact registry entry for the encounter architect. Keeps prompts small and
+ * gives the architect a stable, authoritative skill vocabulary.
+ * @param {object} entry
+ */
+function compactRegistrySkill(entry) {
+    return {
+        name: entry.name,
+        type: entry.type,
+        brief: String(entry.brief || '').slice(0, 240),
+        effect: String(entry.effectSummary || '').slice(0, 240),
+        kind: entry.mechanics?.kind || 'special',
+        tags: Array.isArray(entry.tags) ? entry.tags.slice(0, 8) : [],
+        owners: Array.isArray(entry.owners) ? entry.owners.slice(0, 6).map(owner => owner.name) : [],
+    };
+}
+
+function compactRegistryClass(cls) {
+    return {
+        name: cls.name,
+        brief: String(cls.brief || '').slice(0, 200),
+        skills: Array.isArray(cls.skillIds) ? cls.skillIds.slice(0, 20) : [],
+    };
+}
+
+/**
  * Context JSON for the Encounter Architect.
  * @param {object} context
  * @param {Record<string, any>} settings
@@ -200,6 +239,15 @@ function compactUnitForContext(unit) {
 export function buildEncounterRequestPayload(context, settings, options = {}) {
     const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
     const unitCount = (context?.playerUnits?.length || 1) + (context?.allies?.length || 0) + 4;
+    const registry = context?.skillRegistry || getSkillRegistry(settings);
+    const knownSkills = Object.values(registry.skills || {})
+        .filter(entry => entry.status === 'resolved' || entry.status === 'confirmed')
+        .sort((a, b) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
+        .slice(0, 32)
+        .map(compactRegistrySkill);
+    const knownClasses = Object.values(registry.classes || {})
+        .slice(0, 10)
+        .map(compactRegistryClass);
     const payload = {
         mode,
         request: mode === 'traditional'
@@ -215,6 +263,8 @@ export function buildEncounterRequestPayload(context, settings, options = {}) {
         location: context?.location || '',
         sceneExcerpt: String(context?.sceneExcerpt || '').slice(0, 3500),
         partySummary: context?.summary?.party || [],
+        ...(knownSkills.length ? { knownSkills } : {}),
+        ...(knownClasses.length ? { knownClasses } : {}),
         rules: {
             enemyCount: '2-6',
             fairFight: 'Routine encounter should be winnable; a boss fight may be deadly.',
@@ -256,9 +306,47 @@ export function buildEncounterUserPrompt(context, settings, options = {}) {
 }
 
 /**
+ * Apply a stored registry definition to an architect-authored skill. Resolved
+ * specials are authoritative so the same named ability cannot silently change
+ * between encounters; ordinary skills only receive missing metadata.
+ * @param {object} skill
+ * @param {object|null} registry
+ * @returns {object}
+ */
+function applyRegistryDefinitionToSkill(skill, registry) {
+    if (!skill || !registry) return skill;
+    const entry = findSkillRegistryEntry(registry, skill.name);
+    if (!entry) return skill;
+    const definition = registryEntryToDefinition(entry);
+    if (!definition) return skill;
+    if ((entry.status === 'resolved' || entry.status === 'confirmed' || entry.locked)
+        && definition.kind === 'special') {
+        skill.kind = 'special';
+        if (definition.effectTemplate?.length) skill.effectTemplate = definition.effectTemplate;
+        if (definition.resource) skill.resource = definition.resource;
+        if (definition.save) skill.save = definition.save;
+        if (definition.willpowerDamage) skill.willpowerDamage = definition.willpowerDamage;
+        if (definition.willpowerOutcome) skill.willpowerOutcome = definition.willpowerOutcome;
+        if (definition.range != null && !skill.range) skill.range = definition.range;
+        if (definition.area && !skill.area) skill.area = definition.area;
+        if (!skill.description && definition.description) skill.description = definition.description;
+        return skill;
+    }
+    if (definition.kind && !skill.kind) skill.kind = definition.kind;
+    if (!skill.damage && definition.damage) skill.damage = definition.damage;
+    if (!skill.heal && definition.heal) skill.heal = definition.heal;
+    if (!skill.save && definition.save) skill.save = definition.save;
+    if (!skill.area && definition.area) skill.area = definition.area;
+    if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
+        skill.effectTemplate = definition.effectTemplate;
+    }
+    return skill;
+}
+
+/**
  * Validate and normalize an agent-authored encounter.
  * @param {any} value
- * @param {{ grid?: { rows: number, cols: number } }} [options]
+ * @param {{ grid?: { rows: number, cols: number }, skillRegistry?: object }} [options]
  * @returns {{ ok: boolean, encounter?: object, errors: string[] }}
  */
 export function normalizeEncounterPayload(value, options = {}) {
@@ -318,7 +406,7 @@ export function normalizeEncounterPayload(value, options = {}) {
             ? raw.skills.filter(skill => skill && typeof skill === 'object').slice(0, 6).map((skill, skillIndex) => {
                 const normalizedArea = normalizeArea(skill.area ?? skill.aoe);
                 const target = String(skill.target || '').toLowerCase();
-                return {
+                const normalized = {
                     id: String(skill.id || `skill-${index}-${skillIndex}`).slice(0, 60),
                     name: String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80),
                     description: String(skill.description || '').slice(0, 400),
@@ -341,9 +429,10 @@ export function normalizeEncounterPayload(value, options = {}) {
                     save: String(skill.save || '').toLowerCase().slice(0, 8),
                     spell: skill.spell === true,
                     effectTemplate: Array.isArray(skill.effectTemplate)
-                        ? skill.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
+                        ? skill.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 16)
                         : undefined,
                 };
+                return applyRegistryDefinitionToSkill(normalized, options.skillRegistry);
             })
             : [];
         for (const skill of skills) {
@@ -558,7 +647,9 @@ export async function generateEncounterWithAgent(context, settings, options = {}
                 lastError = parsed.error || 'No JSON object was found.';
                 continue;
             }
-            const normalized = normalizeEncounterPayload(parsed.value);
+            const normalized = normalizeEncounterPayload(parsed.value, {
+                skillRegistry: getSkillRegistry(settings),
+            });
             if (!normalized.ok) {
                 lastError = normalized.errors.join(' ');
                 continue;
@@ -762,11 +853,17 @@ async function fillPlayerTransformationLoadouts(state, effects, caster, source, 
             const parsed = parseTacticalResponse(raw, 'skills');
             const rawSkills = Array.isArray(parsed.value) ? parsed.value : parsed.value?.skills;
             const skills = normalizeSkillList(rawSkills, target.side);
-            if (skills.length) effect.skills = skills;
-            else delete effect.skills;
+            if (skills.length) {
+                effect.skills = skills;
+                delete effect.skillsResolutionFailed;
+            } else {
+                delete effect.skills;
+                effect.skillsResolutionFailed = true;
+            }
         } catch (error) {
             if (error?.name === 'AbortError') throw error;
             delete effect.skills;
+            effect.skillsResolutionFailed = true;
         }
     }
     return effects;
@@ -1082,6 +1179,183 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
     }
 }
 
+/**
+ * Resolve a declared special through the campaign registry first. A stored
+ * recipe is expanded deterministically; only an unknown special reaches the AI
+ * resolver, and its successful result is recorded for all later uses.
+ *
+ * @param {object} state
+ * @param {object} prepared result of prepareSpecialAction
+ * @param {{ kind?: 'skill'|'item', name: string, description?: string, resource?: string, willpowerOutcome?: string, area?: object, target?: string, damage?: string, heal?: string, willpowerDamage?: string, maxUses?: number, effectTemplate?: object[], registryId?: string, save?: string, range?: number }} source
+ * @param {Record<string, any>} settings
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional', allowAiFallback?: boolean }} [options]
+ * @returns {Promise<{ ok: boolean, effects?: object[], log?: string, error?: string, fromRegistry?: boolean, fromTemplate?: boolean }>}
+ */
+export async function resolveSpecialSource(state, prepared, source, settings, options = {}) {
+    if (!state || !prepared?.ok || !prepared?.unit) {
+        return { ok: false, error: prepared?.error || 'The special action could not be prepared.' };
+    }
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
+    const caster = prepared.unit;
+    const targets = Array.isArray(prepared.targets) && prepared.targets.length
+        ? prepared.targets.filter(unit => unit && !unit.defeated && !unit.fled)
+        : (prepared.target ? [prepared.target] : []);
+    const targetIds = targets.map(unit => unit.id).filter(Boolean);
+    const friendlyIds = [];
+    const hostileIds = [];
+    for (const target of targets) {
+        if (hostileTo(caster, target)) hostileIds.push(target.id);
+        else if (target.id !== caster.id) friendlyIds.push(target.id);
+        else friendlyIds.push(target.id);
+    }
+    const allowedTargetIds = allowedSpecialTargetIds(prepared);
+    const maxEffects = Math.max(
+        1,
+        Math.min(64, Number(options.maxEffects) || (prepared.area
+            ? Math.min(24, 6 * Math.max(1, targets.length))
+            : 6)),
+    );
+    const anchor = prepared.anchor
+        || (prepared.target && Number.isFinite(Number(prepared.target.x))
+            ? { x: Number(prepared.target.x), y: Number(prepared.target.y) }
+            : (Number.isFinite(Number(caster.x)) ? { x: Number(caster.x), y: Number(caster.y) } : null));
+    const registry = getSkillRegistry(settings);
+    let entry = null;
+    if (source?.registryId) {
+        entry = Object.values(registry.skills || {}).find(candidate => candidate.id === source.registryId) || null;
+    }
+    if (!entry) {
+        entry = findSkillRegistryEntry(registry, source?.name || prepared.label || '', {
+            ownerName: caster.name,
+        });
+    }
+    const registryTemplate = entry?.mechanics?.effectTemplate?.length
+        ? entry.mechanics.effectTemplate
+        : null;
+    const sourceTemplate = Array.isArray(source?.effectTemplate) && source.effectTemplate.length
+        ? source.effectTemplate
+        : null;
+    let template = registryTemplate || sourceTemplate;
+    const incompleteForm = (template || []).find(effect => effect?.formId
+        && registry.forms?.[effect.formId]?.incomplete === true);
+    if (incompleteForm) {
+        // A previous friendly transformation could not generate a loadout. Do not
+        // freeze that partial form; retry the loadout authoring once.
+        template = null;
+    }
+    if (template?.length) {
+        const expanded = resolveEffectTemplate(template, {
+            casterId: caster.id,
+            casterName: caster.name,
+            casterX: caster.x,
+            casterY: caster.y,
+            targetId: prepared.target?.id || caster.id,
+            targetName: prepared.target?.name || '',
+            targetIds,
+            friendlyIds,
+            hostileIds,
+            anchor,
+            forms: registry.forms,
+        });
+        const missingForm = expanded.find(effect => effect?.type === 'transform'
+            && effect.formId
+            && !effect.name
+            && effect.maxHp == null
+            && effect.ac == null
+            && !Array.isArray(effect.skills));
+        if (missingForm) {
+            return {
+                ok: false,
+                error: `The registered transformation form "${missingForm.formId}" is missing from the Skill Registry.`,
+                fromRegistry: !!registryTemplate,
+                fromTemplate: true,
+            };
+        }
+        const normalized = normalizeSpecialEffects({ effects: expanded }, state, {
+            theater: mode === 'traditional',
+            maxEffects: Math.max(maxEffects, expanded.length),
+            allowedTargetIds,
+            areaCells: prepared.areaCells,
+        });
+        if (!normalized.effects.length) {
+            return {
+                ok: false,
+                error: normalized.rejected.join(' ') || `${source?.name || 'The special ability'} has no legal registered effect in this situation.`,
+                fromRegistry: !!registryTemplate,
+                fromTemplate: true,
+            };
+        }
+        if (!registryTemplate && sourceTemplate) {
+            try {
+                rememberSpecialResolution(settings, prepared, source, normalized.effects, { force: false });
+                markSkillRegistryDirty(getActiveChatId());
+            } catch (error) {
+                if (settings?.debugMode) {
+                    console.warn('[RPG Tracker] Could not record authored special template:', error);
+                }
+            }
+        }
+        return {
+            ok: true,
+            effects: normalized.effects,
+            log: '',
+            fromRegistry: !!registryTemplate,
+            fromTemplate: true,
+        };
+    }
+    if (options.allowAiFallback === false) {
+        return { ok: false, error: `${source?.name || 'The special ability'} has no deterministic recipe.` };
+    }
+    const resolved = await resolveSpecialEffectWithAgent(
+        state,
+        caster,
+        {
+            ...source,
+            kind: source?.kind || 'skill',
+            name: source?.name || prepared.label || 'Special ability',
+            description: source?.description || '',
+            resource: source?.resource,
+            willpowerOutcome: source?.willpowerOutcome,
+            area: source?.area ?? prepared.area,
+            target: source?.target,
+            damage: source?.damage,
+            heal: source?.heal,
+            willpowerDamage: source?.willpowerDamage,
+            maxUses: source?.maxUses,
+        },
+        prepared.target,
+        settings,
+        {
+            signal: options.signal,
+            mode,
+            targets,
+            area: prepared.area,
+            anchor: prepared.anchor,
+            areaCells: prepared.areaCells,
+            maxEffects,
+            allowedTargetIds,
+        },
+    );
+    if (!resolved.ok) return { ok: false, error: resolved.error || 'The special resolver failed.' };
+    try {
+        rememberSpecialResolution(settings, prepared, source, resolved.effects || [], {
+            force: options.force === true,
+        });
+        markSkillRegistryDirty(getActiveChatId());
+    } catch (error) {
+        if (settings?.debugMode) {
+            console.warn('[RPG Tracker] Could not record special resolution:', error);
+        }
+    }
+    return {
+        ok: true,
+        effects: resolved.effects || [],
+        log: resolved.log || '',
+        fromRegistry: false,
+        fromTemplate: false,
+    };
+}
+
 function isAdjacentEnough(state, unit, target) {
     if (chebyshev(unit, target) > (Number(unit.attackRange) || 1)) return false;
     return (Number(unit.attackRange) || 1) <= 1 || hasLineOfSight(state, unit, target);
@@ -1295,70 +1569,31 @@ async function executeAgentAction(state, action, settings, options = {}) {
         return { result: { ok: false, error: prepared.error }, special: true, applied: [] };
     }
     const source = prepared.skill || prepared.item;
-    const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-    const allowedTargetIds = allowedSpecialTargetIds(prepared);
-    const maxEffects = prepared.area
-        ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
-        : 6;
-    const template = Array.isArray(source?.effectTemplate) ? source.effectTemplate : null;
-    let effects = [];
-    let log = '';
-    if (template?.length) {
-        effects = resolveEffectTemplate(template, {
-            casterId: prepared.unit.id,
-            targetId: prepared.target?.id || prepared.unit.id,
-            targetIds: prepared.area ? targets.map(target => target.id) : undefined,
-        });
-        const normalized = normalizeSpecialEffects({ effects }, state, {
-            theater: state.theater === true,
-            maxEffects: Math.max(6, effects.length),
-            allowedTargetIds,
-            areaCells: prepared.areaCells,
-        });
-        if (!normalized.effects.length) {
-            return {
-                result: { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' },
-                special: true,
-                applied: [],
-            };
-        }
-        effects = normalized.effects;
-    } else {
-        const resolved = await resolveSpecialEffectWithAgent(
-            state,
-            prepared.unit,
-            {
-                kind: prepared.skill ? 'skill' : 'item',
-                name: source.name,
-                description: source.description || '',
-                resource: source.resource,
-                willpowerOutcome: source.willpowerOutcome,
-                area: source.area,
-                target: source.target,
-                damage: source.damage,
-                heal: source.heal,
-                willpowerDamage: source.willpowerDamage,
-                maxUses: source.maxUses,
-            },
-            prepared.target,
-            settings,
-            {
-                signal: options.signal,
-                mode: options.mode,
-                targets,
-                area: prepared.area,
-                anchor: prepared.anchor,
-                areaCells: prepared.areaCells,
-                maxEffects,
-                allowedTargetIds,
-            },
-        );
-        if (!resolved.ok) {
-            return { result: { ok: false, error: resolved.error || 'The special resolver failed.' }, special: true, applied: [] };
-        }
-        effects = resolved.effects || [];
-        log = resolved.log || '';
+    const resolved = await resolveSpecialSource(state, prepared, {
+        kind: prepared.skill ? 'skill' : 'item',
+        name: source.name,
+        description: source.description || '',
+        resource: source.resource,
+        willpowerOutcome: source.willpowerOutcome,
+        area: source.area,
+        target: source.target,
+        damage: source.damage,
+        heal: source.heal,
+        willpowerDamage: source.willpowerDamage,
+        maxUses: source.maxUses,
+        effectTemplate: source.effectTemplate,
+        registryId: source.registryId,
+        save: source.save,
+        range: source.range,
+    }, settings, {
+        signal: options.signal,
+        mode: options.mode,
+    });
+    if (!resolved.ok) {
+        return { result: { ok: false, error: resolved.error || 'The special resolver failed.' }, special: true, applied: [] };
     }
+    const effects = resolved.effects || [];
+    const log = resolved.log || '';
     const result = applySpecialEffects(state, effects, {
         casterId: prepared.unit.id,
         skillId: prepared.skill?.id,
@@ -1437,11 +1672,12 @@ export async function runAgentTurn(state, unitIds, settings, options = {}) {
                 ? (unit?.items || []).find(entry => entry.id === action.itemId || entry.name === action.itemId)
                 : null;
             const isSpecial = skill?.kind === 'special' || item?.kind === 'special';
-            if (isSpecial && specialResolutions >= maxSpecialResolutions) {
+            const deterministicSpecial = isSpecial && hasDeterministicSpecialRecipe(settings, skill || item);
+            if (isSpecial && !deterministicSpecial && specialResolutions >= maxSpecialResolutions) {
                 rejected.push({ action, error: `Special resolution limit reached (${maxSpecialResolutions} per activation).` });
                 continue;
             }
-            if (isSpecial) specialResolutions += 1;
+            if (isSpecial && !deterministicSpecial) specialResolutions += 1;
             const executed = await executeAgentAction(state, action, settings, options);
             if (executed.result.ok) {
                 applied.push(...executed.applied);

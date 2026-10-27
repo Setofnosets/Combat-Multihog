@@ -44,7 +44,8 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 | **Special ability resolver prompt** | Used only when a non-standard ability/spell/item is cast. Converts freeform effects (summoning, terrain, control) into engine primitives. |
 | **Action Catalogue & Game State** | JSON editor for the legal action vocabulary. Labels/descriptions can be changed; `"enabled": false` removes an action from the board and the agent contract. Unknown action types are rejected at runtime. |
 | **Loadout Classifiers** | Shared JSON editor for ability/spell classification rules, attack keywords, buff AC/attack/duration defaults, ranged/bonus-action keywords, inventory consumable/healing/special keywords, and Willpower damage/outcome keywords. |
-| **Spell Compendium** | Shared JSON editor for spell mechanics. Shipped definitions cover common tabletop spells; this JSON can override or extend them. Spell names found in the current memo without a definition are inferred from their name and spell level. |
+| **Skill Compendium** | Shared JSON editor for global skill mechanics. Ships common tabletop spells; accepts `skills`, `spells`, `abilities`, and `items` sections. Entries may include deterministic `effectTemplate` recipes. Unlisted names are inferred from the current memo. |
+| **Campaign Skill Registry** | Per-chat JSON ledger of discovered skills, spells, abilities, items, class skeletons, and reusable transformation forms. Special abilities are resolved once, compiled into an effect recipe, and reused deterministically. Entries marked `locked` are protected from auto-discovery; manual edits and re-resolution are supported. |
 | **Terrain Key** | Static reference for every terrain type, colour, glyph, and effect. |
 
 Tactical, Traditional, and shared settings are global. Each chat gets its own board, stored in `extension_settings.rpg_tracker.tacticalCombatByChat[chatId]` (and `traditionalCombatByChat[chatId]` for the no-grid mode).
@@ -121,6 +122,42 @@ Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra
 Enemy special abilities use the same separation: the tactical agent may only **declare** a special skill and target. The framework resolves it separately, validates every effect, and applies it inline in action order. The enemy agent never emits effects or invents outcomes.
 
 This keeps token usage limited to the rare ability that actually needs adjudication; ordinary rounds never call the resolver.
+
+### Campaign Skill Registry and canonical specials
+
+The first successful resolution of a special is recorded in the per-chat **Campaign Skill Registry** (`settings.skillRegistry`, snapshotted in `chatStates[chatId].skillRegistry`). The normalized effects become that ability's canonical `effectTemplate`:
+
+- Later uses expand the stored template and apply it through the same validator. They do not call the AI again.
+- Resolved recipes win over later memo/architect text with the same skill name. A genuinely different version must use a new name, or be edited/re-resolved explicitly.
+- Player and party skills, class skeletons, special items, and named enemy specials are discovered automatically at encounter start. Enemy ordinary attacks are not registered.
+- A conflicting auto-discovery keeps the existing resolved recipe and records a conflict instead of silently overwriting it.
+- An invalid cached template rejects the action with a clear message. It never falls back to a fresh AI resolution unless the user explicitly re-resolves it.
+
+Templates use role selectors so they survive different targets and maps:
+
+- `$caster`, `$target`
+- `$area`, `$areaHostile`, `$areaFriendly`
+- optional `limit` for partial-area effects
+- `cellOffsets` for terrain, re-anchored to the current cast location
+
+The mirror `<campaignPrefix>_Skills` lorebook is a readable backup, not the authority. It stores short `Type`/`Brief`/`Effect` content plus machine-readable metadata in `entry.extensions.multihogSkill`. Mirror writes are debounced and chat-guarded; entries are not keyword-injected unless the registry setting enables it.
+
+### Transformation forms
+
+A transformation references a reusable form instead of re-authoring stats and skills each time:
+
+```json
+{
+  "type": "transform",
+  "target": "$caster",
+  "formId": "dragon",
+  "rounds": 3
+}
+```
+
+The registry's `forms` map stores the full form: stats, `replaceSkills`, skills, items, inventory, duration, and permanent flag. The first successful transformation freezes the form; later casts expand the same form and always return the same skill loadout. `replaceSkills: true` with `skills: []` means a helpless form; `replaceSkills: false` keeps the target's existing loadout.
+
+If the first friendly transformation has no loadout, the existing transformation-loadout prompt runs once. A failed loadout generation does not freeze an incomplete form. Transformation reversion still uses the engine's original-form snapshot.
 
 ### Willpower abilities
 
@@ -459,6 +496,10 @@ When combat ends:
 | `tactical-combat-markup.js` | Pure HTML for the board, sidebar, legend, log, and result dialog. |
 | `tactical-combat-ui.js` | Overlay controller, targeting, delegated events, async agent turns, export. |
 | `tactical-combat-settings.js` | Settings tab binding, catalogue validation, board launchers. |
+| `tactical-combat-effect-template.js` | Shared normalization/summaries for deterministic effect recipes. |
+| `src/features/skill-registry/skill-registry.js` | Pure campaign registry: entries, classes, forms, catalog merge, canonicalization. |
+| `src/features/skill-registry/skill-registry-store.js` | Dirty tracking and chat-partition snapshots for the registry. |
+| `src/features/skill-registry/skill-lorebook.js` | Debounced `_Skills` mirror and recovery import. |
 
 Integration points: `index.js` (init, connection binder, chat switch), `narrative-hooks.js` (one-shot outcome injection/clear), `settings.html`, `src/ui/settings-overlay.js`, `src/state/defaults.js`, `src/state/settings.js`, `src/state/connection-setups.js`, `style.css`, `src/ui/panel/panel-markup.js`.
 
@@ -470,7 +511,7 @@ Integration points: `index.js` (init, connection binder, chat switch), `narrativ
 npx vitest run --pool=threads
 ```
 
-The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, burst/aura area resolution and previews, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, settings/UI contracts, Willpower derivation/breaks, side switching, transformations, and enemy special resolution.
+The tactical suites cover terrain/grid generation, placement, movement and difficult terrain, LOS, attacks/crits, skills/items/defend, burst/aura area resolution and previews, phased and initiative turn flow, outcomes/retreat, memo parsing, architect/action payload validation, correction retries, local AI fallback, markup escaping/legend/result dialog, outcome handoff, per-chat storage, settings/UI contracts, Willpower derivation/breaks, side switching, transformations, and enemy special resolution. The Skill Registry suites additionally cover entry normalization/merge precedence, catalog overlays, role-selector and terrain-offset expansion, form reuse, resolved-special reuse without a second AI call, resolver-cap exemptions, chat persistence, lorebook mirror/prune/hydration, and the settings contract.
 
 > On Android/Termux the default Vitest `forks` pool cannot spawn workers; use `--pool=threads`. The `vitest.config.js` in this fork sets `pool: 'threads'` so `npm test` works there too.
 
@@ -484,4 +525,9 @@ The tactical suites cover terrain/grid generation, placement, movement and diffi
 - Enemy `[COMBAT]` skill text is parsed heuristically; ambiguous abilities may become a generic attack or buff.
 - Automatic narration calls the main generation API; if another generation is running, the queued result waits for the next message instead.
 - Willpower transformations and side changes are encounter-scoped and revert after combat by default. Permanent changes must be narrated and applied by the State Tracker.
+- Save-based special checks record `check.type: "save"` metadata but the engine still resolves attacks as attack rolls until saving-throw resolution lands (see Pending Features).
+- Same-name skills share canonical mechanics. Level-scaled variants and per-owner form variants are not implemented; use a distinct name or edit the registry entry.
+- Registry forms use absolute stats by default. Relative/scaled form modifiers are a future extension.
+- Enemy special recipes are registry-authoritative by name; an architect that needs a stronger version must use a new name.
+- The `_Skills` mirror is a backup/readable view. The live JSON registry remains authoritative; manual mirror edits are overwritten by the next registry sync.
 - Enemy special resolution is capped per activation batch (default two; configurable 0–4) to keep token usage bounded.

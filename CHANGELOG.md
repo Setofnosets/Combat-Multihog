@@ -5,6 +5,10 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 ## [Unreleased]
 
 ### Added
+- **Campaign Skill Registry** — a per-chat ledger of discovered skills, spells, abilities, items, class skeletons, and reusable transformation forms. Special abilities resolve once through the AI resolver, compile into deterministic engine primitives (`$target`/`$areaHostile`/`$areaFriendly`, terrain `cellOffsets`), and then reuse the same recipe on every later use and across encounters. Invalid cached recipes reject instead of silently varying.
+- **Transformation form registry** — transformations store a reusable `formId` with stats, `replaceSkills`, skills, items, inventory, and duration. A dragon form always returns the same loadout; a failed loadout generation never freezes an incomplete form.
+- **General Skill Compendium** — the global JSON now accepts `skills`, `spells`, `abilities`, and `items` sections and preserves `effectTemplate` recipes. The Settings → Combat drawer exposes a per-chat Campaign Skill Registry JSON editor with mirror/keyword toggles and a clear action.
+- **Skills lorebook mirror** — registered entries are mirrored into `<campaignPrefix>_Skills` with machine-readable `extensions.multihogSkill` metadata and a readable `Type`/`Brief`/`Effect` body. Writes are debounced and chat-guarded; the mirror can hydrate missing registry entries after a lost or older chat snapshot.
 - Tactical combat now supports multi-target **area abilities** through an optional `area` template on skills and heal/buff items: `{"shape":"burst","radius":N,"origin":"target"|"self","friendlyFire":false}`. One cast hits every eligible unit in the burst while consuming one action and one use.
 - Self-centered auras (`origin: "self"`) for heals, buffs, and attacks; hostile areas exclude allies by default with an opt-in `friendlyFire` flag.
 - Area authoring from the memo: `Area: burst N` / `Area: aura N`, conservative keyword inference, and architect JSON support. `N cells` is treated as range, while `radius N` / `within N cells` patterns can define a burst.

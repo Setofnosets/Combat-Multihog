@@ -723,7 +723,7 @@ function normalizeSkill(raw, index, side) {
         maxUses: unlimited ? 0 : maxUses,
         uses: unlimited ? 0 : (raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses)),
         effectTemplate: Array.isArray(raw.effectTemplate)
-            ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 6)
+            ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 16)
             : null,
         side,
     };
@@ -2529,37 +2529,172 @@ export function prepareSpecialAction(state, action, options = {}) {
 
 /**
  * Replace $caster / $target placeholders in a pre-authored effect template.
- * When `targetIds` is supplied, every entry containing `$target` is expanded
- * once per affected target; entries without it (terrain, summon, log) stay
- * single. This lets one area template affect every unit in a burst.
+ * Also supports role selectors used by the Skill Registry:
+ *   $caster, $target, $area, $areaHostile, $areaFriendly
+ * and anchor-relative terrain `cellOffsets`. A transform may reference a stored
+ * form with `formId`; the form's stats/loadout are expanded before validation.
  *
  * @param {object[]} effects
- * @param {{ casterId?: string, targetId?: string, targetIds?: string[] }} ids
+ * @param {{ casterId?: string, targetId?: string, targetIds?: string[], friendlyIds?: string[], hostileIds?: string[], anchor?: {x:number,y:number}, forms?: Record<string, object>, targetName?: string, casterName?: string }} ids
  * @returns {object[]}
  */
 export function resolveEffectTemplate(effects, ids = {}) {
     const source = Array.isArray(effects) ? effects : [];
     const targetIds = Array.isArray(ids.targetIds) ? ids.targetIds.map(String).filter(Boolean) : [];
-    const replace = (value, targetId) => {
+    const friendlyIds = Array.isArray(ids.friendlyIds) ? ids.friendlyIds.map(String).filter(Boolean) : [];
+    const hostileIds = Array.isArray(ids.hostileIds) ? ids.hostileIds.map(String).filter(Boolean) : [];
+    const forms = ids.forms && typeof ids.forms === 'object' ? ids.forms : {};
+
+    const findForm = (formId) => {
+        const key = String(formId || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        if (!key) return null;
+        if (forms[key]) return forms[key];
+        return Object.values(forms).find(form =>
+            String(form?.id || '').toLowerCase() === key
+            || String(form?.name || '').toLowerCase() === String(formId || '').toLowerCase(),
+        ) || null;
+    };
+
+    const applyForm = (effect) => {
+        if (!effect || typeof effect !== 'object' || !effect.formId) return effect;
+        const form = findForm(effect.formId);
+        if (!form) return effect;
+        if (effect.type === 'transform') {
+            const expanded = {
+                type: 'transform',
+                targetId: effect.targetId,
+                formId: form.id || effect.formId,
+            };
+            if (effect.target != null) expanded.target = effect.target;
+            if (effect.limit != null) expanded.limit = effect.limit;
+            for (const key of [
+                'name', 'classLabel', 'maxHp', 'hp', 'maxWillpower', 'willpower', 'ac',
+                'attackBonus', 'spellAttackBonus', 'spellSaveDC', 'attackRange', 'damage',
+                'damageType', 'speed', 'level', 'notes', 'glyph', 'color', 'attackResource',
+                'willpowerDamage', 'attackWillpowerOutcome',
+            ]) {
+                if (form[key] != null && form[key] !== '') expanded[key] = form[key];
+            }
+            if (form.replaceSkills === true) {
+                expanded.skills = cloneJson(Array.isArray(form.skills) ? form.skills : []);
+            }
+            if (Array.isArray(form.items) && form.items.length) expanded.items = cloneJson(form.items);
+            if (Array.isArray(form.inventory) && form.inventory.length) expanded.inventory = cloneJson(form.inventory);
+            expanded.permanent = effect.permanent == null
+                ? (form.duration?.permanent === true)
+                : effect.permanent === true;
+            const rounds = effect.rounds == null ? (form.duration?.rounds || 0) : Number(effect.rounds) || 0;
+            expanded.rounds = rounds;
+            if (effect.name != null) expanded.name = effect.name;
+            if (effect.classLabel != null) expanded.classLabel = effect.classLabel;
+            return expanded;
+        }
+        if (effect.type === 'summon') {
+            const expanded = {
+                ...cloneJson(form),
+                ...effect,
+                type: 'summon',
+                name: effect.name || form.name,
+            };
+            delete expanded.id;
+            delete expanded.duration;
+            delete expanded.status;
+            delete expanded.source;
+            return expanded;
+        }
+        return effect;
+    };
+
+    const replacementForTarget = (value, targetId) => {
         if (typeof value === 'string') {
             if (value === '$caster') return ids.casterId || '';
             if (value === '$target') return targetId || '';
+            if (value === '$targetName') return ids.targetName || '';
+            if (value === '$casterName') return ids.casterName || '';
             return value;
         }
-        if (Array.isArray(value)) return value.map(entry => replace(entry, targetId));
+        if (Array.isArray(value)) return value.map(entry => replacementForTarget(entry, targetId));
         if (value && typeof value === 'object') {
-            return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replace(entry, targetId)]));
+            return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replacementForTarget(entry, targetId)]));
         }
         return value;
     };
+
+    const selectorTargets = (selector, limit) => {
+        let list = [];
+        switch (String(selector || '')) {
+            case '$caster':
+                list = ids.casterId ? [String(ids.casterId)] : [];
+                break;
+            case '$target':
+                list = ids.targetId ? [String(ids.targetId)] : [];
+                break;
+            case '$area':
+                list = [...targetIds];
+                break;
+            case '$areaHostile':
+                list = [...hostileIds];
+                break;
+            case '$areaFriendly':
+                list = [...friendlyIds];
+                break;
+            default:
+                list = [];
+                break;
+        }
+        if (limit != null) list = list.slice(0, Math.max(1, Math.min(64, Number(limit) || list.length)));
+        return [...new Set(list.filter(Boolean))];
+    };
+
+    const expandTerrainCells = (effect) => {
+        if (!effect || effect.type !== 'terrain' || !Array.isArray(effect.cellOffsets)) return effect;
+        const anchor = ids.anchor && Number.isFinite(Number(ids.anchor.x)) && Number.isFinite(Number(ids.anchor.y))
+            ? { x: Number(ids.anchor.x), y: Number(ids.anchor.y) }
+            : null;
+        if (!anchor) return effect;
+        const cells = effect.cellOffsets
+            .map(offset => {
+                const dx = Number(offset?.dx);
+                const dy = Number(offset?.dy);
+                if (!Number.isFinite(dx) || !Number.isFinite(dy)) return null;
+                return {
+                    x: anchor.x + dx,
+                    y: anchor.y + dy,
+                    ...(effect.terrain ? { terrain: effect.terrain } : {}),
+                };
+            })
+            .filter(Boolean)
+            .slice(0, 64);
+        const expanded = { ...effect, cells };
+        delete expanded.cellOffsets;
+        return expanded;
+    };
+
+    const expandOne = (raw) => {
+        const effect = applyForm(cloneJson(raw));
+        if (!effect || typeof effect !== 'object') return [];
+        if (effect.target) {
+            const targets = selectorTargets(effect.target, effect.limit);
+            const results = [];
+            for (const targetId of targets) {
+                const copy = cloneJson(effect);
+                delete copy.target;
+                delete copy.limit;
+                copy.targetId = targetId;
+                results.push(expandTerrainCells(replacementForTarget(copy, targetId)));
+            }
+            return results;
+        }
+        const usesTarget = JSON.stringify(effect).includes('$target');
+        if (usesTarget && targetIds.length) {
+            return targetIds.map(targetId => expandTerrainCells(replacementForTarget(effect, targetId)));
+        }
+        return [expandTerrainCells(replacementForTarget(effect, ids.targetId || ''))];
+    };
+
     const list = [];
     for (const entry of source) {
-        const usesTarget = JSON.stringify(entry).includes('$target');
-        if (usesTarget && targetIds.length) {
-            for (const targetId of targetIds) list.push(replace(entry, targetId));
-        } else {
-            list.push(replace(entry, ids.targetId || ''));
-        }
+        list.push(...expandOne(entry));
     }
     return cloneJson(list);
 }

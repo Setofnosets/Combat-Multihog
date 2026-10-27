@@ -28,7 +28,6 @@ import {
     getDeploymentCells,
     getPendingAgentUnitIds,
     prepareSpecialAction,
-    resolveEffectTemplate,
     restoreCombatScopedState,
     retreatEncounter,
     serializeAgentGameState,
@@ -43,10 +42,8 @@ import {
     inferTerrainTheme,
 } from './tactical-combat-context.js';
 import {
-    allowedSpecialTargetIds,
     generateEncounterWithAgent,
-    normalizeSpecialEffects,
-    resolveSpecialEffectWithAgent,
+    resolveSpecialSource,
     runAgentTurn,
 } from './tactical-combat-agent.js';
 import {
@@ -56,6 +53,7 @@ import {
     removeEncounterForChat,
     setEncounterForChat,
 } from './tactical-combat-store.js';
+import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import {
     continueToNarration,
     queueCombatOutcome,
@@ -117,6 +115,7 @@ function getState() {
 function persist(state) {
     const chatId = getActiveChatId();
     if (!chatId || !state) return;
+    flushSkillRegistry(getSettings(), chatId);
     setEncounterForChat(chatId, state, getSettings());
     notifySettings();
 }
@@ -827,63 +826,32 @@ async function resolveSpecialPlayerAction(sourceKind, source, targetId, targetCe
         render();
         return;
     }
-    const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-    const allowedTargetIds = allowedSpecialTargetIds(prepared);
-    const maxEffects = prepared.area
-        ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
-        : 6;
     const chatId = getActiveChatId();
     const controller = new AbortController();
     ui.abortController = controller;
     setBusy(true, `Resolving ${source.name}…`, true);
     render();
     try {
-        let resolved;
-        if (Array.isArray(prepared.skill?.effectTemplate) || Array.isArray(prepared.item?.effectTemplate)) {
-            const template = prepared.skill?.effectTemplate || prepared.item?.effectTemplate;
-            const effects = resolveEffectTemplate(template, {
-                casterId: prepared.unit.id,
-                targetId: prepared.target?.id || prepared.unit.id,
-                targetIds: prepared.area ? targets.map(unit => unit.id) : undefined,
-            });
-            const normalized = normalizeSpecialEffects({ effects }, state, {
-                maxEffects: Math.max(6, effects.length),
-                allowedTargetIds,
-                areaCells: prepared.areaCells,
-            });
-            resolved = normalized.effects.length
-                ? { ok: true, effects: normalized.effects, log: '' }
-                : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
-        } else {
-            resolved = await resolveSpecialEffectWithAgent(
-                state,
-                prepared.unit,
-                {
-                    kind: sourceKind,
-                    name: source.name,
-                    description: source.description || source.amount || '',
-                    resource: source.resource,
-                    willpowerOutcome: source.willpowerOutcome,
-                    area: source.area,
-                    target: source.target,
-                    damage: source.damage,
-                    heal: source.heal,
-                    willpowerDamage: source.willpowerDamage,
-                    maxUses: source.maxUses,
-                },
-                prepared.target,
-                settings,
-                {
-                    signal: controller.signal,
-                    targets,
-                    area: prepared.area,
-                    anchor: prepared.anchor,
-                    areaCells: prepared.areaCells,
-                    maxEffects,
-                    allowedTargetIds,
-                },
-            );
-        }
+        const resolved = await resolveSpecialSource(state, prepared, {
+            kind: sourceKind,
+            name: source.name,
+            description: source.description || source.amount || '',
+            resource: source.resource,
+            willpowerOutcome: source.willpowerOutcome,
+            area: source.area,
+            target: source.target,
+            damage: source.damage,
+            heal: source.heal,
+            willpowerDamage: source.willpowerDamage,
+            maxUses: source.maxUses,
+            effectTemplate: source.effectTemplate,
+            registryId: source.registryId,
+            save: source.save,
+            range: source.range,
+        }, settings, {
+            signal: controller.signal,
+            mode: 'tactical',
+        });
         if (controller.signal.aborted) return;
         if (getActiveChatId() !== chatId || getState() !== state) return;
         if (!resolved.ok) {
@@ -1504,38 +1472,16 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
                 areaCells: [],
             };
         }
-        const targets = Array.isArray(prepared.targets) ? prepared.targets : (prepared.target ? [prepared.target] : []);
-        const allowedTargetIds = allowedSpecialTargetIds(prepared);
-        const maxEffects = prepared.area
-            ? Math.max(6, Math.min(24, 6 * Math.max(1, targets.length)))
-            : 6;
-        let resolved;
-        if (Array.isArray(skill?.effectTemplate) || Array.isArray(item?.effectTemplate)) {
-            const template = skill?.effectTemplate || item?.effectTemplate;
-            const effects = resolveEffectTemplate(template, {
-                casterId: actor.id,
-                targetId: prepared.target?.id || actor.id,
-                targetIds: prepared.area ? targets.map(unit => unit.id) : undefined,
-            });
-            const normalized = normalizeSpecialEffects({ effects }, state, {
-                maxEffects: Math.max(6, effects.length),
-                allowedTargetIds,
-                areaCells: prepared.areaCells,
-            });
-            resolved = normalized.effects.length
-                ? { ok: true, effects: normalized.effects, log: '' }
-                : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
-        } else {
-            resolved = await resolveSpecialEffectWithAgent(state, actor, source, prepared.target, settings, {
-                signal: controller.signal,
-                targets,
-                area: prepared.area,
-                anchor: prepared.anchor,
-                areaCells: prepared.areaCells,
-                maxEffects,
-                allowedTargetIds,
-            });
-        }
+        const resolved = await resolveSpecialSource(state, prepared, {
+            ...source,
+            effectTemplate: skill?.effectTemplate || item?.effectTemplate || source.effectTemplate,
+            registryId: skill?.registryId || item?.registryId || '',
+            save: skill?.save || item?.save || '',
+            range: skill?.range ?? item?.range,
+        }, settings, {
+            signal: controller.signal,
+            mode: 'tactical',
+        });
         if (getActiveChatId() !== state.chatId) return false;
         if (!resolved.ok) {
             state.opening.error = resolved.error || 'The opening action could not be resolved.';

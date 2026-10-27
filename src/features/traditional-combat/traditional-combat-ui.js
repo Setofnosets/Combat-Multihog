@@ -20,11 +20,11 @@ import {
     getPendingAgentUnitIds,
     getUnitById,
     prepareSpecialAction,
-    resolveEffectTemplate,
     restoreCombatScopedState,
     retreatEncounter,
 } from '../tactical-combat/tactical-combat-engine.js';
-import { normalizeSpecialEffects, allowedSpecialTargetIds } from '../tactical-combat/tactical-combat-agent.js';
+import { resolveSpecialSource } from '../tactical-combat/tactical-combat-agent.js';
+import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import { collectEncounterContext } from '../tactical-combat/tactical-combat-context.js';
 import {
     clearPendingNarration,
@@ -53,7 +53,6 @@ import {
 } from './traditional-combat-engine.js';
 import {
     generateTraditionalEncounterWithAgent,
-    resolveTraditionalSpecialEffectWithAgent,
     runTraditionalAgentTurn,
 } from './traditional-combat-agent.js';
 
@@ -106,6 +105,7 @@ function getState() {
 function persist(state) {
     const chatId = getActiveChatId();
     if (!chatId || !state) return;
+    flushSkillRegistry(getSettings(), chatId);
     setEncounterForChat(chatId, state, getSettings(), { key: TRADITIONAL_BY_CHAT_KEY });
     notifySettings();
 }
@@ -331,30 +331,25 @@ function resolveSpecialPlayerAction(sourceKind, source, targetId) {
         setBusy(true, `Resolving ${source.name}…`);
         render();
         try {
-            let effects = [];
-            let log = '';
-            if (Array.isArray(source.effectTemplate) && source.effectTemplate.length) {
-                const template = resolveEffectTemplate(source.effectTemplate, {
-                    casterId: prepared.unit.id,
-                    targetId: prepared.target?.id || prepared.unit.id,
-                });
-                const normalized = normalizeSpecialEffects({ effects: template }, state, { theater: true });
-                if (!normalized.effects.length) throw new Error(normalized.rejected.join(' ') || 'The special effect had no legal targets.');
-                effects = normalized.effects;
-                log = normalized.log || '';
-            } else {
-                const resolved = await resolveTraditionalSpecialEffectWithAgent(
-                    state,
-                    prepared.unit,
-                    sourceInfo,
-                    prepared.target,
-                    settings,
-                    { signal: controller.signal },
-                );
-                if (!resolved.ok) throw new Error(resolved.error || 'The special resolver failed.');
-                effects = resolved.effects || [];
-                log = resolved.log || '';
-            }
+            const resolved = await resolveSpecialSource(state, prepared, {
+                ...sourceInfo,
+                area: source.area,
+                target: source.target,
+                damage: source.damage,
+                heal: source.heal,
+                willpowerDamage: source.willpowerDamage,
+                maxUses: source.maxUses,
+                effectTemplate: source.effectTemplate,
+                registryId: source.registryId,
+                save: source.save,
+                range: source.range,
+            }, settings, {
+                signal: controller.signal,
+                mode: 'traditional',
+            });
+            if (!resolved.ok) throw new Error(resolved.error || 'The special resolver failed.');
+            const effects = resolved.effects || [];
+            const log = resolved.log || '';
             const applied = applySpecialEffects(state, effects, {
                 casterId: prepared.unit.id,
                 skillId: prepared.skill?.id,
@@ -773,32 +768,42 @@ async function resolveSpecialOpeningForState(state, settings, options = {}) {
     render();
     try {
         const source = item
-            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, target: item.target, damage: item.damage, heal: item.heal, willpowerDamage: item.willpowerDamage, maxUses: item.maxUses }
-            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, target: skill?.target, damage: skill?.damage, heal: skill?.heal, willpowerDamage: skill?.willpowerDamage, maxUses: skill?.maxUses };
-        let resolved;
-        if (Array.isArray(skill?.effectTemplate) || Array.isArray(item?.effectTemplate)) {
-            const template = skill?.effectTemplate || item?.effectTemplate;
-            const effects = resolveEffectTemplate(template, { casterId: actor.id, targetId: target?.id || actor.id });
-            const preparedForTargets = {
+            ? { kind: 'item', name: item.name, description: item.description || state.opening.text, resource: item.resource, willpowerOutcome: item.willpowerOutcome, target: item.target, damage: item.damage, heal: item.heal, willpowerDamage: item.willpowerDamage, maxUses: item.maxUses, effectTemplate: item.effectTemplate, registryId: item.registryId, save: item.save, range: item.range }
+            : { kind: 'skill', name: skill?.name || 'Opening action', description: skill?.description || state.opening.text, resource: skill?.resource, willpowerOutcome: skill?.willpowerOutcome, target: skill?.target, damage: skill?.damage, heal: skill?.heal, willpowerDamage: skill?.willpowerDamage, maxUses: skill?.maxUses, effectTemplate: skill?.effectTemplate, registryId: skill?.registryId, save: skill?.save, range: skill?.range };
+        const prepared = (skill || item)
+            ? prepareSpecialAction(state, {
+                type: item ? 'item' : 'skill',
+                unitId: actor.id,
+                ...(item ? { itemId: item.id } : { skillId: skill.id }),
+                ...(target ? { targetId: target.id } : { targetId: actor.id }),
+            }, {
+                actorSide: 'player',
+                ignoreTurn: true,
+                ignoreRange: true,
+                ignoreLineOfSight: true,
+            })
+            : {
+                ok: true,
                 unit: actor,
-                target,
+                skill: null,
+                item: null,
+                target: target || null,
                 targets: target ? [target] : [],
                 area: null,
-                skill,
-                item,
+                anchor: null,
+                areaCells: [],
             };
-            const normalized = normalizeSpecialEffects({ effects }, state, {
-                theater: true,
-                allowedTargetIds: allowedSpecialTargetIds(preparedForTargets),
-            });
-            resolved = normalized.effects.length
-                ? { ok: true, effects: normalized.effects, log: '' }
-                : { ok: false, error: normalized.rejected.join(' ') || 'The effect template had no legal effects.' };
-        } else {
-            resolved = await resolveTraditionalSpecialEffectWithAgent(state, actor, source, target, settings, {
-                signal: controller.signal,
-            });
+        if (!prepared.ok) {
+            state.opening.error = prepared.error || 'The opening action could not be prepared.';
+            state.opening.requiresAgent = false;
+            addLog(state, 'opening', `Opening action needs manual resolution: ${state.opening.error}`, actor.id);
+            toast('warning', state.opening.error);
+            return false;
         }
+        const resolved = await resolveSpecialSource(state, prepared, source, settings, {
+            signal: controller.signal,
+            mode: 'traditional',
+        });
         if (getActiveChatId() !== state.chatId) return false;
         if (!resolved.ok) {
             state.opening.error = resolved.error || 'The opening action could not be resolved.';
