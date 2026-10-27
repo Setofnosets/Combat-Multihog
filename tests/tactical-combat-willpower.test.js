@@ -240,6 +240,44 @@ describe('special Willpower effects and transformations', () => {
         expect(target.transform).toBeNull();
     });
 
+    it('keeps a self-transformation skill spent after reverting the form', () => {
+        const state = makeState();
+        const caster = state.units[0];
+        caster.skills = [
+            {
+                id: 'dragonstone', name: 'Dragonstone Transformation', kind: 'special',
+                description: 'Assume a dragon form; 2/2 per long rest', range: 0, target: 'self',
+                maxUses: 2, uses: 2,
+            },
+        ];
+        const result = applySpecialEffects(state, [
+            {
+                type: 'transform',
+                targetId: caster.id,
+                name: 'Dragon Form',
+                maxHp: 50,
+                ac: 17,
+                attackBonus: 7,
+                damage: '2d8+4',
+                skills: [
+                    { id: 'dragon-breath', name: 'Dragon Breath', kind: 'attack', damage: '4d6', range: 6, maxUses: 2 },
+                    { id: 'dragon-claw', name: 'Dragon Claw', kind: 'attack', damage: '2d8+4', range: 1, unlimited: true },
+                ],
+                items: [],
+                inventory: [],
+                permanent: false,
+            },
+        ], { casterId: caster.id, skillId: 'dragonstone' });
+
+        expect(result.ok).toBe(true);
+        expect(caster.skills.map(skill => skill.name)).toEqual(['Dragon Breath', 'Dragon Claw']);
+        restoreCombatScopedState(state);
+
+        const restored = caster.skills.find(skill => skill.id === 'dragonstone');
+        expect(restored).toMatchObject({ uses: 1, maxUses: 2 });
+        expect(caster.transform).toBeNull();
+    });
+
     it('stacks progressive statuses and applies a Willpower damage-over-time outcome', () => {
         const state = makeState();
         const target = state.units[1];

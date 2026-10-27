@@ -191,6 +191,8 @@ function render() {
         ui.centerNextRender = false;
         host.querySelector('.rt-trad-team-player')?.scrollIntoView?.({ block: 'nearest' });
     }
+    const log = host.querySelector('.rt-tc-log-list');
+    if (log) log.scrollTop = log.scrollHeight;
 }
 
 function openBoard() {

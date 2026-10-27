@@ -12236,8 +12236,9 @@ body.rt-tc-modal-open {
 }
 
 .rt-tc-log-list {
-    max-height: 190px;
+    max-height: clamp(160px, 24vh, 280px);
     overflow-y: auto;
+    overscroll-behavior: contain;
     padding: 0 8px 7px;
     scrollbar-width: thin;
 }

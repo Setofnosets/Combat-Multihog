@@ -729,6 +729,20 @@ function normalizeSkill(raw, index, side) {
     };
 }
 
+/**
+ * Normalize an arbitrary skill list through the same rules used by the engine.
+ * Exported for resolver/transformation loadout validation and tests.
+ * @param {unknown} rawSkills
+ * @param {'player'|'enemy'|'ally'} side
+ * @returns {object[]}
+ */
+export function normalizeSkillList(rawSkills, side) {
+    return (Array.isArray(rawSkills) ? rawSkills : [])
+        .slice(0, 8)
+        .map((skill, index) => normalizeSkill(skill, index, side))
+        .filter(Boolean);
+}
+
 function normalizeItem(raw, index) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || `Item ${index + 1}`).trim().slice(0, 80);
@@ -2045,6 +2059,60 @@ export function restoreCombatScopedState(state) {
 }
 
 /**
+ * Snapshot the spendable resources touched by a special/ability before its use
+ * is consumed. The cost is reserved before effects resolve so a self-transform
+ * snapshots its already-spent skill rather than restoring it at full uses.
+ * @param {object} source
+ * @param {object} unit
+ * @returns {object|null}
+ */
+function captureSpendState(source, unit) {
+    if (!source || !unit) return null;
+    return {
+        sourceUses: source.uses,
+        sourceMaxUses: source.maxUses,
+        spellSlots: cloneJson(unit.spellSlots || {}),
+        skillUses: (unit.skills || []).map(skill => ({
+            id: skill.id,
+            uses: skill.uses,
+            maxUses: skill.maxUses,
+        })),
+        itemUses: (unit.items || []).map(item => ({
+            id: item.id,
+            uses: item.uses,
+            maxUses: item.maxUses,
+        })),
+    };
+}
+
+/**
+ * Restore a spend snapshot when an ability resolves no legal effects.
+ * @param {object} source
+ * @param {object} unit
+ * @param {object|null} snapshot
+ */
+function restoreSpendState(source, unit, snapshot) {
+    if (!source || !unit || !snapshot) return;
+    source.uses = snapshot.sourceUses;
+    source.maxUses = snapshot.sourceMaxUses;
+    unit.spellSlots = cloneJson(snapshot.spellSlots || {});
+    const skillById = new Map((snapshot.skillUses || []).map(entry => [entry.id, entry]));
+    for (const skill of unit.skills || []) {
+        const previous = skillById.get(skill.id);
+        if (!previous) continue;
+        skill.uses = previous.uses;
+        skill.maxUses = previous.maxUses;
+    }
+    const itemById = new Map((snapshot.itemUses || []).map(entry => [entry.id, entry]));
+    for (const item of unit.items || []) {
+        const previous = itemById.get(item.id);
+        if (!previous) continue;
+        item.uses = previous.uses;
+        item.maxUses = previous.maxUses;
+    }
+}
+
+/**
  * Apply a resolved special-ability effect list. This is the only mutation path
  * for `kind: 'special'` skills/items: the combat agent converts a freeform
  * ability description into these primitives, then the engine validates them.
@@ -2088,6 +2156,21 @@ export function applySpecialEffects(state, effects, options = {}) {
     const rejected = [];
     const maxEffects = Math.max(1, Math.min(64, Number(options.maxEffects) || 32));
     const list = Array.isArray(effects) ? effects.slice(0, maxEffects) : [];
+
+    // Reserve the cost before effects resolve. A self-transformation replaces
+    // the caster's skill list, so consuming afterwards would mutate an object
+    // that is no longer on the unit and the reverted form would restore the
+    // pre-spend uses. Restore the snapshot if nothing legal was applied.
+    const spendSnapshots = [];
+    for (const source of [skill, item]) {
+        if (!source) continue;
+        const snapshot = captureSpendState(source, caster);
+        spendSnapshots.push({ source, snapshot });
+        if (!consumeUse(source, caster)) {
+            for (const entry of spendSnapshots) restoreSpendState(entry.source, caster, entry.snapshot);
+            return { ok: false, error: `${source.name} has no uses left.`, applied: [], rejected: [], ended: false };
+        }
+    }
 
     for (const effect of list) {
         // A defeat or damage effect can end the encounter mid-list. Re-evaluate
@@ -2280,16 +2363,15 @@ export function applySpecialEffects(state, effects, options = {}) {
     }
 
     if (!applied.length) {
+        for (const entry of spendSnapshots) restoreSpendState(entry.source, caster, entry.snapshot);
         return { ok: false, error: rejected.join(' ') || 'No usable effects were returned.', applied, rejected, ended: false };
     }
 
     if (skill) {
-        consumeUse(skill, caster);
         if (skill.bonusAction) caster.bonusUsed = true;
         else caster.actionUsed = true;
     }
     if (item) {
-        consumeUse(item, caster);
         caster.actionUsed = true;
     }
     if (narrative) addLog(state, 'special', String(narrative).slice(0, 600), caster.id);

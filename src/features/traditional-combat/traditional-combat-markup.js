@@ -413,7 +413,9 @@ export function buildTraditionalCombatMarkup(state, view = {}) {
                 ${renderSelectedPanel(state, safeView)}
                 <div class="rt-tc-subpane">
                     <div class="rt-tc-subtitle">Combat log</div>
-                    <div class="rt-tc-log">${renderLog(state)}</div>
+                    <div class="rt-tc-log">
+                        <div class="rt-tc-log-list">${renderLog(state)}</div>
+                    </div>
                 </div>
             </aside>
         </div>

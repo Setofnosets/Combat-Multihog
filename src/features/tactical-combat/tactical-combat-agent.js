@@ -37,6 +37,7 @@ import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
+    DEFAULT_TRANSFORMATION_LOADOUT_PROMPT,
 } from './tactical-combat-prompts.js';
 import {
     DEFAULT_TRADITIONAL_COMBAT_AGENT_PROMPT,
@@ -56,6 +57,7 @@ import {
     hasLineOfSight,
     interpretActions,
     livingUnits,
+    normalizeSkillList,
     prepareSpecialAction,
     resolveEffectTemplate,
 } from './tactical-combat-engine.js';
@@ -689,6 +691,87 @@ function compactSpecialUnit(unit) {
     };
 }
 
+function isFriendlyTransformEffect(state, effect) {
+    if (!effect || String(effect.type || '').toLowerCase() !== 'transform') return false;
+    const target = state.units.find(unit => unit.id === String(effect.targetId || ''));
+    return !!target && (target.side === 'player' || target.side === 'ally');
+}
+
+function needsTransformationLoadout(effect) {
+    return !Array.isArray(effect.skills) || effect.skills.length === 0;
+}
+
+/**
+ * When a player/ally transformation comes back without a replacement loadout,
+ * ask the resolver once for fitting form skills. If that fails, remove the
+ * skills key so the engine keeps the existing loadout instead of blanking it.
+ * @param {object} state
+ * @param {object[]} effects
+ * @param {object} caster
+ * @param {object} source
+ * @param {Record<string, any>} settings
+ * @param {{ mode?: 'tactical'|'traditional', signal?: AbortSignal }} [options]
+ * @returns {Promise<object[]>}
+ */
+async function fillPlayerTransformationLoadouts(state, effects, caster, source, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
+    const pending = effects.filter(effect => isFriendlyTransformEffect(state, effect) && needsTransformationLoadout(effect));
+    if (!pending.length) return effects;
+
+    for (const effect of pending) {
+        const target = state.units.find(unit => unit.id === String(effect.targetId || ''));
+        if (!target) continue;
+        const payload = {
+            mode,
+            ability: {
+                name: String(source?.name || 'Transformation'),
+                description: String(source?.description || '').slice(0, 700),
+                maxUses: source?.maxUses ?? null,
+            },
+            caster: compactSpecialUnit(caster),
+            target: compactSpecialUnit(target),
+            form: {
+                targetId: target.id,
+                name: String(effect.name || target.name),
+                classLabel: String(effect.classLabel || target.classLabel || ''),
+                maxHp: effect.maxHp ?? target.maxHp,
+                hp: effect.hp ?? target.hp,
+                ac: effect.ac ?? target.ac,
+                attackBonus: effect.attackBonus ?? target.attackBonus,
+                attackRange: effect.attackRange ?? target.attackRange,
+                damage: effect.damage ?? target.damage,
+                damageType: effect.damageType || target.damageType || '',
+                speed: effect.speed ?? target.speed,
+                notes: String(effect.notes || target.notes || ''),
+            },
+            limits: { maxSkills: 5 },
+        };
+        try {
+            const raw = await sendStateRequest(
+                requestSettingsFor(settings, mode),
+                DEFAULT_TRANSFORMATION_LOADOUT_PROMPT,
+                `## TRANSFORMATION LOADOUT\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nReturn only {"skills":[...]} and nothing else.`,
+                options.signal || null,
+                {
+                    stream: false,
+                    debugSource: mode === 'traditional'
+                        ? 'Traditional Combat Transform Loadout'
+                        : 'Tactical Combat Transform Loadout',
+                },
+            );
+            const parsed = parseTacticalResponse(raw, 'skills');
+            const rawSkills = Array.isArray(parsed.value) ? parsed.value : parsed.value?.skills;
+            const skills = normalizeSkillList(rawSkills, target.side);
+            if (skills.length) effect.skills = skills;
+            else delete effect.skills;
+        } catch (error) {
+            if (error?.name === 'AbortError') throw error;
+            delete effect.skills;
+        }
+    }
+    return effects;
+}
+
 /**
  * Validate the effect list returned by the special-ability resolver.
  * @param {any} value
@@ -985,6 +1068,11 @@ export async function resolveSpecialEffectWithAgent(state, caster, source, targe
             allowedTargetIds,
             areaCells: options.areaCells,
         });
+        await fillPlayerTransformationLoadouts(state, normalized.effects, caster, source, settings, {
+            mode,
+            signal: options.signal,
+        });
+        if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
         if (!normalized.effects.length) {
             return { ok: false, error: normalized.rejected.join(' ') || 'The resolver returned no usable effects.' };
         }

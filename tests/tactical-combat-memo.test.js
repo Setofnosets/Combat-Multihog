@@ -7,7 +7,11 @@ import {
     seedCombatMemo,
     syncCombatResultToMemo,
 } from '../src/features/tactical-combat/tactical-combat-memo.js';
-import { createEncounterState } from '../src/features/tactical-combat/tactical-combat-engine.js';
+import {
+    applySpecialEffects,
+    createEncounterState,
+    restoreCombatScopedState,
+} from '../src/features/tactical-combat/tactical-combat-engine.js';
 import { parseCombatUnits } from '../src/features/tactical-combat/tactical-combat-context.js';
 
 function makeState() {
@@ -208,6 +212,53 @@ Status: Healthy
         expect(settings.currentMemo).toContain('Action Surge (Extra action; 0/1 per rest)');
         expect(settings.currentMemo).toContain('Silver Tongue (A quick lie)');
         expect(settings.currentMemo).toContain('- Healing Potion x1');
+    });
+
+    it('writes spent uses back to standalone abilities after a temporary self-transformation', () => {
+        const state = createEncounterState({
+            chatId: 'chat-A',
+            seed: 21,
+            grid: { rows: 6, cols: 6 },
+            terrainRows: Array.from({ length: 6 }, () => '......'),
+            units: [
+                {
+                    id: 'pc-1', name: 'Corrin', side: 'player', isPlayerCharacter: true,
+                    maxHp: 30, hp: 30, ac: 14, attackBonus: 5, damage: '1d8',
+                    skills: [{
+                        id: 'dragonstone', name: 'Dragonstone Transformation', kind: 'special',
+                        description: 'Assume a dragon form; 2/2 per long rest', range: 0, target: 'self',
+                        maxUses: 2, uses: 2,
+                    }],
+                },
+                { id: 'enemy-2', name: 'Goblin', side: 'enemy', maxHp: 8, hp: 8, ac: 11, attackBonus: 3, damage: '1d6' },
+            ],
+        });
+        const applied = applySpecialEffects(state, [{
+            type: 'transform',
+            targetId: 'pc-1',
+            name: 'Dragon Form',
+            ac: 17,
+            maxHp: 45,
+            damage: '2d8+4',
+            skills: [{ id: 'dragon-breath', name: 'Dragon Breath', kind: 'attack', damage: '4d6', maxUses: 2 }],
+            permanent: false,
+        }], { casterId: 'pc-1', skillId: 'dragonstone' });
+        expect(applied.ok).toBe(true);
+        restoreCombatScopedState(state);
+
+        const settings = {
+            currentMemo: `[CHARACTER]
+Corrin (Manakete): 30/30 HP
+Abilities: None declared
+Status: Healthy
+[/CHARACTER]
+
+[ABILITIES]
+- Dragonstone Transformation (Assume a dragon form; 2/2 per long rest)
+[/ABILITIES]`,
+        };
+        syncCombatResultToMemo(state, settings);
+        expect(settings.currentMemo).toContain('Dragonstone Transformation (Assume a dragon form; 1/2 per long rest)');
     });
 
     it('inserts a terminal Status when the memo entry has no Status line', () => {
