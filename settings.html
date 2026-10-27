@@ -2395,18 +2395,46 @@
 
                         <div class="inline-drawer">
                             <div class="inline-drawer-toggle inline-drawer-header">
-                                <i class="fa-solid fa-book" style="margin-right: 6px; opacity: 0.65;"></i>
-                                <b>Spell Compendium</b>
+                                <i class="fa-solid fa-book-open" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Campaign Skill Registry</b>
                                 <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
                             </div>
                             <div class="inline-drawer-content">
-                                <div class="rt-tc-settings-note">Spell mechanics are resolved per encounter. The shipped definitions cover common tabletop spells; this JSON can override or extend them for a homebrew system. Spell names found in the current <code>[SPELLS]</code> or <code>[CHARACTER]</code>/<code>[PARTY]</code> spell lines without a definition are inferred from their name and spell level, so different chats and rule sets can use different spells without a global rebuild.</div>
+                                <div class="rt-tc-settings-note">Per-chat ledger of discovered skills, spells, abilities, items, classes, and transformation forms. Special effects are recorded once and reused deterministically on later uses. Entries marked <code>locked</code> are protected from auto-discovery. This JSON is authoritative for the current chat; the mirror lorebook is only a readable backup.</div>
                                 <div class="rt-tc-field">
-                                    <label for="rpg_tactical_combat_spell_compendium">Spell compendium (JSON)</label>
+                                    <label for="rpg_tactical_combat_skill_registry">Campaign registry (JSON)</label>
+                                    <textarea id="rpg_tactical_combat_skill_registry" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
+                                    <div id="rpg_tactical_combat_skill_registry_status" class="rt-tc-setting-status"></div>
+                                    <div class="rt-tc-settings-actions">
+                                        <label class="checkbox_label" style="font-size:11px;">
+                                            <input type="checkbox" id="rpg_tactical_combat_skill_registry_mirror">
+                                            Mirror to the campaign Skills lorebook
+                                        </label>
+                                        <label class="checkbox_label" style="font-size:11px;">
+                                            <input type="checkbox" id="rpg_tactical_combat_skill_registry_keywords">
+                                            Let skill names keyword-activate their mirror entries
+                                        </label>
+                                        <button type="button" id="rpg_tactical_combat_skill_registry_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Clear campaign registry</button>
+                                        <button type="button" id="rpg_tactical_combat_skill_registry_clear_resolved" class="menu_button interactable"><i class="fa-solid fa-eraser"></i> Clear resolved recipes</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-book" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Skill Compendium</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Global skill mechanics. The shipped definitions cover common tabletop spells; this JSON can override or extend them for a homebrew system. It accepts <code>skills</code>, <code>spells</code>, <code>abilities</code>, or <code>items</code> sections, and each entry may include an <code>effectTemplate</code> for deterministic specials. Names found in the current memo without a definition are inferred from context.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_tactical_combat_spell_compendium">Skill compendium (JSON)</label>
                                     <textarea id="rpg_tactical_combat_spell_compendium" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
                                     <div id="rpg_tactical_combat_spell_compendium_status" class="rt-tc-setting-status"></div>
                                     <div class="rt-tc-settings-actions">
-                                        <button type="button" id="rpg_tactical_combat_spell_compendium_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset spell compendium</button>
+                                        <button type="button" id="rpg_tactical_combat_spell_compendium_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset skill compendium</button>
                                     </div>
                                 </div>
                                 <div class="rt-tc-settings-note">Each level line such as <code>Level 1 (2/2): Magic Missile, Shield</code> is one shared slot pool, not one pool per spell. Cantrips are unlimited. Abilities without a usage suffix are treated as at-will.</div>

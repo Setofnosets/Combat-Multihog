@@ -4,6 +4,8 @@ import { ensureDungeonMapHistory, trimMemoAndMapHistory } from '../../state/dung
 import { repairChatLinkMemoHistory } from './chat-link-conflict.js';
 import { summarizeMapEvolutionSchedule } from '../../../map-evolution-lib.js';
 import { isLorebookAgentRuntimeActive } from '../../state/section-enabled.js';
+import { normalizeSkillRegistry } from '../skill-registry/skill-registry.js';
+import { hydrateSkillRegistryFromLorebook } from '../skill-registry/skill-lorebook.js';
 
 /** Restores one chat-linked tracker snapshot and synchronizes dependent UI. */
 export function createChatStateLoader({
@@ -77,6 +79,7 @@ export function createChatStateLoader({
     s.activeWorldKeys = JSON.parse(JSON.stringify(saved.activeWorldKeys || []));
     s.keywordActivatedKeys = JSON.parse(JSON.stringify(saved.keywordActivatedKeys || []));
     s.routerLog = JSON.parse(JSON.stringify(saved.routerLog || []));
+    s.skillRegistry = normalizeSkillRegistry(saved.skillRegistry).registry;
     sanitizeRouterState(s);
     s.routerLookback = saved.routerLookback || 4;
     s.routerLastRunChatLength = saved.routerLastRunChatLength ?? 0;
@@ -353,6 +356,16 @@ export function createChatStateLoader({
         globalThis._rpgApplyAdventureCompanionSnapshot(saved.adventureCompanion);
     } else if (typeof globalThis._rpgLoadAdventureCompanionForChat === 'function') {
         globalThis._rpgLoadAdventureCompanionForChat(chatId);
+    }
+
+    // Merge mirror-book entries that are missing from the restored JSON registry.
+    // The JSON stays authoritative; this recovers a lost or older cache.
+    if (s.skillRegistryLorebookMirror !== false) {
+        setTimeout(() => {
+            const live = getSettings();
+            if (live.chatStateProjectionOwner !== chatId) return;
+            void hydrateSkillRegistryFromLorebook(live, { chatId }).catch(() => {});
+        }, 0);
     }
 
     return true;

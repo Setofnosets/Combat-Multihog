@@ -34,6 +34,7 @@ import {
 import { DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON } from '../features/traditional-combat/traditional-combat-constants.js';
 import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tactical-combat-classifiers.js';
 import { DEFAULT_SPELL_COMPENDIUM_JSON } from '../features/tactical-combat/tactical-combat-spell-compendium.js';
+import { createEmptySkillRegistry } from '../features/skill-registry/skill-registry.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
     DEFAULT_ROUTER_COMBAT_PROFILE_GUIDANCE_AGENT,
@@ -232,6 +233,11 @@ export function buildDefaultSettings() {
         tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
         tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON,
         tacticalCombatSpellCompendiumJson: DEFAULT_SPELL_COMPENDIUM_JSON,
+        // Per-chat campaign ledger of discovered skills, resolved special recipes,
+        // class skeletons, and reusable transformation/summon forms.
+        skillRegistry: createEmptySkillRegistry(),
+        skillRegistryLorebookMirror: true,
+        skillRegistryLorebookKeywords: false,
         tacticalCombatByChat: {},
         tacticalCombatReturn: null,
         tacticalCombatReturnByChat: {},

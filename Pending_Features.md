@@ -70,14 +70,16 @@ Still pending:
 
 ## 5. Per-character and per-system compendium management
 
-The current compendium is global JSON plus per-memo inference. Investigate:
+Implemented in this build: the per-chat **Campaign Skill Registry** discovers player,
+party, class, item, and named enemy-special skills; resolved specials become canonical
+effect templates; transformation forms are reusable; and the `_Skills` lorebook is a
+readable mirror. Still pending:
 
-- importing a compendium from a game-system module or lorebook;
-- per-character spell lists and prepared spells;
+- importing a compendium from a game-system module;
+- explicit per-character prepared-spell management;
 - per-chat rule-set overrides;
-- compendium versioning and migration;
-- validation that prevents a homebrew spell from silently changing an existing
-  encounter.
+- compendium versioning and migration beyond registry v1;
+- level-scaled and per-owner variants of the same skill/form.
 
 ## 6. Upcasting and explicit slot-level selection
 

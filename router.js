@@ -4416,6 +4416,10 @@ export async function scanAssistantOutputForKeywords(narrativeText, opts = {}) {
             // Mapped roots are activated exclusively by the authoritative
             // current-location hierarchy, never by incidental keyword mentions.
             if (getDungeonMapAttachment(entry)) continue;
+            // The Skills mirror is a backup/editing view. Its entries participate
+            // in keyword injection only when the user explicitly enables it.
+            if ((entry?.extensions?.multihogSkill || entry?.extensions?.multihogClass)
+                && settings.skillRegistryLorebookKeywords !== true) continue;
             const fullId = `${bookName}::${uid}`;
             const keywords = Array.isArray(entry.key) ? entry.key : [];
             if (keywords.length === 0) continue;
@@ -4756,6 +4760,11 @@ export async function disableManagedEntries() {
                 if (!book?.entries) return;
                 let changed = false;
                 for (const entry of Object.values(book.entries)) {
+                    // Skill mirror entries own their disable state through
+                    // skillRegistryLorebookKeywords. When keyword injection is
+                    // enabled they must stay enabled; otherwise disable them.
+                    if ((entry?.extensions?.multihogSkill || entry?.extensions?.multihogClass)
+                        && settings.skillRegistryLorebookKeywords === true) continue;
                     if (!entry.disable) {
                         entry.disable = true;
                         changed = true;

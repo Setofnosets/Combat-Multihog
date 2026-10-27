@@ -64,6 +64,7 @@ const KNOWN_PARTITION_KEYS = new Set([
     'currentMemo', 'combatDefeatedUi', 'memoPersistedAt', 'memoPersistedBy',
     'memoHistory', 'dungeonMapHistory', 'lastDelta', 'customPortraits', 'customLocationImages',
     'modules', 'blockOrder', 'stockPrompts', 'quests', 'historyIndex',
+    'skillRegistry',
     'activeRouterKeys', 'activeWorldKeys', 'keywordActivatedKeys', 'routerLog',
     'routerCampaignPrefix', 'renamedCampaignPrefix', 'routerLookback', 'routerLastRunChatLength',
     'routerLastRunAt', 'mapUpdaterLastRunChatLength', 'mapUpdaterLastRunAt', 'mapUpdaterLastSiteRoot', 'mapUpdaterPendingExitRoot',

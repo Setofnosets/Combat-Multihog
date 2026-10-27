@@ -23,6 +23,12 @@ import {
     normalizeSpellCompendium,
 } from './tactical-combat-spell-compendium.js';
 import {
+    createEmptySkillRegistry,
+    normalizeSkillRegistry,
+} from '../skill-registry/skill-registry.js';
+import { flushSkillRegistry, markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
+import { mirrorSkillRegistryToLorebook } from '../skill-registry/skill-lorebook.js';
+import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
@@ -115,13 +121,31 @@ function compendiumStatus(settings) {
     if (parsed.ok) {
         const count = Object.keys(parsed.config.spells).length;
         node.textContent = parsed.usingDefault
-            ? `Using the shipped compendium · ${count} spell definitions.`
-            : `Valid spell compendium · ${count} definitions (shipped entries stay available).`;
+            ? `Using the shipped compendium · ${count} skill definitions.`
+            : `Valid skill compendium · ${count} definitions (shipped entries stay available).`;
         node.className = 'rt-tc-setting-status rt-tc-ok';
     } else {
-        node.textContent = `Invalid spell compendium: ${parsed.error} The shipped definitions are used until this is fixed.`;
+        node.textContent = `Invalid skill compendium: ${parsed.error} The shipped definitions are used until this is fixed.`;
         node.className = 'rt-tc-setting-status rt-tc-error';
     }
+}
+
+function skillRegistryStatus(settings) {
+    const node = el('rpg_tactical_combat_skill_registry_status');
+    if (!node) return;
+    const parsed = normalizeSkillRegistry(settings?.skillRegistry);
+    if (!parsed.ok) {
+        node.textContent = `Invalid campaign registry: ${parsed.error}`;
+        node.className = 'rt-tc-setting-status rt-tc-error';
+        return;
+    }
+    const skills = Object.values(parsed.registry.skills || {});
+    const resolved = skills.filter(entry => entry.status === 'resolved').length;
+    const conflicts = skills.filter(entry => entry.status === 'conflict').length;
+    const forms = Object.keys(parsed.registry.forms || {}).length;
+    const classes = Object.keys(parsed.registry.classes || {}).length;
+    node.textContent = `Valid campaign registry · ${skills.length} skill(s) · ${resolved} resolved special(s) · ${forms} form(s) · ${classes} class(es)${conflicts ? ` · ${conflicts} conflict(s)` : ''}.`;
+    node.className = `rt-tc-setting-status${conflicts ? ' rt-tc-error' : ' rt-tc-ok'}`;
 }
 
 function syncStatus(settings = depsRef?.settings) {
@@ -189,10 +213,18 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
     setValue(el('rpg_tactical_combat_spell_compendium'), settings.tacticalCombatSpellCompendiumJson || DEFAULT_SPELL_COMPENDIUM_JSON);
+    setValue(el('rpg_tactical_combat_skill_registry'), JSON.stringify(
+        normalizeSkillRegistry(settings.skillRegistry).registry,
+        null,
+        2,
+    ));
+    setChecked(el('rpg_tactical_combat_skill_registry_mirror'), settings.skillRegistryLorebookMirror !== false);
+    setChecked(el('rpg_tactical_combat_skill_registry_keywords'), settings.skillRegistryLorebookKeywords === true);
     syncGridControls(settings);
     catalogStatus(settings);
     classifierStatus(settings);
     compendiumStatus(settings);
+    skillRegistryStatus(settings);
     syncStatus(settings);
 }
 
@@ -414,6 +446,88 @@ export function bindTacticalCombatSettings(deps) {
         }
     }
 
+    const skillRegistry = el('rpg_tactical_combat_skill_registry');
+    if (skillRegistry) {
+        skillRegistry.addEventListener('input', () => {
+            const parsed = normalizeSkillRegistry(skillRegistry.value);
+            if (parsed.ok) {
+                settings.skillRegistry = parsed.registry;
+                markSkillRegistryDirty();
+                flushSkillRegistry(settings);
+                save();
+                skillRegistryStatus(settings);
+            } else {
+                const status = el('rpg_tactical_combat_skill_registry_status');
+                if (status) {
+                    status.textContent = `Invalid campaign registry: ${parsed.error}`;
+                    status.className = 'rt-tc-setting-status rt-tc-error';
+                }
+            }
+        });
+        const reset = el('rpg_tactical_combat_skill_registry_reset');
+        if (reset) {
+            reset.addEventListener('click', (event) => {
+                event.preventDefault();
+                const confirmed = typeof globalThis.confirm === 'function'
+                    ? globalThis.confirm('Clear the campaign skill registry for this chat? Discovered skills and resolved recipes will be forgotten.')
+                    : true;
+                if (!confirmed) return;
+                settings.skillRegistry = createEmptySkillRegistry();
+                skillRegistry.value = JSON.stringify(settings.skillRegistry, null, 2);
+                markSkillRegistryDirty();
+                flushSkillRegistry(settings);
+                void mirrorSkillRegistryToLorebook(settings, { chatId: getActiveChatId() }).catch(() => {});
+                save();
+                skillRegistryStatus(settings);
+            });
+        }
+        const clearResolved = el('rpg_tactical_combat_skill_registry_clear_resolved');
+        if (clearResolved) {
+            clearResolved.addEventListener('click', (event) => {
+                event.preventDefault();
+                const parsed = normalizeSkillRegistry(settings.skillRegistry);
+                if (!parsed.ok) return;
+                for (const entry of Object.values(parsed.registry.skills || {})) {
+                    if (entry.locked || !entry.mechanics?.effectTemplate?.length) continue;
+                    entry.mechanics.effectTemplate = [];
+                    entry.mechanics.kind = 'special';
+                    entry.status = 'confirmed';
+                    entry.resolutionCount = 0;
+                    entry.resolvedAt = 0;
+                    entry.effectSummary = entry.effectSummary || 'Special · unresolved';
+                }
+                parsed.registry.forms = {};
+                settings.skillRegistry = parsed.registry;
+                skillRegistry.value = JSON.stringify(settings.skillRegistry, null, 2);
+                markSkillRegistryDirty();
+                flushSkillRegistry(settings);
+                save();
+                skillRegistryStatus(settings);
+            });
+        }
+    }
+
+    const registryMirror = el('rpg_tactical_combat_skill_registry_mirror');
+    if (registryMirror) {
+        registryMirror.addEventListener('change', () => {
+            settings.skillRegistryLorebookMirror = registryMirror.checked;
+            if (registryMirror.checked) {
+                markSkillRegistryDirty();
+                flushSkillRegistry(settings);
+            }
+            save();
+        });
+    }
+    const registryKeywords = el('rpg_tactical_combat_skill_registry_keywords');
+    if (registryKeywords) {
+        registryKeywords.addEventListener('change', () => {
+            settings.skillRegistryLorebookKeywords = registryKeywords.checked;
+            markSkillRegistryDirty();
+            flushSkillRegistry(settings);
+            save();
+        });
+    }
+
     const openBtn = el('rpg_tactical_combat_open');
     if (openBtn) {
         openBtn.addEventListener('click', (event) => {
@@ -461,6 +575,9 @@ export function bindTacticalCombatSettings(deps) {
         });
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) compendiumStatus(depsRef.settings);
+        });
+        document.addEventListener('rt_tactical_combat_changed', () => {
+            if (depsRef?.settings) skillRegistryStatus(depsRef.settings);
         });
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) classifierStatus(depsRef.settings);

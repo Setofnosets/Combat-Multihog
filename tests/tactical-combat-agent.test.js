@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { sendStateRequest } = vi.hoisted(() => ({ sendStateRequest: vi.fn() }));
 vi.mock('../llm-client.js', () => ({ sendStateRequest }));
 
+import { createEmptySkillRegistry } from '../src/features/skill-registry/skill-registry.js';
+
 import {
     allowedSpecialTargetIds,
     buildAgentPrompts,
@@ -45,6 +47,10 @@ const SETTINGS = {
     tacticalCombatEncounterSource: 'auto',
     tacticalCombatGridPreset: '10x10',
 };
+
+beforeEach(() => {
+    SETTINGS.skillRegistry = createEmptySkillRegistry();
+});
 
 function makeState() {
     const state = createEncounterState({

@@ -37,6 +37,8 @@ import {
 } from '../tactical-combat/tactical-combat-engine.js';
 import { describeActionCatalog, getEnabledActions, parseActionCatalog } from '../tactical-combat/tactical-combat-actions.js';
 import { selectEncounterEnemies } from '../tactical-combat/tactical-combat-context.js';
+import { registerSkillsFromUnits } from '../skill-registry/skill-registry.js';
+import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
 import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
 import {
     DEFAULT_TRADITIONAL_ACTION_CATALOG,
@@ -456,6 +458,8 @@ export function buildTraditionalEncounterFromContext(context, settings, options 
     if (!playerUnits.length) throw new Error('No living player characters are available for combat.');
     const allies = (context.allies || []).map(unit => ({ ...unit, side: 'ally', source: unit.source || 'memo' }));
     const allUnits = [...playerUnits, ...allies, ...enemies];
+    const registryChanges = registerSkillsFromUnits(settings, { playerUnits, allies, enemies }, { source: 'memo' });
+    if (registryChanges) markSkillRegistryDirty();
     const seed = Number(options.seed) || (Date.now() & 0x7fffffff);
     const title = String(agentEncounter?.title || (context.location ? `Battle at ${context.location}` : 'Turn-based Encounter')).slice(0, 140);
     const description = String(

@@ -9,6 +9,7 @@ import { snapshotStockPromptsForProfile } from './profiles.js';
 import { snapshotChatSetup } from './chat-setup.js';
 import { saveSettings as requestSettingsSave } from '../app/runtime-bridge.js';
 import { isHistoryPersistenceBlocked, persistChatHistories } from './history-file-storage.js';
+import { createEmptySkillRegistry } from '../features/skill-registry/skill-registry.js';
 
 // Kept only so legacy recovery code can be re-enabled deliberately. Normal tracker
 // operation must not create or consume a browser-local recovery copy.
@@ -34,6 +35,7 @@ function chatStateSubstanceScore(state) {
     for (const key of ['memoHistory', 'dungeonMapHistory', 'quests', 'combatDefeatedUi', 'routerLog']) {
         if (Array.isArray(state[key])) score += Math.min(state[key].length, 20);
     }
+    if (state.skillRegistry?.skills && Object.keys(state.skillRegistry.skills).length) score += 2;
     for (const key of [
         'customPortraits',
         'customLocationImages',
@@ -506,6 +508,7 @@ export function saveChatState(chatId, opts = {}) {
         modules:      JSON.parse(JSON.stringify(s.modules)),
         blockOrder:   JSON.parse(JSON.stringify(s.blockOrder  || BLOCK_ORDER)),
         stockPrompts: snapshotStockPromptsForProfile(s.stockPrompts),
+        skillRegistry: JSON.parse(JSON.stringify(s.skillRegistry || createEmptySkillRegistry())),
         quests:       JSON.parse(JSON.stringify(s.quests || [])), // persist full array (incl. completed) for cross-session UI display
         historyIndex: s.historyIndex ?? -1,
         activeRouterKeys: JSON.parse(JSON.stringify(s.activeRouterKeys || [])),

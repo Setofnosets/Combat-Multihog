@@ -20,6 +20,7 @@ Traditional Combat is the no-grid turn-based mode of the Multihog D&D Framework.
 - Attack and harmful skills target living enemies. Heals/buffs and items target living allies or the caster. Special skills may target any living unit.
 - Natural 20 is a critical; natural 1 always misses. Damage, healing, statuses, Willpower, transformations, summons, side changes, and retreat work exactly as in tactical combat.
 - Terrain-altering special effects are rejected in this mode. Summons join the caster's side and act from the next round.
+- Specials share the Campaign Skill Registry used by Tactical Combat: the first successful resolution becomes canonical, later uses expand the stored recipe without another AI call, and transformations reuse registered forms. Terrain primitives remain invalid here.
 - An opening attack/spell declared before the fight resolves before Round 1; an ambush costs the enemy its first activation.
 
 ## AI contract
