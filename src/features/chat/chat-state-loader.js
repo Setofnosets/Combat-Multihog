@@ -4,7 +4,12 @@ import { ensureDungeonMapHistory, trimMemoAndMapHistory } from '../../state/dung
 import { repairChatLinkMemoHistory } from './chat-link-conflict.js';
 import { summarizeMapEvolutionSchedule } from '../../../map-evolution-lib.js';
 import { isLorebookAgentRuntimeActive } from '../../state/section-enabled.js';
-import { normalizeSkillRegistry } from '../skill-registry/skill-registry.js';
+import { mergeSkillRegistries, normalizeSkillRegistry } from '../skill-registry/skill-registry.js';
+import {
+    claimSkillRegistry,
+    getSkillRegistryOwner,
+} from '../skill-registry/skill-registry-store.js';
+import { backfillSkillRegistry } from '../skill-registry/skill-registry-discovery.js';
 import { hydrateSkillRegistryFromLorebook } from '../skill-registry/skill-lorebook.js';
 
 /** Restores one chat-linked tracker snapshot and synchronizes dependent UI. */
@@ -79,7 +84,18 @@ export function createChatStateLoader({
     s.activeWorldKeys = JSON.parse(JSON.stringify(saved.activeWorldKeys || []));
     s.keywordActivatedKeys = JSON.parse(JSON.stringify(saved.keywordActivatedKeys || []));
     s.routerLog = JSON.parse(JSON.stringify(saved.routerLog || []));
-    s.skillRegistry = normalizeSkillRegistry(saved.skillRegistry).registry;
+    const savedRegistry = normalizeSkillRegistry(saved.skillRegistry).registry;
+    // A chat switch must never merge the departing chat's ledger into the
+    // arriving one. On a same-chat reload, retain live entries only when the
+    // partition registry is empty; a non-empty snapshot stays authoritative so
+    // a deliberate Chat Link RESTORE cannot be contaminated by the live session.
+    const sameChat = getSkillRegistryOwner() === String(chatId);
+    const savedHasSkills = Object.keys(savedRegistry.skills || {}).length > 0;
+    const liveHasSkills = Object.keys(s.skillRegistry?.skills || {}).length > 0;
+    s.skillRegistry = sameChat && !savedHasSkills && liveHasSkills
+        ? mergeSkillRegistries(savedRegistry, s.skillRegistry)
+        : savedRegistry;
+    claimSkillRegistry(chatId);
     sanitizeRouterState(s);
     s.routerLookback = saved.routerLookback || 4;
     s.routerLastRunChatLength = saved.routerLastRunChatLength ?? 0;
@@ -358,15 +374,28 @@ export function createChatStateLoader({
         globalThis._rpgLoadAdventureCompanionForChat(chatId);
     }
 
-    // Merge mirror-book entries that are missing from the restored JSON registry.
-    // The JSON stays authoritative; this recovers a lost or older cache.
-    if (s.skillRegistryLorebookMirror !== false) {
-        setTimeout(() => {
-            const live = getSettings();
+    // Merge mirror-book entries that are missing from the restored JSON registry,
+    // then backfill from the memo and any saved board. The JSON stays
+    // authoritative; this recovers a lost/older cache and populates chats whose
+    // encounter predates the registry feature.
+    setTimeout(() => {
+        const live = getSettings();
+        if (live.chatStateProjectionOwner !== chatId) return;
+        const ctx = (() => {
+            try { return SillyTavern.getContext(); } catch (_) { return {}; }
+        })();
+        void (async () => {
+            if (live.skillRegistryLorebookMirror !== false) {
+                try { await hydrateSkillRegistryFromLorebook(live, { chatId }); } catch (_) { /* non-fatal */ }
+            }
             if (live.chatStateProjectionOwner !== chatId) return;
-            void hydrateSkillRegistryFromLorebook(live, { chatId }).catch(() => {});
-        }, 0);
-    }
+            try {
+                backfillSkillRegistry(live, { chatId, ctx });
+            } catch (error) {
+                if (live.debugMode) console.warn('[RPG Tracker] Skill Registry backfill failed:', error);
+            }
+        })();
+    }, 0);
 
     return true;
 

@@ -9,6 +9,7 @@ import {
     hydrateSkillRegistryFromLorebook,
     mirrorSkillRegistryToLorebook,
 } from '../src/features/skill-registry/skill-lorebook.js';
+import { persistSkillRegistry } from '../src/features/skill-registry/skill-registry-store.js';
 
 const baseContext = globalThis.SillyTavern.getContext;
 const baseChatId = globalThis._rpgCurrentChatId;
@@ -133,5 +134,24 @@ describe('skill registry lorebook mirror', () => {
         const changed = await hydrateSkillRegistryFromLorebook(targetSettings, { chatId: 'vitest-chat' });
         expect(changed).toBe(1);
         expect(findSkillRegistryEntry(targetSettings, 'Dread Wail').mechanics.effectTemplate[0].amount).toBe('2d6');
+    });
+
+    it('snapshots the registry and schedules the mirror even outside a board persist', async () => {
+        const settings = getSettings();
+        settings.chatStates['vitest-chat'] = { campaignBooks: [] };
+        upsertSkillRegistryEntry(settings.skillRegistry, {
+            name: 'Cinder Burst',
+            source: 'resolver',
+            status: 'resolved',
+            mechanics: {
+                kind: 'special',
+                effectTemplate: [{ type: 'damage', target: '$target', amount: '2d6' }],
+            },
+        });
+        expect(persistSkillRegistry(settings, 'vitest-chat')).toBe(true);
+        expect(findSkillRegistryEntry(settings.chatStates['vitest-chat'].skillRegistry, 'Cinder Burst')).toBeTruthy();
+        await new Promise(resolve => setTimeout(resolve, 1700));
+        expect(Object.values(savedBook.entries || {}).some(entry => entry.comment === 'Cinder Burst')).toBe(true);
+        expect(settings.chatStates['vitest-chat'].campaignBooks.some(name => name.endsWith('_Skills'))).toBe(true);
     });
 });

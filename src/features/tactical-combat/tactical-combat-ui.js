@@ -54,6 +54,7 @@ import {
     setEncounterForChat,
 } from './tactical-combat-store.js';
 import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
+import { backfillSkillRegistry } from '../skill-registry/skill-registry-discovery.js';
 import {
     continueToNarration,
     queueCombatOutcome,
@@ -560,6 +561,15 @@ function openBoard() {
     overlay.classList.add('is-open');
     overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('rt-tc-modal-open');
+    try {
+        const settings = getSettings();
+        const chatId = getActiveChatId();
+        if (chatId) backfillSkillRegistry(settings, { chatId, ctx: SillyTavern.getContext() });
+    } catch (error) {
+        try {
+            if (getSettings()?.debugMode) console.warn('[RPG Tracker] Tactical skill discovery failed:', error);
+        } catch (_) { /* non-fatal */ }
+    }
     try {
         document.dispatchEvent(new CustomEvent('rt_combat_board_opening', { detail: { board: 'tactical' } }));
     } catch (_) { /* no-op */ }

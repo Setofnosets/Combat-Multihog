@@ -459,7 +459,7 @@ export function buildTraditionalEncounterFromContext(context, settings, options 
     const allies = (context.allies || []).map(unit => ({ ...unit, side: 'ally', source: unit.source || 'memo' }));
     const allUnits = [...playerUnits, ...allies, ...enemies];
     const registryChanges = registerSkillsFromUnits(settings, { playerUnits, allies, enemies }, { source: 'memo' });
-    if (registryChanges) markSkillRegistryDirty();
+    if (registryChanges) markSkillRegistryDirty(context.chatId || undefined);
     const seed = Number(options.seed) || (Date.now() & 0x7fffffff);
     const title = String(agentEncounter?.title || (context.location ? `Battle at ${context.location}` : 'Turn-based Encounter')).slice(0, 140);
     const description = String(

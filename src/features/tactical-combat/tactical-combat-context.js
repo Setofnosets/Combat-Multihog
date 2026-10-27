@@ -1281,7 +1281,7 @@ export function buildEncounterFromContext(context, settings, options = {}) {
         allies,
         enemies,
     }, { source: 'memo' });
-    if (registryChanges) markSkillRegistryDirty();
+    if (registryChanges) markSkillRegistryDirty(context.chatId || undefined);
     const grid = resolveEncounterGrid(settings, allUnits.length, agentEncounter);
     const theme = agentEncounter?.terrainTheme && TC_TERRAIN_THEME_CONFIG[agentEncounter.terrainTheme]
         ? agentEncounter.terrainTheme
