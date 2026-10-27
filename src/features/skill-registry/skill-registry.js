@@ -406,6 +406,60 @@ function registryFrom(input) {
 }
 
 /**
+ * Merge a saved/backup registry into a live one without allowing an older
+ * snapshot to downgrade or erase a resolved recipe. The primary argument is
+ * authoritative; the secondary fills gaps and adds missing entries.
+ * @param {object} primary
+ * @param {object} secondary
+ * @returns {object} a new normalized registry
+ */
+export function mergeSkillRegistries(primary, secondary) {
+    const out = normalizeSkillRegistry(registryFrom(primary)).registry;
+    const incoming = registryFrom(secondary);
+    for (const entry of Object.values(incoming.skills || {})) {
+        if (!entry?.name) continue;
+        const existing = findSkillRegistryEntry(out, entry.name);
+        if (!existing) {
+            const normalized = normalizeSkillRegistryEntry(entry, entry.id || entry.name);
+            if (normalized) out.skills[normalizeSkillKey(normalized.name)] = normalized;
+            continue;
+        }
+        // Upsert merges aliases/owners/gaps and only promotes status or source
+        // when the incoming copy is stronger.
+        upsertSkillRegistryEntry(out, entry, { force: false });
+    }
+    for (const [key, rawForm] of Object.entries(incoming.forms || {})) {
+        const form = normalizeSkillForm(rawForm, key);
+        if (!form) continue;
+        const formKey = slugifySkill(form.id || key, 'form');
+        const existing = out.forms[formKey];
+        if (!existing) {
+            out.forms[formKey] = form;
+        } else if (existing.status !== 'resolved' && form.status === 'resolved') {
+            out.forms[formKey] = { ...form, id: existing.id || form.id };
+        }
+    }
+    for (const [key, rawClass] of Object.entries(incoming.classes || {})) {
+        const cls = normalizeSkillClass(rawClass, key);
+        if (!cls) continue;
+        const classKey = slugifySkill(cls.id || key, 'class');
+        const existing = out.classes[classKey];
+        if (!existing) {
+            out.classes[classKey] = cls;
+            continue;
+        }
+        existing.aliases = existing.aliases || [];
+        existing.skillIds = [...new Set([...(existing.skillIds || []), ...(cls.skillIds || [])])].slice(0, 80);
+        existing.owners = mergeOwners(existing.owners, cls.owners);
+        if (!existing.brief && cls.brief) existing.brief = cls.brief;
+        if (!existing.source && cls.source) existing.source = cls.source;
+        existing.updatedAt = Math.max(Number(existing.updatedAt) || 0, Number(cls.updatedAt) || 0);
+    }
+    out.updatedAt = Math.max(Number(out.updatedAt) || 0, Number(incoming.updatedAt) || 0, Date.now());
+    return out;
+}
+
+/**
  * @param {Record<string, any>|object} input settings or registry
  * @param {string} name
  * @param {{ ownerName?: string, formId?: string }} [options]

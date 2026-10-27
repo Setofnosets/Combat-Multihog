@@ -25,6 +25,7 @@ import {
 } from '../tactical-combat/tactical-combat-engine.js';
 import { resolveSpecialSource } from '../tactical-combat/tactical-combat-agent.js';
 import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
+import { backfillSkillRegistry } from '../skill-registry/skill-registry-discovery.js';
 import { collectEncounterContext } from '../tactical-combat/tactical-combat-context.js';
 import {
     clearPendingNarration,
@@ -201,6 +202,15 @@ function openBoard() {
     ui.overlay.classList.add('is-open');
     ui.overlay.setAttribute('aria-hidden', 'false');
     document.body.classList.add('rt-tc-modal-open');
+    try {
+        const settings = getSettings();
+        const chatId = getActiveChatId();
+        if (chatId) backfillSkillRegistry(settings, { chatId, ctx: SillyTavern.getContext() });
+    } catch (error) {
+        try {
+            if (getSettings()?.debugMode) console.warn('[RPG Tracker] Traditional skill discovery failed:', error);
+        } catch (_) { /* non-fatal */ }
+    }
     try {
         document.dispatchEvent(new CustomEvent('rt_combat_board_opening', { detail: { board: 'traditional' } }));
     } catch (_) { /* no-op */ }

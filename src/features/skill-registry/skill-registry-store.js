@@ -5,9 +5,11 @@
  */
 
 import { getActiveChatId, saveChatState } from '../../../state-manager.js';
+import { saveSettings as requestSettingsSave } from '../../app/runtime-bridge.js';
 import { ensureSkillBookRegistered, scheduleSkillLorebookMirror } from './skill-lorebook.js';
 
-let dirtyChatId = '';
+let dirtyChatIds = new Set();
+let registryOwnerChatId = '';
 
 /**
  * Mark the active chat's registry snapshot as stale. Chat-scoped so a resolution
@@ -16,12 +18,48 @@ let dirtyChatId = '';
  */
 export function markSkillRegistryDirty(chatId = getActiveChatId()) {
     if (!chatId) return;
-    dirtyChatId = String(chatId);
+    dirtyChatIds.add(String(chatId));
 }
 
 /** @param {string|null} [chatId] */
 export function clearSkillRegistryDirty(chatId = getActiveChatId()) {
-    if (!chatId || dirtyChatId === String(chatId)) dirtyChatId = '';
+    if (!chatId) dirtyChatIds.clear();
+    else dirtyChatIds.delete(String(chatId));
+}
+
+/**
+ * Record which chat the live registry currently belongs to. Used by the chat
+ * loader so a switch cannot merge the departing chat's skills into the
+ * arriving chat.
+ * @param {string|null} [chatId]
+ */
+export function claimSkillRegistry(chatId = getActiveChatId()) {
+    registryOwnerChatId = String(chatId || '');
+}
+
+/** @returns {string} */
+export function getSkillRegistryOwner() {
+    return registryOwnerChatId;
+}
+
+/**
+ * Snapshot the live registry into the chat partition, request a normal settings
+ * save, and schedule the lorebook mirror. This is the deterministic persistence
+ * entry point for discoveries and resolved recipes.
+ * @param {Record<string, any>} settings
+ * @param {string|null} [chatId]
+ * @param {{ force?: boolean }} [options]
+ * @returns {boolean}
+ */
+export function persistSkillRegistry(settings, chatId = getActiveChatId(), options = {}) {
+    if (!settings || !chatId) return false;
+    markSkillRegistryDirty(chatId);
+    const ok = flushSkillRegistry(settings, chatId, { force: options.force !== false });
+    if (ok) {
+        try { requestSettingsSave(); } catch (_) { /* bridge not ready; a later normal save persists it */ }
+        try { document.dispatchEvent(new CustomEvent('rt_tactical_combat_changed')); } catch (_) { /* non-DOM */ }
+    }
+    return ok;
 }
 
 /**
@@ -29,25 +67,35 @@ export function clearSkillRegistryDirty(chatId = getActiveChatId()) {
  * save. The normal board/settings save persists the top-level object.
  * @param {Record<string, any>} settings
  * @param {string|null} [chatId]
+ * @param {{ force?: boolean }} [options]
  * @returns {boolean}
  */
-export function flushSkillRegistry(settings, chatId = getActiveChatId()) {
+export function flushSkillRegistry(settings, chatId = getActiveChatId(), options = {}) {
     if (!settings || !chatId) return false;
-    if (!dirtyChatId) return false;
-    if (dirtyChatId !== String(chatId)) return false;
+    const id = String(chatId);
+    if (!options.force && !dirtyChatIds.has(id)) return false;
+    registryOwnerChatId = id;
+    let snapshotOk = false;
     try {
-        ensureSkillBookRegistered(settings, chatId);
-        saveChatState(chatId, { skipDiskWrite: true });
-        dirtyChatId = '';
-        scheduleSkillLorebookMirror(settings, chatId);
-        return true;
+        ensureSkillBookRegistered(settings, id);
+        saveChatState(id, { skipDiskWrite: true });
+        snapshotOk = true;
     } catch (error) {
         console.warn('[RPG Tracker] Skill Registry snapshot failed:', error);
-        return false;
     }
+    // The mirror is a readable backup and must not depend on the transient
+    // dirty flag or on a successful chat-partition write.
+    try {
+        scheduleSkillLorebookMirror(settings, id);
+    } catch (error) {
+        if (settings.debugMode) console.warn('[RPG Tracker] Skill mirror scheduling failed:', error);
+    }
+    if (snapshotOk) dirtyChatIds.delete(id);
+    return snapshotOk;
 }
 
 /** @param {string|null} [chatId] */
 export function isSkillRegistryDirty(chatId = getActiveChatId()) {
-    return !!dirtyChatId && dirtyChatId === String(chatId || '');
+    if (!chatId) return dirtyChatIds.size > 0;
+    return dirtyChatIds.has(String(chatId));
 }

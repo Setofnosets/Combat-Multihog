@@ -14,8 +14,9 @@ describe('skill registry persistence contract', () => {
         const persistence = read('src/state/chat-persistence.js');
         expect(persistence).toContain('skillRegistry: JSON.parse(JSON.stringify');
         const loader = read('src/features/chat/chat-state-loader.js');
-        expect(loader).toContain('s.skillRegistry = normalizeSkillRegistry(saved.skillRegistry).registry');
+        expect(loader).toContain('mergeSkillRegistries(savedRegistry, s.skillRegistry)');
         expect(loader).toContain('hydrateSkillRegistryFromLorebook');
+        expect(loader).toContain('backfillSkillRegistry');
     });
 
     it('clears an unseen chat registry instead of leaking the previous chat', () => {

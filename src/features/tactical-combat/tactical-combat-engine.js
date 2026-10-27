@@ -725,6 +725,10 @@ function normalizeSkill(raw, index, side) {
         effectTemplate: Array.isArray(raw.effectTemplate)
             ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 16)
             : null,
+        registryId: String(raw.registryId || '').slice(0, 80),
+        registryStatus: String(raw.registryStatus || '').slice(0, 20),
+        source: String(raw.source || ''),
+        synthetic: raw.synthetic === true,
         side,
     };
 }
@@ -771,6 +775,11 @@ function normalizeItem(raw, index) {
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
         range: raw.range == null ? (area && area.origin === 'target' ? 6 : 0) : clampInt(raw.range, 0, 12),
         area,
+        effectTemplate: Array.isArray(raw.effectTemplate)
+            ? raw.effectTemplate.filter(entry => entry && typeof entry === 'object').slice(0, 16)
+            : null,
+        registryId: String(raw.registryId || '').slice(0, 80),
+        source: String(raw.source || ''),
     };
 }
 

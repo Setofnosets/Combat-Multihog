@@ -26,7 +26,7 @@ import {
     createEmptySkillRegistry,
     normalizeSkillRegistry,
 } from '../skill-registry/skill-registry.js';
-import { flushSkillRegistry, markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
+import { persistSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import { mirrorSkillRegistryToLorebook } from '../skill-registry/skill-lorebook.js';
 import {
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
@@ -148,6 +148,17 @@ function skillRegistryStatus(settings) {
     node.className = `rt-tc-setting-status${conflicts ? ' rt-tc-error' : ' rt-tc-ok'}`;
 }
 
+/**
+ * Refresh the registry JSON without interrupting a user who is typing in it.
+ * @param {Record<string, any>} settings
+ */
+function syncSkillRegistryEditor(settings) {
+    const node = el('rpg_tactical_combat_skill_registry');
+    if (!node) return;
+    if (typeof document !== 'undefined' && document.activeElement === node) return;
+    node.value = JSON.stringify(normalizeSkillRegistry(settings?.skillRegistry).registry, null, 2);
+}
+
 function syncStatus(settings = depsRef?.settings) {
     const status = el('rpg_tactical_combat_status');
     if (!status || !settings) return;
@@ -213,11 +224,7 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
     setValue(el('rpg_tactical_combat_spell_compendium'), settings.tacticalCombatSpellCompendiumJson || DEFAULT_SPELL_COMPENDIUM_JSON);
-    setValue(el('rpg_tactical_combat_skill_registry'), JSON.stringify(
-        normalizeSkillRegistry(settings.skillRegistry).registry,
-        null,
-        2,
-    ));
+    syncSkillRegistryEditor(settings);
     setChecked(el('rpg_tactical_combat_skill_registry_mirror'), settings.skillRegistryLorebookMirror !== false);
     setChecked(el('rpg_tactical_combat_skill_registry_keywords'), settings.skillRegistryLorebookKeywords === true);
     syncGridControls(settings);
@@ -452,8 +459,7 @@ export function bindTacticalCombatSettings(deps) {
             const parsed = normalizeSkillRegistry(skillRegistry.value);
             if (parsed.ok) {
                 settings.skillRegistry = parsed.registry;
-                markSkillRegistryDirty();
-                flushSkillRegistry(settings);
+                persistSkillRegistry(settings);
                 save();
                 skillRegistryStatus(settings);
             } else {
@@ -474,8 +480,7 @@ export function bindTacticalCombatSettings(deps) {
                 if (!confirmed) return;
                 settings.skillRegistry = createEmptySkillRegistry();
                 skillRegistry.value = JSON.stringify(settings.skillRegistry, null, 2);
-                markSkillRegistryDirty();
-                flushSkillRegistry(settings);
+                persistSkillRegistry(settings);
                 void mirrorSkillRegistryToLorebook(settings, { chatId: getActiveChatId() }).catch(() => {});
                 save();
                 skillRegistryStatus(settings);
@@ -499,8 +504,7 @@ export function bindTacticalCombatSettings(deps) {
                 parsed.registry.forms = {};
                 settings.skillRegistry = parsed.registry;
                 skillRegistry.value = JSON.stringify(settings.skillRegistry, null, 2);
-                markSkillRegistryDirty();
-                flushSkillRegistry(settings);
+                persistSkillRegistry(settings);
                 save();
                 skillRegistryStatus(settings);
             });
@@ -512,8 +516,7 @@ export function bindTacticalCombatSettings(deps) {
         registryMirror.addEventListener('change', () => {
             settings.skillRegistryLorebookMirror = registryMirror.checked;
             if (registryMirror.checked) {
-                markSkillRegistryDirty();
-                flushSkillRegistry(settings);
+                persistSkillRegistry(settings);
             }
             save();
         });
@@ -522,8 +525,7 @@ export function bindTacticalCombatSettings(deps) {
     if (registryKeywords) {
         registryKeywords.addEventListener('change', () => {
             settings.skillRegistryLorebookKeywords = registryKeywords.checked;
-            markSkillRegistryDirty();
-            flushSkillRegistry(settings);
+            persistSkillRegistry(settings);
             save();
         });
     }
@@ -578,6 +580,9 @@ export function bindTacticalCombatSettings(deps) {
         });
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) skillRegistryStatus(depsRef.settings);
+        });
+        document.addEventListener('rt_tactical_combat_changed', () => {
+            if (depsRef?.settings) syncSkillRegistryEditor(depsRef.settings);
         });
         document.addEventListener('rt_tactical_combat_changed', () => {
             if (depsRef?.settings) classifierStatus(depsRef.settings);
