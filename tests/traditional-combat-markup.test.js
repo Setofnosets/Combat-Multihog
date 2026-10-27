@@ -22,6 +22,7 @@ describe('traditional combat markup', () => {
         expect(html).toContain('rt-trad-roster');
         expect(html).toContain('data-trad-select-unit');
         expect(html).toContain('data-trad-target');
+        expect(html).toContain('rt-tc-log-list');
         expect(html).not.toContain('data-tc-cell');
         expect(html).not.toContain('rt-tc-grid');
     });
