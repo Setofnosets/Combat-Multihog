@@ -17,6 +17,7 @@ import {
     rememberSkillForm,
     slugifySkill,
 } from './skill-registry.js';
+import { describePassiveTrigger } from '../tactical-combat/tactical-combat-passives.js';
 
 const MIRROR_DELAY_MS = 1500;
 let mirrorTimer = null;
@@ -123,6 +124,10 @@ function skillContent(entry, forms = {}) {
     lines.push(`Type: ${entry.type || 'ability'}`);
     if (entry.brief) lines.push(`Brief: ${entry.brief}`);
     if (entry.effectSummary) lines.push(`Effect: ${entry.effectSummary}`);
+    if (entry.mechanics?.passive) {
+        lines.push('Passive: yes');
+        lines.push(`Trigger: ${describePassiveTrigger(entry.mechanics.trigger)}`);
+    }
     if (entry.owners?.length) lines.push(`Owners: ${entry.owners.map(owner => owner.name).join(', ')}`);
     for (const form of Object.values(forms || {})) {
         const skills = Array.isArray(form.skills) && form.skills.length

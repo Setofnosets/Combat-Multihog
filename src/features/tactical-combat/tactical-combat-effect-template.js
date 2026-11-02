@@ -9,6 +9,7 @@
 
 export const EFFECT_PRIMITIVE_TYPES = Object.freeze([
     'damage',
+    'drain',
     'heal',
     'status',
     'cure',
@@ -107,17 +108,31 @@ export function normalizeEffectPrimitive(raw) {
     if (raw.willpowerOutcome != null) effect.willpowerOutcome = stringValue(raw.willpowerOutcome, 20).toLowerCase();
     if (raw.outcome != null) effect.outcome = stringValue(raw.outcome, 20).toLowerCase();
     if (raw.reason != null) effect.reason = stringValue(raw.reason, 200);
+    if (raw.healRatio != null) {
+        const ratio = Number(raw.healRatio);
+        if (Number.isFinite(ratio)) effect.healRatio = Math.max(0, Math.min(1, ratio));
+    }
+    if (raw.healResource != null) effect.healResource = stringValue(raw.healResource, 12).toLowerCase();
+    if (raw.damageType != null) effect.damageType = stringValue(raw.damageType, 20);
 
     if (type === 'status') {
         if (raw.label != null) effect.label = stringValue(raw.label, 60);
         if (raw.name != null) effect.name = stringValue(raw.name, 60);
-        effect.rounds = optionalInt(raw.rounds, 1, 10) ?? 2;
+        effect.rounds = optionalInt(raw.rounds, 1, 10)
+            ?? (raw.permanent === true || Number(raw.durationMinutes) > 0 ? 0 : 2);
         if (raw.acBonus != null) effect.acBonus = optionalInt(raw.acBonus, -10, 10) || 0;
         if (raw.attackBonus != null) effect.attackBonus = optionalInt(raw.attackBonus, -10, 10) || 0;
         if (raw.damage != null) effect.damage = stringValue(raw.damage, 40);
         if (raw.damageResource != null) effect.damageResource = stringValue(raw.damageResource, 12).toLowerCase();
+        if (raw.damageType != null) effect.damageType = stringValue(raw.damageType, 20);
         if (raw.behavior != null) effect.behavior = stringValue(raw.behavior, 20).toLowerCase();
         if (raw.sourceId != null) effect.sourceId = stringValue(raw.sourceId, 60);
+        if (raw.polarity != null) {
+            const polarity = stringValue(raw.polarity, 12).toLowerCase();
+            if (polarity === 'positive' || polarity === 'negative') effect.polarity = polarity;
+        }
+        if (raw.durationMinutes != null) effect.durationMinutes = optionalInt(raw.durationMinutes, 1, 99999);
+        if (raw.permanent != null) effect.permanent = raw.permanent === true;
         effect.stacks = optionalInt(raw.stacks, 1, 5) ?? 1;
         effect.maxStacks = optionalInt(raw.maxStacks, 1, 10) ?? 1;
         if (raw.description != null) effect.description = stringValue(raw.description, 300);
@@ -237,6 +252,9 @@ export function summarizeEffectTemplate(effects, maxLength = 260) {
         switch (effect.type) {
             case 'damage':
                 parts.push(`${effect.amount || effect.damage || '?'} ${effect.resource === 'willpower' ? 'Willpower' : effect.resource === 'both' ? 'HP+WP' : 'HP'} damage${prefix}`);
+                break;
+            case 'drain':
+                parts.push(`drain ${effect.amount || effect.damage || '?'} ${effect.resource === 'willpower' ? 'Willpower' : 'HP'} (heal ${Math.round((Number(effect.healRatio) || 0) * 100)}%)${prefix}`);
                 break;
             case 'heal':
                 parts.push(`heal ${effect.amount || effect.heal || '?'} ${effect.resource === 'willpower' ? 'Willpower' : 'HP'}${prefix}`);

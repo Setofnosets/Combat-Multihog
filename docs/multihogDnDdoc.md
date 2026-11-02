@@ -381,6 +381,8 @@ Worth values can auto-render as coin badges in the UI.
 
 Abilities = non-spell class features only. Spells = cantrips + leveled slots `Level N (avail/max): …`. Never mix the two.
 
+Passive abilities use the `Passive:` prefix inside their description. Tactical and Traditional Combat compile owned passives from the Campaign Skill Registry once into deterministic triggers and then execute them automatically; they are never shown as clickable skills.
+
 #### `[TIME]`
 
 Clock + last long rest. Format variants exist (12h/24h, Day N vs DD/MM/YYYY). Used for:

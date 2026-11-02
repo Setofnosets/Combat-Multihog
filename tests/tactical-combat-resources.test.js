@@ -41,6 +41,13 @@ describe('combat resource parsing', () => {
         expect(parseUsageState('A silver tongue and a quick lie.')).toMatchObject({ unlimited: true });
         expect(parseUsageState('', { fallbackMax: 2 })).toMatchObject({ current: 2, max: 2, unlimited: false });
     });
+
+    it('prefers unlimited over an explicit zero maxUses fallback', () => {
+        expect(parseUsageState('Passive: each melee hit drains 1d6 HP.', {
+            fallbackMax: 0,
+            fallbackUnlimited: true,
+        })).toMatchObject({ current: null, max: null, unlimited: true });
+    });
 });
 
 describe('spell slot pools', () => {

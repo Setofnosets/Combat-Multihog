@@ -40,6 +40,7 @@ import { selectEncounterEnemies } from '../tactical-combat/tactical-combat-conte
 import { registerSkillsFromUnits } from '../skill-registry/skill-registry.js';
 import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
 import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
+import { describePassiveTrigger } from '../tactical-combat/tactical-combat-passives.js';
 import {
     DEFAULT_TRADITIONAL_ACTION_CATALOG,
     TRADITIONAL_ACTION_TYPES,
@@ -88,6 +89,7 @@ export function describeTraditionalUnitOptions(state, unit) {
         .map(target => target.id);
     const skillTargets = {};
     for (const skill of unit.skills || []) {
+        if (skill.passive === true) continue;
         if (!hasUses(skill, unit)) continue;
         let ids = [];
         if (String(skill.target || '').toLowerCase() === 'self') {
@@ -167,6 +169,11 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
             attackBonus: status.attackBonus,
             behavior: status.behavior || '',
             stacks: status.stacks || 1,
+            damage: status.damage || '',
+            damageResource: status.damageResource || 'hp',
+            damageType: status.damageType || '',
+            durationMinutes: status.durationMinutes || 0,
+            permanent: status.permanent === true,
         })),
         stats: unit.stats,
         spellSlots: Object.fromEntries(
@@ -175,7 +182,7 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
                 max: Math.max(0, Number(pool?.max) || 0),
             }]),
         ),
-        skills: (unit.skills || []).map(skill => {
+        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => {
             const resource = describeResource(skill, unit);
             return {
                 id: skill.id,
@@ -201,6 +208,13 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
                 resolvable: skill.kind === 'special',
             };
         }),
+        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description || '',
+            trigger: describePassiveTrigger(skill.trigger),
+            resolved: Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0,
+        })),
         items: (unit.items || []).map(item => {
             const resource = describeResource(item, unit);
             return {

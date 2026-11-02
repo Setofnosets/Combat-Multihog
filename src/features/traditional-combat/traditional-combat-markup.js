@@ -9,6 +9,8 @@
 import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
 import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
+import { describePassiveTrigger } from '../tactical-combat/tactical-combat-passives.js';
+import { formatStatusCondition } from '../tactical-combat/tactical-combat-status.js';
 
 function pct(value, max) {
     const n = Number(value) || 0;
@@ -33,9 +35,7 @@ function unitClass(unit) {
 
 function statusChips(unit) {
     const chips = (unit.statuses || []).map(status => {
-        const stacks = Number(status.stacks) || 1;
-        const stackLabel = stacks > 1 ? ` x${stacks}` : '';
-        const label = status.rounds ? `${status.label}${stackLabel} (${status.rounds})` : `${status.label}${stackLabel}`;
+        const label = formatStatusCondition(status);
         return `<span class="rt-tc-chip rt-tc-chip-status">${escapeHtml(label)}</span>`;
     });
     if (unit.defending) chips.push('<span class="rt-tc-chip rt-tc-chip-status">Defending (+4 AC)</span>');
@@ -178,7 +178,9 @@ function renderSelectedPanel(state, view) {
     const label = (type, fallback) => escapeHtml(key(type)?.label || fallback);
     const buttons = [];
     if (enabled('attack')) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'attack' ? 'is-armed' : ''}" data-trad-action="mode-attack" ${!canAct || unit.actionUsed ? 'disabled' : ''}>⚔ ${label('attack', 'Attack')}</button>`);
-    if (enabled('skill') && (unit.skills || []).length) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'skill' ? 'is-armed' : ''}" data-trad-action="mode-skill" ${!canAct ? 'disabled' : ''}>✦ ${label('skill', 'Skill')}</button>`);
+    const unitSkills = (unit.skills || []).filter(skill => !skill.passive);
+    const unitPassives = (unit.skills || []).filter(skill => skill.passive);
+    if (enabled('skill') && unitSkills.length) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'skill' ? 'is-armed' : ''}" data-trad-action="mode-skill" ${!canAct ? 'disabled' : ''}>✦ ${label('skill', 'Skill')}</button>`);
     if (enabled('item') && (unit.items || []).length) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'item' ? 'is-armed' : ''}" data-trad-action="mode-item" ${!canAct || unit.actionUsed ? 'disabled' : ''}>◉ ${label('item', 'Item')}</button>`);
     if (enabled('defend')) buttons.push(`<button type="button" class="rt-tc-action" data-trad-action="defend" ${!canAct || unit.actionUsed ? 'disabled' : ''}>◈ ${label('defend', 'Defend')}</button>`);
     if (enabled('wait')) buttons.push(`<button type="button" class="rt-tc-action" data-trad-action="wait" ${!canAct ? 'disabled' : ''}>⏳ ${label('wait', 'Wait')}</button>`);
@@ -186,7 +188,7 @@ function renderSelectedPanel(state, view) {
 
     const skills = view.mode === 'skill' && isPlayer ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Skills & spells</div>
-        <div class="rt-tc-skill-list">${(unit.skills || []).map(skill => {
+        <div class="rt-tc-skill-list">${unitSkills.map(skill => {
             const resource = describeResource(skill, unit);
             const areaNote = skill.area ? ' · AOE IGNORED' : '';
             return `
@@ -195,6 +197,19 @@ function renderSelectedPanel(state, view) {
                 <span class="rt-tc-skill-meta">${escapeHtml(`${skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'}${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? 'SPECIAL' : 'BUFF'}${skill.bonusAction ? ' · bonus' : ''}${areaNote}`)}</span>
                 <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
+        }).join('')}</div>
+    </div>` : '';
+
+    const passives = unitPassives.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Passives</div>
+        <div class="rt-tc-skill-list">${unitPassives.map(skill => {
+            const resolved = Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+            return `
+            <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
+                <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${describePassiveTrigger(skill.trigger)}${resolved ? '' : ' · recipe pending'}`)}</span>
+                <span class="rt-tc-skill-uses">PASSIVE</span>
+            </div>`;
         }).join('')}</div>
     </div>` : '';
 
@@ -239,6 +254,7 @@ function renderSelectedPanel(state, view) {
         ${isPlayer && state.status === 'active' ? `<div class="rt-tc-actions">${buttons.join('')}</div>` : ''}
         ${isPlayer && state.status === 'active' ? `<div class="rt-tc-hint">${escapeHtml(hint)}</div>` : ''}
         ${skills}
+        ${passives}
         ${items}
         ${targetList(view)}
         ${endUnit}

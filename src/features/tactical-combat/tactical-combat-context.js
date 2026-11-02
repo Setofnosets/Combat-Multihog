@@ -21,9 +21,11 @@ import {
     willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
 import { getSpellDefinition } from './tactical-combat-spell-compendium.js';
-import { buildSkillCatalog, registerSkillsFromUnits } from '../skill-registry/skill-registry.js';
+import { buildSkillCatalog, registerSkillsFromUnits, registryEntryToDefinition } from '../skill-registry/skill-registry.js';
 import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
 import { buildSpellSlots, ensureSpellSlots, parseUsageState } from './tactical-combat-resources.js';
+import { normalizePassiveTrigger } from './tactical-combat-passives.js';
+import { parseStatusConditions } from './tactical-combat-status.js';
 import {
     TC_DYNAMIC_MAX,
     TC_DYNAMIC_MIN,
@@ -177,6 +179,9 @@ function buildSkillFromName(name, description, options = {}) {
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const definition = options.definition && typeof options.definition === 'object' ? options.definition : null;
     const text = `${cleanedName} ${description || ''}`;
+    const passive = options.passive === true
+        || definition?.passive === true
+        || /^\s*passive\b/i.test(String(description || ''));
     const bothMatch = text.match(WILLPOWER_BOTH_RX);
     const willHealMatch = text.match(/(?:willpower|will)\s+heal(?:ing)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\bheal(?:ing)?\s+(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s+(?:willpower|will)\b/i);
     const willAmountMatch = text.match(/(?:willpower|will)\s*(?:damage)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\b(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*(?:willpower|will)\b/i);
@@ -267,10 +272,13 @@ function buildSkillFromName(name, description, options = {}) {
             fallbackMax: options.defaultUses == null
                 ? (definition?.maxUses == null ? null : definition.maxUses)
                 : options.defaultUses,
-            fallbackUnlimited: options.defaultUses == null
-                ? definition?.unlimited === true
-                : false,
+            fallbackUnlimited: passive
+                ? true
+                : (options.defaultUses == null
+                    ? definition?.unlimited === true
+                    : false),
         });
+    const unlimited = passive ? true : usage.unlimited === true;
     return {
         id: `skill-${cleanedName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)}`,
         name: cleanedName,
@@ -292,10 +300,14 @@ function buildSkillFromName(name, description, options = {}) {
         spell: options.spell === true || definition?.spell === true,
         slotLevel: Number.isFinite(Number(options.slotLevel)) ? Number(options.slotLevel) : null,
         slotKey: String(options.slotKey || ''),
-        unlimited: usage.unlimited === true,
-        maxUses: usage.unlimited ? 0 : Math.max(0, Number(usage.max) || 0),
-        uses: usage.unlimited ? 0 : Math.max(0, Math.min(Number(usage.max) || 0, Number(usage.current) || 0)),
+        unlimited,
+        maxUses: unlimited ? 0 : Math.max(0, Number(usage.max) || 0),
+        uses: unlimited ? 0 : Math.max(0, Math.min(Number(usage.max) || 0, Number(usage.current) || 0)),
         utility: options.utility === true || definition?.utility === true,
+        passive,
+        trigger: passive
+            ? normalizePassiveTrigger(options.trigger ?? definition?.trigger)
+            : null,
         effectTemplate: Array.isArray(definition?.effectTemplate)
             ? JSON.parse(JSON.stringify(definition.effectTemplate))
             : null,
@@ -479,7 +491,10 @@ function parseCombatLine(lines) {
     };
 }
 
-function inferLevel(lines, maxHp) {
+function inferLevel(lines, maxHp, options = {}) {
+    const overrideSource = options.levelOverride;
+    const override = overrideSource == null || String(overrideSource).trim() === '' ? NaN : Number(overrideSource);
+    if (Number.isFinite(override)) return clampInt(override, 1, 30) || 1;
     const levelLine = findLine(lines, /^(Level|HD):/i);
     if (levelLine) {
         const level = levelLine.match(/Level\s*(\d{1,2})/i);
@@ -487,7 +502,26 @@ function inferLevel(lines, maxHp) {
         const hd = levelLine.match(/d\d+\s*\(\s*(\d+)\s*\/\s*(\d+)\s*\)/i);
         if (hd) return clampInt(hd[2], 1, 30);
     }
+    const fallbackSource = options.fallbackLevel;
+    const fallback = fallbackSource == null || String(fallbackSource).trim() === '' ? NaN : Number(fallbackSource);
+    if (Number.isFinite(fallback)) return clampInt(fallback, 1, 30) || 1;
     return Math.max(1, Math.min(20, Math.ceil(maxHp / 12)));
+}
+
+/**
+ * Read the player character's displayed level from the [XP] block. Supports
+ * both the legacy `Level: N | XP: a/b` form and the newer
+ * `Total: a / b XP (Level N)` form.
+ * @param {string} memo
+ * @returns {number|null}
+ */
+export function parseXpLevel(memo) {
+    const content = parseMemoBlock(memo, 'XP');
+    if (!content) return null;
+    const modern = content.match(/\(Level\s*(\d+)\)/i);
+    const legacy = content.match(/\bLevel\s*:\s*(\d+)\b/i);
+    const loose = content.match(/\bLevel\s+(\d+)\b/i);
+    return clampInt(modern?.[1] || legacy?.[1] || loose?.[1], 1, 30, null);
 }
 
 /**
@@ -508,7 +542,7 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
     const hpMatch = hpLine.match(HP_HEADER_RX);
     const currentHp = hpMatch ? parseNumber(hpMatch[2], 10) : 10;
     const maxHp = hpMatch ? parseNumber(hpMatch[3], currentHp || 10) : Math.max(10, currentHp);
-    const statusLine = findLine(sourceLines, /^Status:/i);
+    const statusLine = findLine(sourceLines, /^\s*(?:[-*+•]\s*)?Status\s*:/i);
     const statusText = sourceLines.join('\n');
     const fled = sourceLines.some(line => isFledCombatantStatusLine(line));
     const willpowerBroken = /\bWillpower\s+broken\b/i.test(statusText);
@@ -534,7 +568,11 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
         ?? combat.ac
         ?? (combat.baseAc != null ? combat.baseAc + gear.armorBonus : 10 + stats.dexMod + gear.armorBonus);
     const damage = anyWeapon?.damage || combat.damage || `1d6${abilityMod >= 0 ? `+${abilityMod}` : abilityMod}`;
-    const level = inferLevel(sourceLines, maxHp || currentHp);
+    const level = inferLevel(sourceLines, maxHp || currentHp, {
+        levelOverride: options.levelOverride,
+        fallbackLevel: options.fallbackLevel,
+    });
+    const statuses = parseStatusConditions(statusLine);
     const maxHpSafe = Math.max(1, maxHp || currentHp || 10);
     const willpowerSave = parseWillpowerSave(sourceLines);
     const explicitWillpower = parseWillpowerLine(sourceLines);
@@ -588,6 +626,7 @@ export function parseStatSheet(name, classLabel, lines, side, options = {}) {
         skills,
         spellSlots,
         items: [],
+        statuses,
         inventory: gear.entries.map(entry => ({
             name: entry.name,
             description: entry.description,
@@ -635,6 +674,7 @@ function splitPartyEntries(content) {
 export function parsePlayerUnits(memo, ctx = {}, options = {}) {
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const willpowerMaxPercent = options.willpowerMaxPercent;
+    const xpLevel = parseXpLevel(memo);
     const units = [];
     const characterContent = parseMemoBlock(memo, 'CHARACTER');
     if (characterContent) {
@@ -648,6 +688,7 @@ export function parsePlayerUnits(memo, ctx = {}, options = {}) {
                 classifier,
                 willpowerMaxPercent,
                 spellCompendium: options.spellCompendium,
+                levelOverride: xpLevel,
             });
             if (unit && unit.hp > 0 && !unit._defeated && !unit._fled && !unit._willpowerBroken) {
                 unit.isPlayerCharacter = true;
@@ -1016,6 +1057,53 @@ export function resolveTerrainTheme(settings, context) {
     return inferTerrainTheme(context?.location, context?.sceneExcerpt);
 }
 
+function normalizedOwnerKeys(value) {
+    return String(value || '')
+        .toLowerCase()
+        .split(/\s*(?:\/|,|&|\band\b)\s*/)
+        .map(part => part.replace(/[^a-z0-9]+/g, ' ').trim())
+        .filter(Boolean);
+}
+
+function ownerMatchesUnit(owner, unit) {
+    if (!owner || !unit) return false;
+    const ownerKeys = normalizedOwnerKeys(owner.name);
+    if (!ownerKeys.length) return false;
+    const type = String(owner.type || 'character').toLowerCase();
+    if (type === 'character') {
+        const unitKeys = normalizedOwnerKeys(unit.name);
+        return ownerKeys.some(key => unitKeys.some(candidate => candidate === key || candidate.includes(key) || key.includes(candidate)));
+    }
+    if (type === 'class') {
+        const unitKeys = normalizedOwnerKeys(unit.classLabel);
+        return ownerKeys.some(key => unitKeys.some(candidate => candidate === key || candidate.includes(key) || key.includes(candidate)));
+    }
+    return false;
+}
+
+function attachRegistryPassives(units, registry, classifier) {
+    if (!registry?.skills || !Array.isArray(units) || !units.length) return;
+    const passives = Object.values(registry.skills).filter(entry =>
+        entry && entry.mechanics?.passive === true && (entry.owners || []).length,
+    );
+    if (!passives.length) return;
+    for (const unit of units) {
+        const names = new Set((unit.skills || []).map(skill => String(skill?.name || '').toLowerCase()).filter(Boolean));
+        for (const entry of passives) {
+            if (!(entry.owners || []).some(owner => ownerMatchesUnit(owner, unit))) continue;
+            const key = String(entry.name || '').toLowerCase();
+            if (!key || names.has(key)) continue;
+            const definition = registryEntryToDefinition(entry);
+            if (!definition) continue;
+            const skill = buildSkillFromName(entry.name, entry.brief || '', { classifier, definition });
+            if (!skill) continue;
+            unit.skills = Array.isArray(unit.skills) ? unit.skills : [];
+            unit.skills.push(skill);
+            names.add(key);
+        }
+    }
+}
+
 /**
  * Collect everything the encounter builder/agent needs.
  * @param {Record<string, any>} settings
@@ -1095,6 +1183,8 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
     } else if (standaloneSkills.length && settings?.debugMode) {
         console.log('[RPG Tracker][Tactical Combat] No player character was found; standalone skills were not assigned to party members.');
     }
+
+    attachRegistryPassives(playerUnits, spellCompendium.registry, classifier);
 
     for (const unit of playerUnits) {
         if (!unit.skills?.length) unit.skills = fallbackSkills('player', unit.classLabel);

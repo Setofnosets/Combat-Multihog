@@ -22,6 +22,7 @@ import {
     patchSpellLevelLines,
     patchStandaloneAbilities,
 } from './tactical-combat-resources.js';
+import { formatStatusCondition, formatStatusLine, parseStatusConditions } from './tactical-combat-status.js';
 
 const COMBAT_BLOCK_RX = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/i;
 const COMBAT_BLOCK_RX_GLOBAL = /\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi;
@@ -64,17 +65,7 @@ function statusLine(unit) {
     }
     if (unit?.fled) return unit.willpowerBroken ? 'Fled (Willpower broken)' : 'Fled';
     if (unit?.willpowerBroken) return 'Willpower broken';
-    const statuses = Array.isArray(unit?.statuses) ? unit.statuses : [];
-    if (!statuses.length) return 'Healthy';
-    return statuses
-        .map(status => {
-            const label = cleanText(status?.label || status?.name || 'Afflicted');
-            const rounds = Number(status?.rounds) || 0;
-            const stacks = Number(status?.stacks) || 1;
-            const stackLabel = stacks > 1 ? ` x${stacks}` : '';
-            return rounds > 0 ? `${label}${stackLabel} (${rounds} round${rounds === 1 ? '' : 's'})` : `${label}${stackLabel}`;
-        })
-        .join(', ');
+    return formatStatusLine(unit?.statuses || []);
 }
 
 function abilityLine(unit) {
@@ -85,6 +76,9 @@ function abilityLine(unit) {
     return skills.map(skill => {
         const resource = describeResource(skill, unit);
         let description = cleanText(skill?.description || skill?.name || '');
+        if (skill?.passive === true && description && !/^\s*passive\b/i.test(description)) {
+            description = `Passive: ${description}`;
+        }
         if (skill?.resource === 'willpower' || skill?.resource === 'both') {
             if (!/\bwillpower\b/i.test(description)) {
                 const wp = skill?.resource === 'both'
@@ -100,7 +94,7 @@ function abilityLine(unit) {
             const shape = skill.area.origin === 'self' ? 'aura' : 'burst';
             description = `${description}${description ? '; ' : ''}Area: ${shape} ${Number(skill.area.radius) || 1}${skill.area.friendlyFire ? ' friendly fire' : ''}`;
         }
-        if (!resource.unlimited && resource.max > 0) {
+        if (!resource.unlimited && resource.max > 0 && skill?.passive !== true) {
             description = patchAbilityUsageText(description, resource.current, resource.max);
         }
         return `${cleanText(skill?.name || 'Ability')} (${description})`;
@@ -382,21 +376,73 @@ function terminalStatusFor(unit) {
     return '';
 }
 
+function persistentStatuses(unit) {
+    return (unit?.statuses || []).filter(status => {
+        if (!status || !status.label) return false;
+        if (status.id === 'defending' || /^defending$/i.test(String(status.label || ''))) return false;
+        return status.permanent === true
+            || Number(status.durationMinutes) > 0
+            || Number(status.rounds) > 0;
+    });
+}
+
+function statusKey(value) {
+    return String(value || '')
+        .replace(/^\(\s*[+-]\s*\)\s*/, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+}
+
+/**
+ * Merge the board's surviving conditions into an existing Status line without
+ * deleting unrelated tracker-authored conditions (Inspired, Prone, etc.).
+ * @param {string} line
+ * @param {object} unit
+ * @returns {string}
+ */
+function mergeConditionLine(line, unit) {
+    const text = String(line || '');
+    const standalone = text.match(/^(\s*(?:[-*+•]\s*)?Status\s*:\s*)(.*)$/i);
+    const inline = standalone ? null : text.match(/^(.*\|\s*(?:[-*+•]\s*)?Status\s*:\s*)(.*)$/i);
+    if (!standalone && !inline) return line;
+    const prefix = standalone ? standalone[1] : inline[1];
+    const current = standalone ? standalone[2] : inline[2];
+    const currentConditions = parseStatusConditions(current);
+    const engineStatuses = persistentStatuses(unit).map(status => ({
+        ...status,
+        id: status.id || statusKey(status.label),
+        carriedOver: false,
+    }));
+    if (!engineStatuses.length) return line;
+    const merged = new Map();
+    for (const condition of currentConditions) {
+        merged.set(statusKey(condition.id || condition.label), condition);
+    }
+    for (const status of engineStatuses) {
+        merged.set(statusKey(status.id || status.label), status);
+    }
+    const rendered = [...merged.values()].map(formatStatusCondition).filter(Boolean);
+    return `${prefix}${rendered.length ? rendered.join(', ') : 'Healthy'}`;
+}
+
 function patchStatusLine(line, unit) {
     if (!unit) return line;
-    const status = terminalStatusFor(unit);
-    if (!status) return line;
-    const text = String(line || '');
-    const standalone = text.match(/^(\s*Status\s*:\s*).*$/i);
-    if (standalone) return `${standalone[1]}${status}`;
-    const inline = text.match(/^(.*\|\s*Status\s*:\s*).*$/i);
-    if (inline) return `${inline[1]}${status}`;
-    return line;
+    const terminal = terminalStatusFor(unit);
+    if (terminal) {
+        const text = String(line || '');
+        const standalone = text.match(/^(\s*(?:[-*+•]\s*)?Status\s*:\s*).*$/i);
+        if (standalone) return `${standalone[1]}${terminal}`;
+        const inline = text.match(/^(.*\|\s*(?:[-*+•]\s*)?Status\s*:\s*).*$/i);
+        if (inline) return `${inline[1]}${terminal}`;
+        return line;
+    }
+    return mergeConditionLine(line, unit);
 }
 
 function patchResourceLine(line, unit) {
     if (!unit) return line;
-    if (/(?:^|\|)\s*Status\s*:/i.test(line)) return patchStatusLine(line, unit);
+    if (/(?:^|\|)\s*(?:[-*+•]\s*)?Status\s*:/i.test(line)) return patchStatusLine(line, unit);
     if (/^\s*Abilities\s*:/i.test(line)) return patchAbilityLine(line, unit.skills || []);
     if (/^\s*(?:[-*+•]\s*)?(?:Spells\s*:\s*)?(?:Cantrips\s*:|Level\s+\d+)/i.test(line)) {
         ensureSpellSlots(unit);
@@ -409,8 +455,8 @@ function patchResourceLine(line, unit) {
  * Patch spell/ability/status lines inside a [CHARACTER] or [PARTY] block.
  * Entries are delimited by HP headers, which is how the tracker writes stat
  * blocks. Lines before the first header are preserved verbatim. A missing
- * Status line is added when the unit ended the fight defeated, fled, or with
- * broken Willpower.
+ * Status line is added when the unit ended the fight defeated, fled, broke
+ * Willpower, or still has a persistent condition.
  * @param {string} content
  * @param {object[]} units
  * @returns {string}
@@ -428,8 +474,12 @@ function patchResourceEntries(content, units) {
             return;
         }
         const patched = block.map(line => patchResourceLine(line, current));
-        if (!patched.some(line => /(?:^|\|)\s*Status\s*:/i.test(line))) {
-            const status = terminalStatusFor(current);
+        if (!patched.some(line => /(?:^|\|)\s*(?:[-*+•]\s*)?Status\s*:/i.test(line))) {
+            const terminal = terminalStatusFor(current);
+            const conditions = persistentStatuses(current).length
+                ? formatStatusLine(persistentStatuses(current))
+                : '';
+            const status = terminal || (conditions && conditions !== 'Healthy' ? conditions : '');
             if (status) {
                 let index = patched.length;
                 while (index > 0 && !patched[index - 1].trim()) index -= 1;

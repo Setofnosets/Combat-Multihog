@@ -29,6 +29,7 @@ import {
 import { persistSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import { mirrorSkillRegistryToLorebook } from '../skill-registry/skill-lorebook.js';
 import {
+    DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
@@ -221,6 +222,7 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_encounter_prompt'), settings.tacticalCombatEncounterPrompt || DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT);
     setValue(el('rpg_tactical_combat_outcome_prompt'), settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT);
     setValue(el('rpg_tactical_combat_special_prompt'), settings.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT);
+    setValue(el('rpg_combat_passive_prompt'), settings.combatPassiveResolutionPrompt || DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT);
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
     setValue(el('rpg_tactical_combat_spell_compendium'), settings.tacticalCombatSpellCompendiumJson || DEFAULT_SPELL_COMPENDIUM_JSON);
@@ -378,6 +380,7 @@ export function bindTacticalCombatSettings(deps) {
         ['rpg_tactical_combat_encounter_prompt', 'tacticalCombatEncounterPrompt', DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT],
         ['rpg_tactical_combat_outcome_prompt', 'tacticalCombatOutcomePrompt', DEFAULT_TACTICAL_OUTCOME_PROMPT],
         ['rpg_tactical_combat_special_prompt', 'tacticalCombatSpecialPrompt', DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT],
+        ['rpg_combat_passive_prompt', 'combatPassiveResolutionPrompt', DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT],
     ]) {
         const node = el(id);
         if (!node) continue;

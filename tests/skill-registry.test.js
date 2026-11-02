@@ -10,10 +10,11 @@ import {
     findSkillRegistryEntry,
     normalizeSkillRegistry,
     registerSkillsFromUnits,
+    rememberPassiveResolution,
     rememberSpecialResolution,
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
-import { resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { resolvePassiveRecipeWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
 import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
     createEncounterState,
@@ -51,6 +52,38 @@ function makeSettings() {
         tacticalCombatMaxTokens: 4000,
     };
 }
+
+describe('passive compiler', () => {
+    it('compiles a prose passive and caches the trigger/effect recipe', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'hit', attack: 'melee', action: 'any', limit: 'per-hit' },
+            effects: [
+                { type: 'drain', target: '$target', amount: '1d6', resource: 'hp', healRatio: 0.5 },
+                { type: 'status', target: '$target', label: 'Bleed', rounds: 1, damage: '1d4', damageResource: 'hp', damageType: 'Arts' },
+            ],
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Blood Bank',
+            type: 'ability',
+            brief: 'Passive: each melee hit drains 1d6 HP and heals half; lingering bleed 1d4 Arts damage next turn.',
+            owners: [{ type: 'character', name: 'Entelechia' }],
+            mechanics: { kind: 'heal', heal: '1d6', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, { mode: 'tactical' });
+        expect(compiled.ok).toBe(true);
+        expect(compiled.trigger).toMatchObject({ event: 'hit', attack: 'melee' });
+        expect(compiled.effects[0]).toMatchObject({ type: 'drain', amount: '1d6', healRatio: 0.5 });
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+
+        const remembered = rememberPassiveResolution(settings, entry, compiled.trigger, compiled.effects);
+        expect(remembered.entry.mechanics.passive).toBe(true);
+        expect(remembered.entry.mechanics.trigger).toMatchObject({ event: 'hit', attack: 'melee' });
+        expect(remembered.entry.mechanics.effectTemplate[0].type).toBe('drain');
+        expect(findSkillRegistryEntry(settings, 'Blood Bank').status).toBe('resolved');
+    });
+});
 
 describe('skill registry normalization and merge', () => {
     it('normalizes skills, classes, and forms into one versioned registry', () => {

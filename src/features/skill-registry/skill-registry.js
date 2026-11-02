@@ -22,8 +22,12 @@ import {
     sanitizeEffectTemplate,
     summarizeEffectTemplate,
 } from '../tactical-combat/tactical-combat-effect-template.js';
+import {
+    describePassiveTrigger,
+    normalizePassiveTrigger,
+} from '../tactical-combat/tactical-combat-passives.js';
 
-export const SKILL_REGISTRY_VERSION = 1;
+export const SKILL_REGISTRY_VERSION = 2;
 export const MAX_REGISTRY_SKILLS = 400;
 export const MAX_REGISTRY_FORMS = 120;
 export const MAX_REGISTRY_CLASSES = 80;
@@ -115,14 +119,16 @@ function mergeOwners(...lists) {
 
 function normalizeMechanics(raw = {}) {
     const source = raw && typeof raw === 'object' ? raw : {};
+    const passive = source.passive === true;
     const kindRaw = stringValue(source.kind, 20).toLowerCase();
     const effectTemplate = sanitizeEffectTemplate(source.effectTemplate ?? source.effects ?? source.template, { max: 16 });
     const kind = SKILL_KINDS.has(kindRaw)
         ? kindRaw
-        : (effectTemplate.length ? 'special' : 'attack');
+        : (passive || effectTemplate.length ? 'special' : 'attack');
     const resourceRaw = stringValue(source.resource, 12).toLowerCase();
     const targetRaw = stringValue(source.target, 12).toLowerCase();
     const saveRaw = stringValue(source.save, 12).toLowerCase();
+    const unlimited = passive || source.unlimited === true;
     return {
         kind,
         resource: ['hp', 'willpower', 'both'].includes(resourceRaw) ? resourceRaw : 'hp',
@@ -141,8 +147,10 @@ function normalizeMechanics(raw = {}) {
         bonusAction: source.bonusAction === true,
         save: ['str', 'dex', 'con', 'int', 'wis', 'will', 'cha'].includes(saveRaw) ? saveRaw : '',
         utility: source.utility === true,
-        maxUses: source.maxUses == null ? null : clampInt(source.maxUses, 0, 99, 0),
-        unlimited: source.unlimited === true,
+        maxUses: unlimited ? 0 : (source.maxUses == null ? null : clampInt(source.maxUses, 0, 99, 0)),
+        unlimited,
+        passive,
+        trigger: passive ? normalizePassiveTrigger(source.trigger) : null,
         effectTemplate,
     };
 }
@@ -195,14 +203,21 @@ export function normalizeSkillRegistryEntry(raw, fallbackKey = '') {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const name = stringValue(raw.name || raw.label || titleFromKey(fallbackKey), 80).trim();
     if (!name) return null;
-    const mechanics = normalizeMechanics(raw.mechanics || raw);
     const typeRaw = stringValue(raw.type || raw.category || (raw.spell === true ? 'spell' : ''), 20).toLowerCase();
     const type = SKILL_TYPES.has(typeRaw)
         ? typeRaw
         : (raw.spell === true ? 'spell' : 'ability');
+    const brief = stringValue(raw.brief || raw.description || '', 400).trim();
+    const passiveHint = raw.passive === true
+        || raw.mechanics?.passive === true
+        || /^\s*passive\b/i.test(brief)
+        || ((type === 'trait' || type === 'class-feature') && raw.active !== true);
+    const mechanics = normalizeMechanics({
+        ...(raw.mechanics && typeof raw.mechanics === 'object' ? raw.mechanics : raw),
+        passive: passiveHint,
+    });
     const aliases = normalizeAliases(raw.aliases, name);
     const status = normalizeStatus(raw.status, mechanics);
-    const brief = stringValue(raw.brief || raw.description || '', 400).trim();
     const entry = {
         id: slugifySkill(raw.id || name, 'skill'),
         name,
@@ -216,9 +231,11 @@ export function normalizeSkillRegistryEntry(raw, fallbackKey = '') {
         owners: normalizeOwners(raw.owners),
         check: normalizeCheck(raw.check, mechanics, type),
         mechanics,
-        effectSummary: stringValue(raw.effectSummary, 300)
-            || summarizeEffectTemplate(mechanics.effectTemplate)
-            || summarizeMechanics(mechanics),
+        effectSummary: (mechanics.passive || mechanics.effectTemplate.length)
+            ? (summarizeEffectTemplate(mechanics.effectTemplate) || summarizeMechanics(mechanics))
+            : (stringValue(raw.effectSummary, 300)
+                || summarizeEffectTemplate(mechanics.effectTemplate)
+                || summarizeMechanics(mechanics)),
         resolutionCount: clampInt(raw.resolutionCount, 0, 999999, 0),
         resolvedAt: clampInt(raw.resolvedAt, 0, Number.MAX_SAFE_INTEGER, 0),
         firstSeenAt: clampInt(raw.firstSeenAt, 0, Number.MAX_SAFE_INTEGER, 0),
@@ -231,6 +248,7 @@ export function normalizeSkillRegistryEntry(raw, fallbackKey = '') {
 function summarizeMechanics(mechanics) {
     if (!mechanics) return '';
     const bits = [];
+    if (mechanics.passive) bits.push(`Passive ${describePassiveTrigger(mechanics.trigger)}`);
     if (mechanics.kind === 'attack') {
         bits.push(mechanics.damage ? `${mechanics.damage} damage` : 'attack');
     } else if (mechanics.kind === 'heal') {
@@ -247,7 +265,7 @@ function summarizeMechanics(mechanics) {
     if (mechanics.range != null) bits.push(`range ${mechanics.range}`);
     if (mechanics.area) bits.push(`${mechanics.area.origin === 'self' ? 'aura' : 'burst'} ${mechanics.area.radius}`);
     if (mechanics.save) bits.push(`${mechanics.save.toUpperCase()} save`);
-    if (mechanics.maxUses != null && !mechanics.unlimited) bits.push(`${mechanics.maxUses} use(s)`);
+    if (!mechanics.passive && mechanics.maxUses != null && !mechanics.unlimited) bits.push(`${mechanics.maxUses} use(s)`);
     return bits.join(' · ').slice(0, 300);
 }
 
@@ -538,6 +556,8 @@ function mergeEntryMechanics(existing, incoming, opts = {}) {
         if (incoming.bonusAction) out.bonusAction = true;
         if (incoming.save) out.save = incoming.save;
         if (incoming.utility) out.utility = true;
+        if (incoming.passive) out.passive = true;
+        if (incoming.trigger) out.trigger = cloneJson(incoming.trigger);
         if (incoming.maxUses != null) out.maxUses = incoming.maxUses;
         if (incoming.unlimited) out.unlimited = true;
     } else if (!existing.effectTemplate.length && incoming.effectTemplate.length) {
@@ -699,6 +719,8 @@ export function registryEntryToDefinition(entry) {
         save: mechanics.save,
         check: entry.check ? cloneJson(entry.check) : undefined,
         utility: mechanics.utility,
+        passive: mechanics.passive === true,
+        trigger: mechanics.passive ? cloneJson(mechanics.trigger) : null,
         description: entry.brief || '',
         maxUses: mechanics.maxUses,
         unlimited: mechanics.unlimited,
@@ -797,6 +819,8 @@ function entryFromSkill(skill, options = {}) {
             bonusAction: skill.bonusAction,
             save: skill.save,
             utility: skill.utility,
+            passive: skill.passive === true,
+            trigger: skill.passive ? cloneJson(skill.trigger) : null,
             maxUses: skill.maxUses,
             unlimited: skill.unlimited,
             effectTemplate: skill.effectTemplate || [],
@@ -857,7 +881,7 @@ export function registerSkillsFromUnits(settings, units = {}, options = {}) {
         const owners = ownerForUnit(unit);
         for (const skill of unit?.skills || []) {
             if (skill?.source === 'fallback' || skill?.synthetic === true) continue;
-            if (!friendly && skill.kind !== 'special' && !(skill.effectTemplate && skill.effectTemplate.length)) continue;
+            if (!friendly && skill.kind !== 'special' && !skill.passive && !(skill.effectTemplate && skill.effectTemplate.length)) continue;
             const raw = entryFromSkill(skill, { source: options.source || 'memo', owners });
             if (!raw) continue;
             const result = upsertSkillRegistryEntry(registry, raw, { force: false });
@@ -1037,8 +1061,8 @@ export function canonicalizeSpecialEffects(effects, ctx = {}) {
     }
     template.push(...untargeted.map(cloneJson));
     const order = {
-        damage: 0, heal: 1, status: 2, defeat: 3, cure: 4, transform: 5,
-        terrain: 6, summon: 7, log: 8,
+        damage: 0, drain: 1, heal: 2, status: 3, defeat: 4, cure: 5, transform: 6,
+        terrain: 7, summon: 8, log: 9,
     };
     template.sort((a, b) => {
         const orderDiff = (order[a.type] ?? 99) - (order[b.type] ?? 99);
@@ -1057,8 +1081,61 @@ export function canonicalizeSpecialEffects(effects, ctx = {}) {
  * @param {{ force?: boolean, keepLogs?: boolean }} [options]
  * @returns {{ entry: object|null, forms: object[] }}
  */
-export function rememberSpecialResolution(settings, prepared, source, effects, options = {}) {
+/**
+ * Store an AI-compiled passive recipe. The result is authoritative until the
+ * entry is explicitly re-resolved.
+ * @param {Record<string, any>} settings
+ * @param {object} entry existing registry entry (or a minimal entry-like object)
+ * @param {any} trigger
+ * @param {object[]} effects
+ * @param {{ force?: boolean }} [options]
+ * @returns {{ entry: object|null, effects: object[] }}
+ */
+export function rememberPassiveResolution(settings, entry, trigger, effects, options = {}) {
     const registry = ensureSkillRegistry(settings);
+    const existing = entry?.name ? findSkillRegistryEntry(registry, entry.name) : null;
+    const source = existing || (entry && typeof entry === 'object' ? entry : null);
+    if (!source?.name) return { entry: null, effects: [] };
+    if (existing?.locked && options.force !== true) {
+        existing.lastSeenAt = Date.now();
+        return { entry: existing, effects: [] };
+    }
+    const sanitized = sanitizeEffectTemplate(effects, { max: 16 });
+    const raw = {
+        name: source.name,
+        type: source.type || 'ability',
+        brief: source.brief || '',
+        aliases: source.aliases || [],
+        tags: source.tags || [],
+        source: 'resolver',
+        status: 'resolved',
+        owners: source.owners || [],
+        check: source.check,
+        mechanics: {
+            ...(source.mechanics || {}),
+            kind: source.mechanics?.kind || 'special',
+            passive: true,
+            trigger: normalizePassiveTrigger(trigger),
+            effectTemplate: sanitized,
+            unlimited: true,
+            maxUses: 0,
+        },
+        effectSummary: summarizeEffectTemplate(sanitized),
+        resolutionCount: (existing?.resolutionCount || 0) + 1,
+        resolvedAt: Date.now(),
+    };
+    const result = upsertSkillRegistryEntry(registry, raw, { force: options.force === true });
+    if (result.entry) {
+        result.entry.status = result.entry.conflicts?.length ? 'conflict' : 'resolved';
+        result.entry.resolvedAt = Date.now();
+        result.entry.effectSummary = summarizeEffectTemplate(result.entry.mechanics.effectTemplate)
+            || raw.effectSummary;
+    }
+    registry.updatedAt = Date.now();
+    return { entry: result.entry, effects: result.entry?.mechanics?.effectTemplate || sanitized };
+}
+
+export function rememberSpecialResolution(settings, prepared, source, effects, options = {}) {    const registry = ensureSkillRegistry(settings);
     const caster = prepared?.unit || null;
     const targets = Array.isArray(prepared?.targets) && prepared.targets.length
         ? prepared.targets

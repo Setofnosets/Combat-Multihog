@@ -2400,7 +2400,7 @@
                                 <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
                             </div>
                             <div class="inline-drawer-content">
-                                <div class="rt-tc-settings-note">Per-chat ledger of discovered skills, spells, abilities, items, classes, and transformation forms. Special effects are recorded once and reused deterministically on later uses. Entries marked <code>locked</code> are protected from auto-discovery. This JSON is authoritative for the current chat; the mirror lorebook is only a readable backup.</div>
+                                <div class="rt-tc-settings-note">Per-chat ledger of discovered skills, spells, abilities, items, classes, and transformation forms. Special effects are recorded once and reused deterministically on later uses. Passive entries use <code>mechanics.passive</code>, <code>mechanics.trigger</code>, and <code>mechanics.effectTemplate</code>; the AI compiler fills those from prose once, then the engine resolves them automatically. Entries marked <code>locked</code> are protected from auto-discovery. This JSON is authoritative for the current chat; the mirror lorebook is only a readable backup.</div>
                                 <div class="rt-tc-field">
                                     <label for="rpg_tactical_combat_skill_registry">Campaign registry (JSON)</label>
                                     <textarea id="rpg_tactical_combat_skill_registry" class="text_pole rt-tc-catalog-input" rows="16" spellcheck="false"></textarea>
@@ -2417,6 +2417,22 @@
                                         <button type="button" id="rpg_tactical_combat_skill_registry_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Clear campaign registry</button>
                                         <button type="button" id="rpg_tactical_combat_skill_registry_clear_resolved" class="menu_button interactable"><i class="fa-solid fa-eraser"></i> Clear resolved recipes</button>
                                     </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="inline-drawer">
+                            <div class="inline-drawer-toggle inline-drawer-header">
+                                <i class="fa-solid fa-wind" style="margin-right: 6px; opacity: 0.65;"></i>
+                                <b>Passive Ability Compiler</b>
+                                <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                            </div>
+                            <div class="inline-drawer-content">
+                                <div class="rt-tc-settings-note">Passive traits are compiled once into a trigger + effect recipe and stored in the Campaign Skill Registry. The engine then resolves them automatically; it does not call the model on every hit. This prompt turns prose such as “each melee hit drains 1d6 HP and applies a lingering bleed” into deterministic engine primitives.</div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_combat_passive_prompt">Passive compiler prompt</label>
+                                    <textarea id="rpg_combat_passive_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <button type="button" id="rpg_combat_passive_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset passive compiler prompt</button>
                                 </div>
                             </div>
                         </div>
