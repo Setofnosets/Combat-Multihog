@@ -33,7 +33,10 @@ import {
     normalizeWillpowerResource,
 } from './tactical-combat-willpower.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
+import { describePassiveTrigger, normalizePassiveTrigger } from './tactical-combat-passives.js';
+import { sanitizeEffectTemplate } from './tactical-combat-effect-template.js';
 import {
+    DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
@@ -65,10 +68,10 @@ import {
     findSkillRegistryEntry,
     getSkillRegistry,
     registryEntryToDefinition,
+    rememberPassiveResolution,
     rememberSpecialResolution,
 } from '../skill-registry/skill-registry.js';
-import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
-
+import { markSkillRegistryDirty, persistSkillRegistry } from '../skill-registry/skill-registry-store.js';
 const MAX_CORRECTION_ATTEMPTS = 2;
 const MAX_SPECIAL_RESOLUTIONS_PER_TURN = 2;
 
@@ -168,7 +171,7 @@ function compactUnitForContext(unit) {
         willpowerDamage: unit.willpowerDamage || '',
         attackWillpowerOutcome: unit.attackWillpowerOutcome || 'defeat',
         initiativeBonus: unit.initiativeBonus,
-        skills: (unit.skills || []).map(skill => ({
+        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => ({
             name: skill.name,
             kind: skill.kind,
             resource: skill.resource || 'hp',
@@ -182,6 +185,12 @@ function compactUnitForContext(unit) {
             bonusAction: !!skill.bonusAction,
             description: skill.description || '',
             effectTemplate: Array.isArray(skill.effectTemplate) ? skill.effectTemplate : undefined,
+        })),
+        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+            name: skill.name,
+            description: skill.description || '',
+            trigger: describePassiveTrigger(skill.trigger),
+            resolved: Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0,
         })),
         items: (unit.items || []).map(item => ({
             name: item.name,
@@ -216,6 +225,8 @@ function compactRegistrySkill(entry) {
         brief: String(entry.brief || '').slice(0, 240),
         effect: String(entry.effectSummary || '').slice(0, 240),
         kind: entry.mechanics?.kind || 'special',
+        passive: entry.mechanics?.passive === true,
+        trigger: entry.mechanics?.passive ? describePassiveTrigger(entry.mechanics.trigger) : '',
         tags: Array.isArray(entry.tags) ? entry.tags.slice(0, 8) : [],
         owners: Array.isArray(entry.owners) ? entry.owners.slice(0, 6).map(owner => owner.name) : [],
     };
@@ -319,6 +330,16 @@ function applyRegistryDefinitionToSkill(skill, registry) {
     if (!entry) return skill;
     const definition = registryEntryToDefinition(entry);
     if (!definition) return skill;
+    if (definition.passive === true) {
+        skill.passive = true;
+        skill.trigger = normalizePassiveTrigger(definition.trigger);
+        skill.unlimited = true;
+        skill.maxUses = 0;
+        skill.uses = 0;
+    }
+    if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
+        skill.effectTemplate = definition.effectTemplate;
+    }
     if ((entry.status === 'resolved' || entry.status === 'confirmed' || entry.locked)
         && definition.kind === 'special') {
         skill.kind = 'special';
@@ -425,7 +446,10 @@ export function normalizeEncounterPayload(value, options = {}) {
                     attackBonus: numberOr(skill.attackBonus, 0, -5, 10),
                     bonusAction: !!skill.bonusAction,
                     rounds: numberOr(skill.rounds, 2, 1, 10),
-                    maxUses: numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
+                    maxUses: skill.passive === true ? 0 : numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
+                    unlimited: skill.passive === true || skill.unlimited === true,
+                    passive: skill.passive === true,
+                    trigger: skill.passive === true ? normalizePassiveTrigger(skill.trigger) : null,
                     save: String(skill.save || '').toLowerCase().slice(0, 8),
                     spell: skill.spell === true,
                     effectTemplate: Array.isArray(skill.effectTemplate)
@@ -778,7 +802,17 @@ function compactSpecialUnit(unit) {
         maxWillpower: unit.maxWillpower,
         willpowerBroken: !!unit.willpowerBroken,
         ac: unit.ac,
-        statuses: (unit.statuses || []).map(status => ({ label: status.label, behavior: status.behavior || '', stacks: status.stacks || 1 })),
+        statuses: (unit.statuses || []).map(status => ({
+            label: status.label,
+            behavior: status.behavior || '',
+            stacks: status.stacks || 1,
+            rounds: Number(status.rounds) || 0,
+            damage: status.damage || '',
+            damageResource: status.damageResource || 'hp',
+            damageType: status.damageType || '',
+            durationMinutes: Number(status.durationMinutes) || 0,
+            permanent: status.permanent === true,
+        })),
     };
 }
 
@@ -890,7 +924,7 @@ export function normalizeSpecialEffects(value, state, options = {}) {
     for (const raw of list) {
         if (!raw || typeof raw !== 'object') continue;
         const type = String(raw.type || '').toLowerCase();
-        if (type === 'damage' || type === 'heal' || type === 'status' || type === 'cure') {
+        if (type === 'damage' || type === 'drain' || type === 'heal' || type === 'status' || type === 'cure') {
             const target = state.units.find(unit => unit.id === String(raw.targetId || ''));
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${raw.targetId || ''}".`);
@@ -911,6 +945,17 @@ export function normalizeSpecialEffects(value, state, options = {}) {
                     resource,
                     willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
                 });
+            } else if (type === 'drain') {
+                const amount = String(raw.amount ?? raw.damage ?? '1d6').slice(0, 40);
+                if (!/\d/.test(amount)) { rejected.push('Drain effect needs a dice amount.'); continue; }
+                effects.push({
+                    type,
+                    targetId: target.id,
+                    amount,
+                    resource,
+                    healRatio: Math.max(0, Math.min(1, Number(raw.healRatio ?? 0.5) || 0.5)),
+                    healResource: normalizeWillpowerResource(raw.healResource, 'hp'),
+                });
             } else if (type === 'heal') {
                 const amount = String(raw.amount ?? raw.heal ?? '1d8+2').slice(0, 40);
                 if (!/\d/.test(amount)) { rejected.push('Heal effect needs a dice amount.'); continue; }
@@ -922,16 +967,24 @@ export function normalizeSpecialEffects(value, state, options = {}) {
                     type,
                     targetId: target.id,
                     label: String(raw.label || raw.name || 'Afflicted').slice(0, 60),
-                    rounds: numberOr(raw.rounds, 2, 1, 10),
+                    rounds: raw.rounds == null
+                        ? (raw.permanent === true || Number(raw.durationMinutes) > 0 ? 0 : 2)
+                        : numberOr(raw.rounds, 0, 0, 99),
                     acBonus: numberOr(raw.acBonus, 0, -10, 10),
                     attackBonus: numberOr(raw.attackBonus, 0, -10, 10),
                     damage: String(raw.damage || '').slice(0, 40),
                     damageResource: normalizeWillpowerResource(raw.damageResource ?? raw.resource, 'hp'),
+                    damageType: String(raw.damageType || '').slice(0, 20),
                     willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
                     behavior: normalizeStatusBehavior(raw.behavior),
                     sourceId: String(raw.sourceId || '').slice(0, 60),
                     stacks: numberOr(raw.stacks, 1, 1, 5),
                     maxStacks: numberOr(raw.maxStacks, 1, 1, 10),
+                    polarity: ['positive', 'negative'].includes(String(raw.polarity || '').toLowerCase())
+                        ? String(raw.polarity).toLowerCase()
+                        : '',
+                    durationMinutes: raw.durationMinutes == null ? 0 : numberOr(raw.durationMinutes, 0, 0, 99999),
+                    permanent: raw.permanent === true,
                     description: String(raw.description || '').slice(0, 300),
                 });
             }
@@ -1072,6 +1125,222 @@ export function normalizeSpecialEffects(value, state, options = {}) {
         log: String(value?.log || '').slice(0, 500),
         rejected,
     };
+}
+
+/**
+ * Compile a prose passive into a deterministic trigger/effect recipe with one
+ * AI call. The result is cached in the Campaign Skill Registry.
+ * @param {object} entry
+ * @param {Record<string, any>} settings
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional' }} [options]
+ * @returns {Promise<{ ok: boolean, trigger?: object, effects?: object[], error?: string }>}
+ */
+export async function resolvePassiveRecipeWithAgent(entry, settings, options = {}) {
+    if (!entry?.name) return { ok: false, error: 'Missing passive entry.' };
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
+    const chatId = getActiveChatId();
+    const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
+    const payload = {
+        passive: {
+            name: String(entry.name || '').slice(0, 80),
+            type: String(entry.type || 'ability').slice(0, 20),
+            brief: String(entry.brief || '').slice(0, 700),
+            owners: Array.isArray(entry.owners) ? entry.owners.slice(0, 8) : [],
+            mechanics: {
+                kind: entry.mechanics?.kind || 'special',
+                resource: entry.mechanics?.resource || 'hp',
+                range: entry.mechanics?.range ?? null,
+                damage: entry.mechanics?.damage || '',
+                heal: entry.mechanics?.heal || '',
+                target: entry.mechanics?.target || '',
+            },
+        },
+        rules: {
+            supportedEvents: ['hit', 'attacked', 'round-start', 'kill'],
+            supportedAttackFilters: ['melee', 'ranged', 'any'],
+            supportedActionFilters: ['basic', 'skill', 'any'],
+            supportedLimits: ['per-hit', 'per-turn', 'per-round', 'per-encounter'],
+            selectors: ['$caster', '$target'],
+            mode,
+        },
+    };
+    try {
+        const raw = await sendStateRequest(
+            requestSettingsFor(settings, mode),
+            String(settings?.combatPassiveResolutionPrompt || DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT),
+            `## PASSIVE ABILITY\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nReturn only the JSON object with "trigger" and "effects".`,
+            options.signal || null,
+            { stream: false, debugSource: 'Combat Passive Resolver' },
+        );
+        if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
+        const parsed = parseTacticalResponse(raw, 'effects');
+        if (!parsed.value) return { ok: false, error: parsed.error || 'The passive resolver returned no JSON.' };
+        const trigger = normalizePassiveTrigger(parsed.value.trigger);
+        const effects = sanitizeEffectTemplate(parsed.value.effects, { max: 16 })
+            .filter(effect => !effect.targetId)
+            .map(effect => ({
+                ...effect,
+                ...(effect.type === 'status' && effect.damage && !effect.damageResource
+                    ? { damageResource: 'hp' }
+                    : {}),
+            }));
+        if (!effects.length) {
+            return { ok: false, error: 'The passive resolver returned no usable effects.', trigger };
+        }
+        return { ok: true, trigger, effects };
+    } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+    }
+}
+
+/**
+ * Resolve every passive skill in a freshly collected context that does not yet
+ * have a stored recipe. Mutates the context skills in place so the encounter
+ * built immediately afterwards uses the compiled trigger.
+ * @param {object} context
+ * @param {Record<string, any>} settings
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional', chatId?: string }} [options]
+ * @returns {Promise<{ changed: number, warnings: string[] }>}
+ */
+export async function resolvePendingPassives(context, settings, options = {}) {
+    const warnings = [];
+    let changed = 0;
+    const units = [
+        ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
+        ...(Array.isArray(context?.allies) ? context.allies : []),
+    ];
+    const recipes = new Map();
+    const failed = new Set();
+    const applyRecipe = (skill, recipe) => {
+        if (!recipe) return false;
+        skill.trigger = normalizePassiveTrigger(recipe.trigger);
+        skill.effectTemplate = recipe.effects;
+        skill.registryId = recipe.registryId || skill.registryId || '';
+        skill.registryStatus = 'resolved';
+        return true;
+    };
+    for (const unit of units) {
+        for (const skill of unit?.skills || []) {
+            if (skill?.passive !== true) continue;
+            const key = String(skill.name || '').trim().toLowerCase();
+            if (!key) continue;
+            if (recipes.has(key)) {
+                applyRecipe(skill, recipes.get(key));
+                continue;
+            }
+            if (failed.has(key)) continue;
+            const existingEntry = findSkillRegistryEntry(settings, skill.name, { ownerName: unit.name });
+            const existingTemplate = existingEntry?.mechanics?.effectTemplate;
+            if (Array.isArray(existingTemplate) && existingTemplate.length) {
+                const recipe = {
+                    trigger: existingEntry.mechanics.trigger,
+                    effects: existingTemplate,
+                    registryId: existingEntry.id || '',
+                };
+                recipes.set(key, recipe);
+                applyRecipe(skill, recipe);
+                continue;
+            }
+            const entry = existingEntry || {
+                name: skill.name,
+                type: 'ability',
+                brief: skill.description || '',
+                owners: [{ type: 'character', name: unit.name }],
+                mechanics: {
+                    kind: skill.kind,
+                    resource: skill.resource,
+                    range: skill.range,
+                    damage: skill.damage,
+                    heal: skill.heal,
+                    target: skill.target,
+                },
+            };
+            const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
+                signal: options.signal,
+                mode: options.mode,
+            });
+            if (!compiled.ok) {
+                failed.add(key);
+                warnings.push(`${skill.name} could not be compiled into a passive recipe: ${compiled.error || 'unknown error'}. It will remain read-only.`);
+                continue;
+            }
+            const remembered = rememberPassiveResolution(settings, entry, compiled.trigger, compiled.effects);
+            const recipe = {
+                trigger: remembered.entry?.mechanics?.trigger || compiled.trigger,
+                effects: remembered.entry?.mechanics?.effectTemplate || compiled.effects,
+                registryId: remembered.entry?.id || '',
+            };
+            recipes.set(key, recipe);
+            applyRecipe(skill, recipe);
+            changed += 1;
+        }
+    }
+    if (changed) {
+        const chatId = options.chatId || getActiveChatId();
+        markSkillRegistryDirty(chatId);
+        try {
+            persistSkillRegistry(settings, chatId, { force: false });
+        } catch (error) {
+            if (settings?.debugMode) console.warn('[RPG Tracker] Passive recipe persistence failed:', error);
+        }
+    }
+    return { changed, warnings };
+}
+
+/**
+ * True when a context contains at least one passive without a stored recipe.
+ * @param {object} context
+ * @returns {boolean}
+ */
+export function hasPendingPassiveRecipes(context) {
+    const units = [
+        ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
+        ...(Array.isArray(context?.allies) ? context.allies : []),
+    ];
+    return units.some(unit => (unit?.skills || []).some(skill =>
+        skill?.passive === true && !(Array.isArray(skill.effectTemplate) && skill.effectTemplate.length),
+    ));
+}
+
+/**
+ * Copy freshly compiled passive recipes from a collected context into an
+ * already-built encounter state. Used by the narrator-triggered background
+ * compile path, where the board may be built before the resolver returns.
+ * @param {object} context
+ * @param {object} state
+ * @returns {number} number of skills updated
+ */
+export function applyPassiveRecipesToState(context, state) {
+    const recipeByName = new Map();
+    const units = [
+        ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
+        ...(Array.isArray(context?.allies) ? context.allies : []),
+    ];
+    for (const unit of units) {
+        for (const skill of unit?.skills || []) {
+            if (skill?.passive !== true || !Array.isArray(skill.effectTemplate) || !skill.effectTemplate.length) continue;
+            recipeByName.set(String(skill.name || '').toLowerCase(), {
+                trigger: normalizePassiveTrigger(skill.trigger),
+                effectTemplate: skill.effectTemplate,
+                registryId: skill.registryId || '',
+            });
+        }
+    }
+    if (!recipeByName.size) return 0;
+    let changed = 0;
+    for (const unit of state?.units || []) {
+        for (const skill of unit?.skills || []) {
+            if (skill?.passive !== true || (Array.isArray(skill.effectTemplate) && skill.effectTemplate.length)) continue;
+            const recipe = recipeByName.get(String(skill.name || '').toLowerCase());
+            if (!recipe) continue;
+            skill.trigger = normalizePassiveTrigger(recipe.trigger);
+            skill.effectTemplate = recipe.effectTemplate;
+            skill.registryId = recipe.registryId || skill.registryId || '';
+            skill.registryStatus = 'resolved';
+            changed += 1;
+        }
+    }
+    return changed;
 }
 
 /**

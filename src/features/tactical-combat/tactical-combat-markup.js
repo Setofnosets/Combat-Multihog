@@ -15,6 +15,8 @@ import {
     describeArea,
 } from './tactical-combat-constants.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
+import { describePassiveTrigger } from './tactical-combat-passives.js';
+import { formatStatusCondition } from './tactical-combat-status.js';
 
 export function escapeHtml(value) {
     return String(value ?? '')
@@ -49,9 +51,7 @@ function unitClass(unit) {
 
 function statusChips(unit) {
     const chips = (unit.statuses || []).map(status => {
-        const stacks = Number(status.stacks) || 1;
-        const stackLabel = stacks > 1 ? ` x${stacks}` : '';
-        const label = status.rounds ? `${status.label}${stackLabel} (${status.rounds})` : `${status.label}${stackLabel}`;
+        const label = formatStatusCondition(status);
         return `<span class="rt-tc-chip rt-tc-chip-status">${escapeHtml(label)}</span>`;
     });
     if (unit.defending) chips.push('<span class="rt-tc-chip rt-tc-chip-status">Defending (+4 AC)</span>');
@@ -241,7 +241,8 @@ function renderUnitCard(state, view) {
     const hpPct = pct(unit.hp, unit.maxHp);
     const wpPct = unit.maxWillpower ? pct(unit.willpower, unit.maxWillpower) : 0;
     const movementLeft = Math.max(0, (Number(unit.speed) || 0) - (Number(unit.movementUsed) || 0));
-    const skills = unit.skills || [];
+    const skills = (unit.skills || []).filter(skill => !skill.passive);
+    const passives = (unit.skills || []).filter(skill => skill.passive);
     const items = unit.items || [];
     const catalogEntry = type => (state.actionCatalog || []).find(entry => entry.type === type);
     const actionLabel = (type, fallback) => escapeHtml(catalogEntry(type)?.label || fallback);
@@ -281,6 +282,20 @@ function renderUnitCard(state, view) {
                 <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}${skill.bonusAction ? ' · bonus' : ''}</span>
                 <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
+        }).join('')}</div>
+    </div>` : '';
+
+    const passiveList = passives.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Passives</div>
+        <div class="rt-tc-skill-list">${passives.map(skill => {
+            const resolved = Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+            const trigger = describePassiveTrigger(skill.trigger);
+            return `
+            <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
+                <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${trigger}${resolved ? '' : ' · recipe pending'}`)}</span>
+                <span class="rt-tc-skill-uses">PASSIVE</span>
+            </div>`;
         }).join('')}</div>
     </div>` : '';
 
@@ -359,6 +374,7 @@ function renderUnitCard(state, view) {
         ${!state.deployment?.active && view.mode === 'attack' ? '<div class="rt-tc-hint">Choose a highlighted enemy to attack.</div>' : ''}
         ${!state.deployment?.active && view.mode === 'move' ? '<div class="rt-tc-hint">Choose a highlighted cell to move.</div>' : ''}
         ${skillList}
+        ${passiveList}
         ${itemList}
         ${inventoryList}
         ${endUnit}

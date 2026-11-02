@@ -89,12 +89,13 @@ The grid is 8-directional. Line of sight uses a Bresenham line and is blocked by
 - **Actions**: Move, Attack, Skill, Item, Defend, Wait, Flee. A unit can move before or after its main action. Bonus-action skills consume the bonus slot instead.
 - **Resources**: movement per turn, one main action, one bonus action, one reaction slot (reserved for future extensions).
 - **Skills** are parsed from `Abilities:` and `Spells:` lines. The parser infers attack/heal/buff, range, damage, uses, bonus-action usage, and optional burst/aura area templates. A class-appropriate fallback skill is granted if nothing parses.
+- **Passives** are abilities marked `passive: true` (or whose brief starts with `Passive:`) in the Campaign Skill Registry. They are compiled once by the AI passive resolver into a `trigger` + `effectTemplate` recipe, cached in the registry, and then executed deterministically. Passive abilities never appear as clickable actions or consume an action/use. Blood Bank, for example, compiles to an on-melee-hit `drain 1d6` (heal half of effective damage) plus a one-turn Bleed status. An owned registry passive is attached to its character/class automatically even if it was omitted from `[ABILITIES]`.
 - **Items** are parsed from `[INVENTORY]` lines containing potions/elixirs/tonics. The player character gets two healing potions if nothing parses.
 - **Inventory ownership**: every combatant now exposes gear parsed from their own `Gear:`/`Att/def:` line in the board's Inventory panel. The player character's dedicated `[INVENTORY]` block is merged on top of their sheet gear, and only its consumables become clickable items.
 - **Separate loadout blocks**: `[ABILITIES]`, `[SPELLS]`, and `[INVENTORY]` describe the player character only and are parsed independently of `[CHARACTER]`. Companion abilities and spells belong inside each companion's `[PARTY]` entry. The board filters companion-owned duplicates out of the player character's standalone loadout, so a stray party spell cannot become a PC spell. Both the encounter architect and the combat agent still receive every unit's own abilities, spells, consumables, and inventory context. Gear and other inventory entries are shown in the board's Inventory panel; consumables/scrolls/vials become usable board items. Items such as a Restoration Vial use the special resolver with `cure` effects.
 - **Defeat**: a unit at 0 HP is defeated and remains on the board as a faded corpse. Corpse markers are non-interactive scenery: they do not block movement, deployment, or targeting, and a live unit standing on a corpse tile remains the clickable occupant. Victory = every enemy defeated. Defeat = every player unit defeated. Retreat = every player unit fled or the player presses Retreat.
 - **Hazards** damage all units standing on them at the start of each round.
-- **Statuses** tick at the start of each round; damage-over-time effects are applied then. Defend grants +4 AC for the current round.
+- **Statuses** tick at the start of each round; damage-over-time effects are applied then. Statuses use the State Tracker's `(+)/(-) Label (effect, duration)` format. Surviving conditions are written back to `[CHARACTER]`/`[PARTY]` when combat ends, then re-imported by the next encounter. A carried condition ticks once at the start of round 1. Time-based out-of-combat durations remain the State Tracker's responsibility using the normal `[TIME]` delta rules. Defend grants +4 AC for the current round.
 
 ### Turn styles
 
@@ -112,7 +113,8 @@ Ordinary attacks, heals, and buffs are resolved by the pure engine with no extra
 
 - Click the skill/item, then a target on the board (self is valid for summons/terrain).
 - One compact resolver call sends only the ability, caster, target, and local battlefield state.
-- The resolver returns a small JSON effect list: `damage`, `heal`, `status`, `terrain`, `summon`, `defeat`, `transform`, `cure`, or `log`.
+- The resolver returns a small JSON effect list: `damage`, `drain`, `heal`, `status`, `terrain`, `summon`, `defeat`, `transform`, `cure`, or `log`.
+- `drain` deals its rolled damage to the target and heals the caster for `healRatio` of the **effective** HP removed. Overkill damage does not heal: a 6-point drain against a 2-HP target heals from 2, not 6.
 - `damage`/`heal` accept `resource: "hp" | "willpower" | "both"`. `damage` with `resource: "willpower"` accepts `willpowerOutcome`.
 - `defeat` is only legal after Willpower reaches 0. Use it for a non-default terminal outcome when another effect has already broken the target.
 - `transform` swaps the target's stats, skills, items, and inventory for the encounter. It is temporary by default and reverts when combat ends; enemy-authored permanent transformations are rejected.

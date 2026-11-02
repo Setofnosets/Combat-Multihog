@@ -12014,6 +12014,17 @@ body.rt-tc-modal-open {
     background: rgba(255, 255, 255, 0.07);
 }
 
+.rt-tc-skill-passive {
+    cursor: default;
+    border-style: dashed;
+    opacity: 0.85;
+}
+
+.rt-tc-skill-passive:hover {
+    border-color: var(--tc-border);
+    background: rgba(255, 255, 255, 0.035);
+}
+
 .rt-tc-skill.is-selected {
     border-color: var(--tc-accent);
     background: rgba(240, 179, 90, 0.13);

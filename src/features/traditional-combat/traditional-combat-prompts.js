@@ -117,6 +117,7 @@ Return exactly ONE JSON object and no prose, no markdown fences:
 
 Allowed effects (use at most 6 total):
 - {"type":"damage","targetId":"enemy-1","amount":"2d6","resource":"hp"}
+- {"type":"drain","targetId":"enemy-1","amount":"1d6","resource":"hp","healRatio":0.5}
 - {"type":"damage","targetId":"pc-1","amount":"2d6","resource":"willpower","willpowerOutcome":"flee"}
 - {"type":"damage","targetId":"pc-1","amount":"1d8","resource":"both","willpowerOutcome":"surrender"}
 - {"type":"heal","targetId":"pc-1","amount":"2d8","resource":"hp"}

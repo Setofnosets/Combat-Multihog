@@ -15,8 +15,16 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 - The combat agent receives precomputed `aoeTargets` and can choose a primary target for each area skill; the local tactics fallback prefers multi-target attacks when two or more hostiles are clustered.
 - Area special abilities resolve every affected target in one resolver call with an engine-enforced target allow-list.
 - New board targeting previews: selected abilities always highlight their range, and hovering a cell previews the burst center, affected tiles, valid targets, blocked cells, and friendly-fire warnings. The hover overlay is controlled by **Show area-of-effect hover previews**.
+- **Passive ability compiler** — abilities marked `passive: true` or prefixed with `Passive:` in their brief are compiled once into a deterministic `trigger` + `effectTemplate` recipe and cached in the Campaign Skill Registry. The engine executes them automatically on melee/ranged hits, when hit, at round start, or on kill; they never appear as clickable actions. Owned registry passives are attached to their character/class even when omitted from `[ABILITIES]`.
+- **Drain effect primitive** — `{"type":"drain","amount":"1d6","healRatio":0.5}` deals damage and heals only from effective HP removed, never overkill.
+- **Status persistence** — surviving conditions use the State Tracker's `(+)/(-) Label (effect, duration)` format, are written back to `[CHARACTER]`/`[PARTY]` at combat end, and are re-imported by the next encounter. Carried conditions tick once at round 1; out-of-combat durations follow the normal `[TIME]` rules.
+- **Combat uses `[XP]` level** — unit cards read `Level: N | XP: a/b` or `Total: a / b XP (Level N)` before falling back to the sheet's `Level:`/`HD:` line.
+- **Passive compiler prompt** — Settings → Combat now exposes the editable passive-resolution prompt.
 
 ### Fixed
+- Unlimited abilities with `maxUses: 0` no longer render as unusable `0/0` skills.
+- One-round control statuses now survive the round-start decrement so they can skip the affected unit's turn.
+- Non-special attack skills now apply their `effectTemplate` on a successful hit, enabling bleeding/riders without marking the skill `special`.
 - Switching **Combat style** no longer gets stuck behind an encounter you cannot find. The guard now ignores `preparing`/`finalizing` markers left by a previous page session (the job that owned them died with the reload) and expires a stuck finalization after 90 seconds. Real open boards still block the switch, but the Combat pane lists each one with its chat name and offers **Clear open encounters**, which removes those boards, cleans the active chat's `[COMBAT]` block and pending narration, and then applies the style you selected. Finished boards are kept.
 
 ## [2026.10.3] - 2026-10-25

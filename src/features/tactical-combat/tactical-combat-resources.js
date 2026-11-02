@@ -35,12 +35,15 @@ export function parseUsageState(text, options = {}) {
         const max = clampInt(uses[1], 0, 99);
         return { current: max, max, unlimited: false };
     }
+    // A definition can legitimately carry both `maxUses: 0` and
+    // `unlimited: true` (common for passives/at-will abilities). Explicit usage
+    // text still wins above; otherwise unlimited wins over a zero fallback.
+    if (options.fallbackUnlimited === true) {
+        return { current: null, max: null, unlimited: true };
+    }
     if (options.fallbackMax != null && Number.isFinite(Number(options.fallbackMax))) {
         const max = clampInt(options.fallbackMax, 0, 99);
         return { current: max, max, unlimited: false };
-    }
-    if (options.fallbackUnlimited === true) {
-        return { current: null, max: null, unlimited: true };
     }
     return { current: null, max: null, unlimited: true };
 }
@@ -373,6 +376,7 @@ export function patchAbilityLine(line, skills) {
         if (!match) return part;
         const skill = byName.get(match[2].trim().toLowerCase());
         if (!skill) return part;
+        if (skill.passive === true) return part;
         const resource = describeResource(skill, { skills: skills || [] });
         if (resource.unlimited || resource.max <= 0) return part;
         return `${match[1]}${match[2]} (${patchAbilityUsageText(match[3], resource.current, resource.max)})`;
@@ -395,6 +399,7 @@ export function patchStandaloneAbilities(content, skills) {
         if (!match) return rawLine;
         const skill = byName.get(match[2].trim().toLowerCase());
         if (!skill) return rawLine;
+        if (skill.passive === true) return rawLine;
         const resource = describeResource(skill, { skills: skills || [] });
         if (resource.unlimited || resource.max <= 0) return rawLine;
         return `${match[1]}${match[2]} (${patchAbilityUsageText(match[3], resource.current, resource.max)})`;

@@ -47,6 +47,15 @@ import {
     getResourceState,
     hasUses,
 } from './tactical-combat-resources.js';
+import {
+    describePassiveTrigger,
+    normalizePassiveTrigger,
+    passiveMatchesEvent,
+} from './tactical-combat-passives.js';
+import {
+    formatStatusCondition,
+    inferStatusPolarity,
+} from './tactical-combat-status.js';
 
 // ── RNG & dice ───────────────────────────────────────────────────────────────
 
@@ -660,23 +669,36 @@ function safeUnitColor(value, fallback) {
 
 function normalizeStatus(raw) {
     if (!raw || typeof raw !== 'object') return null;
-    const rounds = clampInt(raw.rounds, 1, 99) || 1;
+    const hasTimedDuration = raw.permanent === true || Number(raw.durationMinutes) > 0;
+    const rounds = raw.rounds == null
+        ? (hasTimedDuration ? 0 : 1)
+        : clampInt(raw.rounds, 0, 99);
     const maxStacks = clampInt(raw.maxStacks ?? 1, 1, 10) || 1;
-    return {
-        id: String(raw.id || raw.name || 'status').slice(0, 40),
+    const status = {
+        id: slug(raw.id || raw.name || raw.label || 'status'),
         label: String(raw.label || raw.name || raw.id || 'Status').slice(0, 60),
         rounds,
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
         damage: String(raw.damage || '').trim(),
         damageResource: normalizeWillpowerResource(raw.damageResource || raw.resource, 'hp'),
+        damageType: String(raw.damageType || '').slice(0, 20),
         willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
         behavior: normalizeStatusBehavior(raw.behavior),
         sourceId: String(raw.sourceId || raw.casterId || '').slice(0, 60),
         stacks: clampInt(raw.stacks ?? 1, 1, maxStacks) || 1,
         maxStacks,
         description: String(raw.description || '').slice(0, 300),
+        polarity: String(raw.polarity || '').toLowerCase(),
+        durationMinutes: raw.durationMinutes == null ? 0 : clampInt(raw.durationMinutes, 0, 99999) || 0,
+        permanent: raw.permanent === true,
+        carriedOver: raw.carriedOver === true,
+        expiresAfterTurn: raw.expiresAfterTurn === true,
     };
+    if (status.polarity !== 'positive' && status.polarity !== 'negative') {
+        status.polarity = inferStatusPolarity(status);
+    }
+    return status;
 }
 
 function normalizeSkill(raw, index, side) {
@@ -684,7 +706,8 @@ function normalizeSkill(raw, index, side) {
     const name = String(raw.name || raw.label || `Skill ${index + 1}`).trim().slice(0, 80);
     const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
     const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
-    const unlimited = raw.unlimited === true;
+    const passive = raw.passive === true;
+    const unlimited = passive || raw.unlimited === true;
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
     const resource = normalizeWillpowerResource(raw.resource ?? raw.targetResource ?? raw.stat, 'hp');
     const target = String(raw.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase();
@@ -719,6 +742,8 @@ function normalizeSkill(raw, index, side) {
         slotLevel: raw.slotLevel == null ? null : clampInt(raw.slotLevel, 0, 9),
         slotKey: String(raw.slotKey || ''),
         utility: raw.utility === true,
+        passive,
+        trigger: passive ? normalizePassiveTrigger(raw.trigger) : null,
         unlimited,
         maxUses: unlimited ? 0 : maxUses,
         uses: unlimited ? 0 : (raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses)),
@@ -895,7 +920,10 @@ export function normalizeUnitSeed(seed, meta) {
         surprised: false,
         defeated: false,
         fled: false,
-        statuses: [],
+        statuses: (Array.isArray(seed?.statuses) ? seed.statuses : [])
+            .map(status => normalizeStatus({ ...status, carriedOver: status?.carriedOver !== false }))
+            .filter(Boolean),
+        passiveUsage: {},
         skills,
         spellSlots: seed?.spellSlots && typeof seed.spellSlots === 'object' && !Array.isArray(seed.spellSlots)
             ? Object.fromEntries(Object.entries(seed.spellSlots).map(([key, pool]) => [key, {
@@ -1168,7 +1196,7 @@ function tickStatuses(unit, state, rng) {
     if (!Array.isArray(unit.statuses) || !unit.statuses.length) return;
     const remaining = [];
     for (const status of unit.statuses) {
-        if (status.damage) {
+        if (status.damage && status.expiresAfterTurn !== true) {
             const stacks = Math.max(1, Number(status.stacks) || 1);
             const damage = rollDice(status.damage, rng).total * stacks;
             if (damage > 0) {
@@ -1188,8 +1216,22 @@ function tickStatuses(unit, state, rng) {
                 }
             }
         }
-        status.rounds = Math.max(0, Number(status.rounds || 0) - 1);
-        if (status.rounds > 0 && !unit.defeated) remaining.push(status);
+        if (Number(status.rounds) > 0) {
+            status.rounds = Math.max(0, Number(status.rounds) - 1);
+            if (status.rounds === 0 && status.behavior) status.expiresAfterTurn = true;
+        } else if (status.behavior && status.expiresAfterTurn === true) {
+            // A one-round control effect must survive the round-start decrement
+            // so it can actually skip the affected unit's turn.
+            if (!unit.defeated) addLog(state, 'status', `${status.label} fades from ${unit.name}.`, unit.id);
+            continue;
+        }
+        status.carriedOver = false;
+        const persistent = status.permanent === true || Number(status.durationMinutes) > 0;
+        if (status.rounds > 0 || persistent || status.expiresAfterTurn === true) {
+            if (!unit.defeated) remaining.push(status);
+        } else if (!unit.defeated) {
+            addLog(state, 'status', `${status.label} fades from ${unit.name}.`, unit.id);
+        }
     }
     unit.statuses = remaining;
 }
@@ -1291,9 +1333,20 @@ export function beginRound(state, rng = Math.random, options = {}) {
         if (unit.defeated || unit.fled) continue;
         resetUnitForTurn(unit, state, rng, { initial: !!options.initial });
     }
-    if (!options.initial) {
+    if (options.initial) {
+        // Conditions imported from [CHARACTER]/[PARTY] were already active
+        // before this encounter. They tick once at the start of round 1.
+        for (const unit of livingUnits(state)) {
+            if ((unit.statuses || []).some(status => status.carriedOver === true)) {
+                tickStatuses(unit, state, rng);
+            }
+        }
+    } else {
         for (const unit of livingUnits(state)) applyHazardAtRoundStart(state, unit, rng);
         applyBehaviorAtRoundStart(state, rng);
+    }
+    for (const unit of livingUnits(state)) {
+        applyPassiveTriggers(state, 'round-start', { unit, rng });
     }
 
     // If a DOT or hazard ended the fight, stop before assigning turns.
@@ -1652,15 +1705,17 @@ function applySideChange(state, target, options = {}) {
     }
 }
 
-function addStatus(unit, status) {
+function addStatus(state, unit, status) {
     const normalized = normalizeStatus(status);
     if (!normalized) return;
     unit.statuses = Array.isArray(unit.statuses) ? unit.statuses : [];
     const existing = unit.statuses.find(item => item.id === normalized.id);
-    if (existing && normalized.maxStacks > 1) {
-        existing.stacks = Math.min(normalized.maxStacks, Math.max(1, Number(existing.stacks) || 1) + Math.max(1, normalized.stacks || 1));
+    const stackCap = Math.max(normalized.maxStacks, Number(existing?.maxStacks) || 1);
+    if (existing && stackCap > 1) {
+        existing.maxStacks = stackCap;
+        existing.stacks = Math.min(stackCap, Math.max(1, Number(existing.stacks) || 1) + Math.max(1, normalized.stacks || 1));
         existing.rounds = Math.max(Number(existing.rounds) || 0, normalized.rounds);
-        Object.assign(existing, { ...normalized, stacks: existing.stacks });
+        Object.assign(existing, { ...normalized, stacks: existing.stacks, maxStacks: stackCap });
     } else if (existing) {
         Object.assign(existing, normalized);
     } else {
@@ -1669,6 +1724,10 @@ function addStatus(unit, status) {
     if (normalized.behavior === 'stunned') {
         unit.actionUsed = true;
         unit.doneForRound = true;
+    }
+    if (state) {
+        const duration = formatStatusCondition(normalized);
+        addLog(state, 'status', `${unit.name} gains ${duration}.`, unit.id);
     }
 }
 
@@ -1705,6 +1764,12 @@ function buildFinalUnit(unit) {
             attackBonus: Number(status.attackBonus) || 0,
             behavior: status.behavior || '',
             stacks: Number(status.stacks) || 1,
+            damage: status.damage || '',
+            damageResource: status.damageResource || 'hp',
+            damageType: status.damageType || '',
+            durationMinutes: Number(status.durationMinutes) || 0,
+            permanent: status.permanent === true,
+            polarity: status.polarity || '',
         })),
     };
 }
@@ -2194,7 +2259,7 @@ export function applySpecialEffects(state, effects, options = {}) {
             continue;
         }
         const type = String(effect.type || '').toLowerCase();
-        if (type === 'damage' || type === 'heal' || type === 'status' || type === 'cure') {
+        if (type === 'damage' || type === 'drain' || type === 'heal' || type === 'status' || type === 'cure') {
             const target = getUnitById(state, effect.targetId);
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${effect.targetId}".`);
@@ -2213,6 +2278,29 @@ export function applySpecialEffects(state, effects, options = {}) {
                     });
                 }
                 applied.push({ type, targetId: target.id, amount: hpDamage || willpowerDamage, resource, hpDamage, willpowerDamage });
+            } else if (type === 'drain') {
+                const rolled = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
+                let effective = 0;
+                if (resource === 'hp' || resource === 'both') {
+                    const hpBefore = Math.max(0, Number(target.hp) || 0);
+                    const dealt = applyDamageToUnit(state, target, rolled, label);
+                    effective += Math.min(Math.max(0, dealt), hpBefore);
+                }
+                if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
+                    effective += applyWillpowerDamageToUnit(state, target, rolled, label, {
+                        outcome: effect.willpowerOutcome ?? effect.willOutcome,
+                        casterId: caster.id,
+                    });
+                }
+                const ratio = Math.max(0, Math.min(1, Number(effect.healRatio ?? 0.5)));
+                const healed = healUnit(
+                    state,
+                    caster,
+                    Math.floor(effective * ratio),
+                    label,
+                    normalizeWillpowerResource(effect.healResource, 'hp'),
+                );
+                applied.push({ type, targetId: target.id, amount: effective, healed, resource });
             } else if (type === 'heal') {
                 const amount = rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total;
                 let hpHealed = 0;
@@ -2225,19 +2313,23 @@ export function applySpecialEffects(state, effects, options = {}) {
                 target.statuses = [];
                 applied.push({ type, targetId: target.id, removed });
             } else {
-                addStatus(target, {
+                addStatus(state, target, {
                     id: String(effect.id || effect.label || label).slice(0, 40),
                     label: String(effect.label || effect.name || label).slice(0, 60),
-                    rounds: effect.rounds ?? 2,
+                    rounds: effect.rounds ?? (effect.permanent === true || Number(effect.durationMinutes) > 0 ? 0 : 2),
                     acBonus: effect.acBonus,
                     attackBonus: effect.attackBonus,
                     damage: effect.damage || '',
                     damageResource: effect.damageResource ?? effect.resource,
+                    damageType: effect.damageType || '',
                     willpowerOutcome: effect.willpowerOutcome ?? effect.willOutcome,
                     behavior: effect.behavior,
                     sourceId: effect.sourceId || caster.id,
                     stacks: effect.stacks,
                     maxStacks: effect.maxStacks,
+                    polarity: effect.polarity || '',
+                    durationMinutes: effect.durationMinutes,
+                    permanent: effect.permanent === true,
                     description: effect.description || '',
                 });
                 applied.push({ type, targetId: target.id, label: effect.label || label });
@@ -2472,6 +2564,7 @@ export function prepareSpecialAction(state, action, options = {}) {
     if (action.itemId && !item) return { ok: false, error: `Unknown item "${action.itemId}".` };
     const source = skill || item;
     if (!source) return { ok: false, error: 'Special action needs a skillId or itemId.' };
+    if (source.passive === true) return { ok: false, error: `${source.name} is passive and triggers automatically.` };
     if (source.kind !== 'special') return { ok: false, error: `${source.name} does not require special resolution.` };
     if (!hasUses(source, unit)) return { ok: false, error: `${source.name} has no uses left.` };
     const resourceKey = skill?.bonusAction ? 'bonusUsed' : 'actionUsed';
@@ -2708,6 +2801,101 @@ export function resolveEffectTemplate(effects, ids = {}) {
     return cloneJson(list);
 }
 
+function passiveLimitKey(state, unit, limit) {
+    if (limit === 'per-round') return `r${Number(state?.round) || 1}`;
+    if (limit === 'per-turn') return `r${Number(state?.round) || 1}:t${Number(state?.turnIndex) || 0}:${unit?.id || ''}`;
+    if (limit === 'per-encounter') return 'encounter';
+    return '';
+}
+
+function consumePassiveLimit(state, unit, skill) {
+    const trigger = normalizePassiveTrigger(skill?.trigger);
+    if (trigger.limit === 'per-hit') return true;
+    const key = passiveLimitKey(state, unit, trigger.limit);
+    if (!key) return true;
+    unit.passiveUsage = unit.passiveUsage && typeof unit.passiveUsage === 'object' ? unit.passiveUsage : {};
+    const id = String(skill.id || skill.name || 'passive');
+    const previous = unit.passiveUsage[id];
+    const entry = previous && previous.key === key
+        ? { key, count: Math.max(0, Number(previous.count) || 0) }
+        : { key, count: 0 };
+    if (entry.count >= trigger.count) return false;
+    entry.count += 1;
+    unit.passiveUsage[id] = entry;
+    return true;
+}
+
+function passiveEffectList(state, caster, target, skill) {
+    const targetIds = target ? [target.id] : [];
+    const friendlyIds = caster ? [caster.id] : [];
+    const hostileIds = target && isHostileSide(caster?.side, target.side) ? [target.id] : [];
+    return resolveEffectTemplate(skill?.effectTemplate, {
+        casterId: caster?.id || '',
+        casterName: caster?.name || '',
+        targetId: target?.id || caster?.id || '',
+        targetName: target?.name || '',
+        targetIds,
+        friendlyIds,
+        hostileIds,
+        anchor: target && Number.isFinite(Number(target.x))
+            ? { x: Number(target.x), y: Number(target.y) }
+            : (caster && Number.isFinite(Number(caster.x)) ? { x: Number(caster.x), y: Number(caster.y) } : null),
+        forms: {},
+    });
+}
+
+function applyPassiveSkill(state, caster, target, skill, rng, event) {
+    if (!caster || caster.defeated || caster.fled) return false;
+    if (!Array.isArray(skill?.effectTemplate) || !skill.effectTemplate.length) return false;
+    if (!consumePassiveLimit(state, caster, skill)) return false;
+    const effects = passiveEffectList(state, caster, target, skill);
+    if (!effects.length) return false;
+    addLog(
+        state,
+        'passive',
+        `${caster.name}'s ${skill.name} triggers${event === 'attacked' ? ' when hit' : event === 'round-start' ? ' at round start' : event === 'kill' ? ' on a kill' : ''}.`,
+        caster.id,
+    );
+    applySpecialEffects(state, effects, {
+        casterId: caster.id,
+        label: skill.name,
+        rng,
+        maxEffects: Math.max(8, effects.length),
+    });
+    return true;
+}
+
+function applyPassiveTriggers(state, event, context = {}) {
+    const unit = context.unit;
+    if (!unit || unit.defeated || unit.fled) return 0;
+    let triggered = 0;
+    for (const skill of unit.skills || []) {
+        if (!passiveMatchesEvent(skill, event, context)) continue;
+        const target = event === 'attacked'
+            ? context.attacker
+            : event === 'round-start' ? unit : context.target;
+        if (event !== 'kill' && (!target || target.defeated || target.fled)) continue;
+        if (!target) continue;
+        if (applyPassiveSkill(state, unit, target, skill, context.rng || Math.random, event)) triggered += 1;
+    }
+    return triggered;
+}
+
+function applyAttackSkillRider(state, caster, target, skill, rng) {
+    if (!skill || skill.passive || skill.kind === 'special') return false;
+    if (!Array.isArray(skill.effectTemplate) || !skill.effectTemplate.length) return false;
+    if (!caster || !target || target.defeated || target.fled) return false;
+    const effects = passiveEffectList(state, caster, target, skill);
+    if (!effects.length) return false;
+    applySpecialEffects(state, effects, {
+        casterId: caster.id,
+        label: skill.name,
+        rng,
+        maxEffects: Math.max(8, effects.length),
+    });
+    return true;
+}
+
 function resolveTarget(state, unit, action, options) {
     const targetId = String(action.targetId || options.defaultTargetId || '').trim();
     if (!targetId) return { target: null };
@@ -2758,6 +2946,9 @@ function resolveAreaAttack(state, unit, source, areaResult, options, rng, source
             label,
             consumeAction: false,
             deferEndCheck: true,
+            sourceSkill: source,
+            range: source.range,
+            area: source.area,
         });
         if (result.ok && result.hit) hits += 1;
     }
@@ -2805,7 +2996,7 @@ function resolveAreaBuff(state, unit, source, areaResult) {
         unit.id,
     );
     for (const target of areaResult.targets) {
-        addStatus(target, {
+        addStatus(state, target, {
             id: slug(label, 'buff'),
             label,
             rounds: source.rounds || 2,
@@ -2907,6 +3098,7 @@ export function applyAction(state, action, options = {}) {
         case 'skill': {
             const skill = findSkill(unit, action.skillId);
             if (!skill) return rejectAction(state, action, `Unknown skill "${action.skillId}".`, source);
+            if (skill.passive === true) return rejectAction(state, action, `${skill.name} is passive and triggers automatically.`, source);
             if (skill.kind === 'special') {
                 return rejectAction(state, action, `${skill.name} requires special resolution by the combat agent.`, source);
             }
@@ -2953,6 +3145,9 @@ export function applyAction(state, action, options = {}) {
                     willpowerOutcome: skill.willpowerOutcome,
                     label: skill.name,
                     consumeAction: !skill.bonusAction,
+                    sourceSkill: skill,
+                    range: skill.range,
+                    area: skill.area,
                 });
             }
             if (skill.kind === 'heal') {
@@ -2965,7 +3160,7 @@ export function applyAction(state, action, options = {}) {
                 }
                 addLog(state, 'skill', `${unit.name} uses ${skill.name} on ${target.name}.`, unit.id);
             } else {
-                addStatus(target, {
+                addStatus(state, target, {
                     id: slug(skill.name, 'buff'),
                     label: skill.name,
                     rounds: skill.rounds || 2,
@@ -3020,7 +3215,7 @@ export function applyAction(state, action, options = {}) {
                     healUnit(state, target, amount, item.name, item.resource);
                 }
             } else {
-                addStatus(target, {
+                addStatus(state, target, {
                     id: slug(item.name, 'item'),
                     label: item.name,
                     rounds: item.rounds || 2,
@@ -3036,7 +3231,7 @@ export function applyAction(state, action, options = {}) {
         case 'defend': {
             if (unit.actionUsed) return rejectAction(state, action, `${unit.name} has already used their action.`, source);
             unit.actionUsed = true;
-            addStatus(unit, {
+            addStatus(state, unit, {
                 id: 'defending',
                 label: 'Defending',
                 rounds: 1,
@@ -3341,6 +3536,7 @@ function resolveAttack(state, unit, target, options) {
 
     let hpDamage = 0;
     let willpowerDamage = 0;
+    const targetAliveBefore = !target.defeated;
     if (resource === 'hp' || resource === 'both') {
         hpDamage = rollDamagePool(options.damage || unit.damage || '1d6', crit, rng);
         applyDamageToUnit(state, target, hpDamage, `${unit.name}'s ${label}`);
@@ -3355,6 +3551,40 @@ function resolveAttack(state, unit, target, options) {
         });
     }
     if (options.consumeAction !== false) unit.actionUsed = true;
+
+    const sourceSkill = options.sourceSkill || null;
+    const sourceArea = sourceSkill?.area || options.area || null;
+    const sourceRange = Number(options.range ?? sourceSkill?.range ?? unit.attackRange ?? 1);
+    const attackType = sourceArea?.origin === 'self' ? 'area' : (sourceRange <= 1 ? 'melee' : 'ranged');
+    const actionType = sourceSkill ? 'skill' : 'basic';
+    if (sourceSkill) {
+        applyAttackSkillRider(state, unit, target, sourceSkill, rng);
+    }
+    if (!target.defeated) {
+        applyPassiveTriggers(state, 'hit', {
+            unit,
+            target,
+            rng,
+            attackType,
+            actionType,
+        });
+        applyPassiveTriggers(state, 'attacked', {
+            unit: target,
+            attacker: unit,
+            rng,
+            attackType,
+            actionType,
+        });
+    }
+    if (targetAliveBefore && target.defeated) {
+        applyPassiveTriggers(state, 'kill', {
+            unit,
+            target,
+            rng,
+            attackType,
+            actionType,
+        });
+    }
     if (!options.deferEndCheck) checkEncounterEnd(state);
     const parts = [];
     if (hpDamage) parts.push(`${hpDamage} HP`);
@@ -3418,6 +3648,7 @@ export function describeUnitOptions(state, unit) {
     const skillTargets = {};
     const aoeTargets = {};
     for (const skill of unit.skills || []) {
+        if (skill.passive === true) continue;
         if (!hasUses(skill, unit)) continue;
         const area = normalizeArea(skill.area);
         if (area) {
@@ -3500,7 +3731,15 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
                 maxWillpower: unit.maxWillpower,
                 willpowerBroken: !!unit.willpowerBroken,
                 ac: getEffectiveAc(state, unit),
-                statuses: (unit.statuses || []).map(status => ({ label: status.label, rounds: status.rounds, behavior: status.behavior, stacks: status.stacks })),
+                statuses: (unit.statuses || []).map(status => ({
+                    label: status.label,
+                    rounds: status.rounds,
+                    behavior: status.behavior,
+                    stacks: status.stacks,
+                    damage: status.damage || '',
+                    damageResource: status.damageResource || 'hp',
+                    damageType: status.damageType || '',
+                })),
                 inventory: (unit.inventory || []).slice(0, 20).map(entry => ({
                     name: entry.name,
                     equipped: !!entry.equipped,
@@ -3551,6 +3790,11 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
             attackBonus: status.attackBonus,
             behavior: status.behavior || '',
             stacks: status.stacks || 1,
+            damage: status.damage || '',
+            damageResource: status.damageResource || 'hp',
+            damageType: status.damageType || '',
+            durationMinutes: status.durationMinutes || 0,
+            permanent: status.permanent === true,
         })),
         spellSlots: Object.fromEntries(
             Object.entries(unit.spellSlots || {}).map(([key, pool]) => [key, {
@@ -3560,7 +3804,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         ),
         stats: unit.stats,
         initiative: unit.initiative,
-        skills: (unit.skills || []).map(skill => {
+        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => {
             const resourceState = describeResource(skill, unit);
             return {
                 id: skill.id,
@@ -3587,6 +3831,13 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
                 resolvable: skill.kind === 'special',
             };
         }),
+        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description || '',
+            trigger: describePassiveTrigger(skill.trigger),
+            resolved: Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0,
+        })),
         items: (unit.items || []).map(item => {
             const resourceState = describeResource(item, unit);
             return {
@@ -3899,6 +4150,9 @@ export function hydrateEncounterState(state) {
         unit.willpowerDamage = String(unit.willpowerDamage ?? unit.willDamage ?? '');
         unit.attackWillpowerOutcome = normalizeWillpowerOutcome(unit.attackWillpowerOutcome ?? unit.willOutcome, 'defeat');
         unit.statuses = (Array.isArray(unit.statuses) ? unit.statuses : []).map(status => normalizeStatus(status)).filter(Boolean);
+        unit.passiveUsage = unit.passiveUsage && typeof unit.passiveUsage === 'object' && !Array.isArray(unit.passiveUsage)
+            ? unit.passiveUsage
+            : {};
         unit.skills = (Array.isArray(unit.skills) ? unit.skills : []).map((skill, index) => normalizeSkill(skill, index, unit.side)).filter(Boolean);
         unit.items = (Array.isArray(unit.items) ? unit.items : []).map((item, index) => normalizeItem(item, index)).filter(Boolean);
         ensureSpellSlots(unit);

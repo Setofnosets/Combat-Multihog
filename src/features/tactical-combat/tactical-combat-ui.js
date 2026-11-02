@@ -42,7 +42,10 @@ import {
     inferTerrainTheme,
 } from './tactical-combat-context.js';
 import {
+    applyPassiveRecipesToState,
     generateEncounterWithAgent,
+    hasPendingPassiveRecipes,
+    resolvePendingPassives,
     resolveSpecialSource,
     runAgentTurn,
 } from './tactical-combat-agent.js';
@@ -1601,6 +1604,7 @@ function finalizePreparedEncounter(provisional, settings, options = {}, payload 
     if (!chatId) return false;
     const warnings = [...(provisional.preparing.warnings || [])];
     if (payload.error) warnings.push(String(payload.error));
+    if (Array.isArray(payload.warnings)) warnings.push(...payload.warnings);
 
     let next = provisional;
     if (payload.encounter?.enemies?.length) {
@@ -1658,6 +1662,17 @@ async function runDeferredEncounterArchitect(provisional, settings, options = {}
     render();
     try {
         const context = collectStartContext(settings, options);
+        let passiveWarnings = [];
+        if (hasPendingPassiveRecipes(context)) {
+            setBusy(true, 'Compiling passive abilities…', true);
+            render();
+            const compiled = await resolvePendingPassives(context, getSettings(), {
+                signal: controller.signal,
+                mode: 'tactical',
+                chatId,
+            });
+            passiveWarnings = compiled.warnings;
+        }
         const generated = await generateEncounterWithAgent(context, settings, { signal: controller.signal });
         if (controller.signal.aborted || ui.architectToken !== token || getActiveChatId() !== chatId) return false;
         const latest = getEncounterForChat(chatId, getSettings());
@@ -1665,12 +1680,14 @@ async function runDeferredEncounterArchitect(provisional, settings, options = {}
         if (!generated.ok) {
             return finalizePreparedEncounter(latest, getSettings(), options, {
                 context,
+                warnings: passiveWarnings,
                 error: generated.error || 'The encounter architect did not return a usable encounter.',
             });
         }
         return finalizePreparedEncounter(latest, getSettings(), options, {
             encounter: generated.encounter,
             context,
+            warnings: passiveWarnings,
         });
     } catch (error) {
         if (controller.signal.aborted) return false;
@@ -1790,6 +1807,27 @@ async function startEncounterFlow(options = {}) {
     // still running. Defer that path until the generation ends. The provisional
     // board is hidden behind a preparing screen and is replaced by the architect.
     const deferArchitect = needsAgent && options.fromNarrator === true;
+    const pendingPassivesBeforeBuild = hasPendingPassiveRecipes(context);
+    const backgroundPassiveCompile = options.fromNarrator === true && !deferArchitect && pendingPassivesBeforeBuild;
+    if (!options.fromNarrator && pendingPassivesBeforeBuild) {
+        setBusy(true, 'Compiling passive abilities…', true);
+        render();
+        const compiled = await resolvePendingPassives(context, settings, {
+            signal: controller.signal,
+            mode: 'tactical',
+            chatId: context.chatId,
+        });
+        warnings.push(...compiled.warnings);
+        if (controller.signal.aborted) {
+            if (ui.abortController === controller) ui.abortController = null;
+            ui.starting = false;
+            setBusy(false);
+            render();
+            return { ok: false, cancelled: true };
+        }
+    } else if (options.fromNarrator && pendingPassivesBeforeBuild) {
+        warnings.push('Passive abilities are still being compiled; they will activate after the narrator finishes.');
+    }
     const canCallAgentNow = needsAgent && !deferArchitect;
     if (canCallAgentNow) {
         setBusy(true, 'The combat agent is designing the encounter…', true);
@@ -1867,6 +1905,25 @@ async function startEncounterFlow(options = {}) {
             { seedMemo: !context.existingCombat || source === 'agent' },
         );
         persist(state);
+        if (backgroundPassiveCompile) {
+            const stateId = state.id;
+            setTimeout(() => {
+                if (getActiveChatId() !== context.chatId) return;
+                void resolvePendingPassives(context, getSettings(), {
+                    mode: 'tactical',
+                    chatId: context.chatId,
+                }).then(result => {
+                    if (!result.changed || getActiveChatId() !== context.chatId) return;
+                    const current = getState();
+                    if (!current || current.id !== stateId || current.status !== 'active') return;
+                    if (!applyPassiveRecipesToState(context, current)) return;
+                    persist(current);
+                    render();
+                }).catch(error => {
+                    console.warn('[RPG Tracker] Deferred passive compilation failed:', error);
+                });
+            }, 1000);
+        }
         ui.starting = false;
         setBusy(false);
         resetViewSelection();
