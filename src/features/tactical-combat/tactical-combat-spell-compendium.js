@@ -14,10 +14,13 @@
 import {
     DEFAULT_LOADOUT_CLASSIFIER_CONFIG,
     classifyAbility,
+    classifySkillIntent,
+    hasHealingSignal,
     isBonusAction,
     isRangedAbility,
     matchesAnyWord,
     normalizeClassifierConfig,
+    normalizeSkillIntent,
     parseAreaKeywords,
     willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
@@ -90,17 +93,17 @@ const CORE_SPELLS = {
     haste: { kind: 'buff', acBonus: 2, attackBonus: 1, rounds: 3, range: 6, target: 'ally' },
     'shield of faith': { kind: 'buff', acBonus: 2, rounds: 3, range: 6, target: 'ally' },
     'mage armor': { kind: 'buff', acBonus: 3, rounds: 8, range: 1, target: 'ally' },
-    invisibility: { kind: 'buff', acBonus: 0, attackBonus: 0, rounds: 3, range: 1, target: 'ally' },
-    'detect magic': { kind: 'special', range: 6, target: 'self', utility: true },
-    light: { kind: 'special', range: 1, target: 'any', utility: true },
-    'mage hand': { kind: 'special', range: 6, target: 'any', utility: true },
-    message: { kind: 'special', range: 12, target: 'any', utility: true },
-    prestidigitation: { kind: 'special', range: 1, target: 'any', utility: true },
-    thaumaturgy: { kind: 'special', range: 1, target: 'any', utility: true },
-    druidcraft: { kind: 'special', range: 1, target: 'any', utility: true },
-    'minor illusion': { kind: 'special', range: 6, target: 'any', utility: true },
-    'silent image': { kind: 'special', range: 12, target: 'any', utility: true },
-    'misty step': { kind: 'special', range: 1, target: 'self', utility: true, bonusAction: true },
+    invisibility: { kind: 'special', range: 1, target: 'ally', rounds: 3, utility: true, intent: 'utility' },
+    'detect magic': { kind: 'special', range: 6, target: 'self', utility: true, intent: 'utility' },
+    light: { kind: 'special', range: 1, target: 'any', utility: true, intent: 'utility' },
+    'mage hand': { kind: 'special', range: 6, target: 'any', utility: true, intent: 'utility' },
+    message: { kind: 'special', range: 12, target: 'any', noncombat: true, intent: 'noncombat' },
+    prestidigitation: { kind: 'special', range: 1, target: 'any', noncombat: true, intent: 'noncombat' },
+    thaumaturgy: { kind: 'special', range: 1, target: 'any', noncombat: true, intent: 'noncombat' },
+    druidcraft: { kind: 'special', range: 1, target: 'any', noncombat: true, intent: 'noncombat' },
+    'minor illusion': { kind: 'special', range: 6, target: 'any', utility: true, intent: 'utility' },
+    'silent image': { kind: 'special', range: 12, target: 'any', utility: true, intent: 'utility' },
+    'misty step': { kind: 'special', range: 1, target: 'self', utility: true, intent: 'utility', bonusAction: true },
     'charm person': { kind: 'attack', resource: 'willpower', willpowerOutcome: 'switch_side', damage: '1d6', range: 6, save: 'will' },
     'hold person': { kind: 'attack', resource: 'willpower', willpowerOutcome: 'incapacitate', damage: '1d6', range: 6, save: 'will' },
     sleep: { kind: 'attack', resource: 'willpower', willpowerOutcome: 'incapacitate', damage: '1d6', range: 6, save: 'will' },
@@ -150,8 +153,19 @@ function normalizeKey(value) {
 
 function normalizeEntry(raw) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-    const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
-    const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
+    const intent = normalizeSkillIntent(raw.intent);
+    const passive = raw.passive === true || intent === 'passive';
+    const utility = raw.utility === true || intent === 'utility';
+    const noncombat = raw.noncombat === true || intent === 'noncombat';
+    const effectTemplate = sanitizeEffectTemplate(raw.effectTemplate ?? raw.effects ?? raw.template, { max: 16 });
+    const kindRaw = String(raw.kind || raw.type || '').toLowerCase();
+    let kind;
+    if (['attack', 'heal', 'buff', 'special'].includes(kindRaw)) kind = kindRaw;
+    else if (passive || utility || noncombat || effectTemplate.length) kind = 'special';
+    else if (raw.damage || raw.willpowerDamage || raw.willDamage) kind = 'attack';
+    else if (raw.heal) kind = 'heal';
+    else if (raw.acBonus || raw.attackBonus) kind = 'buff';
+    else kind = 'special';
     const typeRaw = String(raw.category || raw.skillType || raw.type || (raw.spell === true ? 'spell' : '')).toLowerCase();
     const type = ['spell', 'ability', 'item', 'trait', 'technique', 'class-feature'].includes(typeRaw)
         ? typeRaw
@@ -163,10 +177,16 @@ function normalizeEntry(raw) {
     const target = ['enemy', 'ally', 'self', 'any'].includes(String(raw.target || '').toLowerCase())
         ? String(raw.target).toLowerCase()
         : (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally');
-    const effectTemplate = sanitizeEffectTemplate(raw.effectTemplate ?? raw.effects ?? raw.template, { max: 16 });
+    const resolvedIntent = intent
+        || (noncombat ? 'noncombat' : passive ? 'passive' : utility ? 'utility' : kind);
     return {
         kind,
         type,
+        intent: resolvedIntent,
+        intentSource: String(raw.intentSource || (intent ? 'explicit' : '')).slice(0, 20),
+        passive,
+        utility,
+        noncombat,
         resource,
         damage: String(raw.damage || '').slice(0, 40),
         willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').slice(0, 40),
@@ -187,7 +207,6 @@ function normalizeEntry(raw) {
             save: raw.check.save ?? raw.save,
             type: raw.check.type ?? (raw.save ? 'save' : undefined),
         } : { type: raw.save ? 'save' : undefined, save: raw.save }),
-        utility: raw.utility === true,
         description: String(raw.description || raw.brief || '').slice(0, 400),
         aliases: Array.isArray(raw.aliases)
             ? raw.aliases.map(alias => String(alias || '').trim()).filter(Boolean).slice(0, 12)
@@ -284,7 +303,7 @@ export function extractSpellNamesFromMemo(memo) {
     const add = (name, level = 0) => {
         const cleaned = String(name || '').trim();
         if (!cleaned || cleaned.length < 2) return;
-        if (/^(level|cantrips?|spells?|abilities|prepared|unprepared|known|memorized|memorised)$/i.test(cleaned)) return;
+        if (/^(level|cantrips?|spells?|abilities|prepared|unprepared|known|memorized|memorised|none|none declared|no spells|no abilities|n\/a|unknown)$/i.test(cleaned)) return;
         const key = normalizeKey(cleaned);
         if (!entries.has(key)) entries.set(key, { name: cleaned, level });
     };
@@ -331,47 +350,85 @@ export function inferSpellDefinition(name, level, classifier = DEFAULT_LOADOUT_C
     const cleaned = String(name || '').trim();
     if (!cleaned) return null;
     const text = cleaned.toLowerCase();
-    if (matchesAnyWord(text, UTILITY_KEYWORDS)) {
+    const intentInfo = classifySkillIntent(cleaned, '', {
+        config: classifier,
+        type: 'spell',
+        definitionAuthoritative: false,
+    });
+    if (intentInfo.intent === 'noncombat' || matchesAnyWord(text, classifier?.noncombatKeywords || [])) {
         return normalizeEntry({
-            kind: 'special', range: 6, target: 'any', utility: true,
+            kind: 'special', range: 6, target: 'any', noncombat: true, intent: 'noncombat',
+            description: `${cleaned} has no combat application.`,
+            source: 'inferred', intentSource: 'pattern',
+        });
+    }
+    if (intentInfo.intent === 'utility' || matchesAnyWord(text, UTILITY_KEYWORDS)) {
+        return normalizeEntry({
+            kind: 'special', range: 6, target: 'any', utility: true, intent: 'utility',
             description: `${cleaned} is a utility spell.`,
-            source: 'inferred',
+            source: 'inferred', intentSource: 'pattern',
+        });
+    }
+    if (intentInfo.intent === 'passive') {
+        return normalizeEntry({
+            kind: 'special', range: 6, target: 'any', passive: true, intent: 'passive',
+            description: `${cleaned} is inferred as a passive effect.`,
+            source: 'inferred', intentSource: 'pattern',
         });
     }
     const kind = classifyAbility(cleaned, '', classifier);
     const area = parseAreaKeywords(cleaned, '', classifier);
     const outcome = willpowerOutcomeFor(cleaned, '', classifier);
-    const willpower = outcome !== 'defeat'
-        || matchesAnyWord(text, classifier?.willpower?.damageKeywords || []);
-    if (kind === 'heal' || kind === 'buff') {
+    const willpower = intentInfo.resource === 'willpower'
+        || intentInfo.resource === 'both'
+        || (outcome !== 'defeat' && intentInfo.intent === 'attack');
+    if (intentInfo.intent === 'heal' || kind === 'heal' || hasHealingSignal(cleaned, classifier)) {
         return normalizeEntry({
-            kind,
-            heal: kind === 'heal' ? (level ? `${Math.max(1, level)}d8+2` : '1d8+2') : '',
-            range: kind === 'buff' ? 6 : (/\btouch\b/.test(text) ? 1 : 6),
+            kind: 'heal',
+            heal: level ? `${Math.max(1, level)}d8+2` : '1d8+2',
+            range: /\btouch\b/.test(text) ? 1 : 6,
             target: 'ally',
             area,
             bonusAction: isBonusAction(text, classifier),
             description: `${cleaned} is inferred from its name.`,
-            source: 'inferred',
+            source: 'inferred', intentSource: 'pattern',
         });
     }
-    if (kind === 'special' && !willpower && !area) {
+    if (intentInfo.intent === 'buff' || kind === 'buff') {
         return normalizeEntry({
-            kind: 'special', range: 6, target: 'any', area,
+            kind: 'buff',
+            range: 6,
+            target: 'ally',
+            area,
+            bonusAction: isBonusAction(text, classifier),
+            description: `${cleaned} is inferred from its name.`,
+            source: 'inferred', intentSource: 'pattern',
+        });
+    }
+    if (intentInfo.intent === 'attack' || kind === 'attack') {
+        return normalizeEntry({
+            kind: 'attack',
+            resource: willpower ? 'willpower' : 'hp',
+            willpowerOutcome: willpower ? outcome : 'defeat',
+            damage: levelDamage(level),
+            range: area && area.origin === 'self' ? 0 : (isRangedAbility(cleaned, '', classifier) || area ? 6 : 1),
+            area,
+            bonusAction: isBonusAction(text, classifier),
+            description: `${cleaned} is inferred from its name and spell level.`,
+            source: 'inferred', intentSource: 'pattern',
+        });
+    }
+    if (intentInfo.intent === 'special' && (area || matchesAnyWord(text, classifier?.complexKeywords || []))) {
+        return normalizeEntry({
+            kind: 'special', range: area && area.origin === 'self' ? 0 : 6, target: 'any', area,
             description: `${cleaned} is inferred as a freeform spell.`,
-            source: 'inferred',
+            source: 'inferred', intentSource: 'pattern',
         });
     }
     return normalizeEntry({
-        kind: willpower && !area ? 'attack' : kind,
-        resource: willpower ? 'willpower' : 'hp',
-        willpowerOutcome: willpower ? outcome : 'defeat',
-        damage: levelDamage(level),
-        range: area && area.origin === 'self' ? 0 : (isRangedAbility(cleaned, '', classifier) || area ? 6 : 1),
-        area,
-        bonusAction: isBonusAction(text, classifier),
-        description: `${cleaned} is inferred from its name and spell level.`,
-        source: 'inferred',
+        kind: 'special', range: 6, target: 'any', intent: 'unknown',
+        description: `${cleaned} is inferred as a freeform spell.`,
+        source: 'inferred', intentSource: 'fallback',
     });
 }
 

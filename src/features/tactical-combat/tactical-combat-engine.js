@@ -56,6 +56,7 @@ import {
     formatStatusCondition,
     inferStatusPolarity,
 } from './tactical-combat-status.js';
+import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
 
 // ── RNG & dice ───────────────────────────────────────────────────────────────
 
@@ -704,9 +705,27 @@ function normalizeStatus(raw) {
 function normalizeSkill(raw, index, side) {
     if (!raw || typeof raw !== 'object') return null;
     const name = String(raw.name || raw.label || `Skill ${index + 1}`).trim().slice(0, 80);
-    const kindRaw = String(raw.kind || raw.type || 'attack').toLowerCase();
-    const kind = ['attack', 'heal', 'buff', 'special'].includes(kindRaw) ? kindRaw : 'attack';
-    const passive = raw.passive === true;
+    const explicitIntent = normalizeSkillIntent(raw.intent);
+    const inferred = !explicitIntent && !raw.kind && !raw.type
+        ? classifySkillIntent(name, String(raw.description || raw.effect || ''), { type: 'ability' })
+        : null;
+    const intent = explicitIntent || inferred?.intent || '';
+    const passive = raw.passive === true || intent === 'passive';
+    const utility = raw.utility === true || intent === 'utility' || intent === 'unknown';
+    const noncombat = raw.noncombat === true || intent === 'noncombat';
+    const kindRaw = String(raw.kind || raw.type || '').toLowerCase();
+    let kind;
+    if (['attack', 'heal', 'buff', 'special'].includes(kindRaw)) kind = kindRaw;
+    else if (passive || utility || noncombat) kind = 'special';
+    else if (raw.damage || raw.willpowerDamage || raw.willDamage) kind = 'attack';
+    else if (raw.heal) kind = 'heal';
+    else if (raw.acBonus || raw.attackBonus) kind = 'buff';
+    else if (intent === 'attack') kind = 'attack';
+    else if (intent === 'heal') kind = 'heal';
+    else if (intent === 'buff') kind = 'buff';
+    else kind = 'special';
+    if (passive || noncombat) kind = 'special';
+    if (utility) kind = 'special';
     const unlimited = passive || raw.unlimited === true;
     const maxUses = clampInt(raw.maxUses ?? raw.uses ?? 1, 0, 99);
     const resource = normalizeWillpowerResource(raw.resource ?? raw.targetResource ?? raw.stat, 'hp');
@@ -720,19 +739,28 @@ function normalizeSkill(raw, index, side) {
         : kind === 'buff' ? clampInt(raw.range, 0, 24)
             : kind === 'special' ? (raw.range == null ? 6 : clampInt(raw.range, 1, 24))
                 : clampInt(raw.range, 1, 24) || 1;
+    const safeDamage = passive || noncombat || utility ? '' : String(raw.damage || '').trim().slice(0, 40);
+    const safeWillpowerDamage = passive || noncombat || utility
+        ? ''
+        : String(raw.willpowerDamage ?? raw.willDamage ?? '').trim().slice(0, 40);
+    const safeHeal = passive || noncombat || utility
+        ? ''
+        : String(raw.heal || (kind === 'heal' ? '1d8+2' : '')).trim().slice(0, 40);
     return {
         id: String(raw.id || `skill-${slug(name, `skill-${index + 1}`)}`).slice(0, 60),
         name,
         description: String(raw.description || raw.effect || '').slice(0, 500),
         kind,
+        intent: intent || kind,
+        intentSource: String(raw.intentSource || (explicitIntent ? 'explicit' : inferred ? inferred.confidence : '')).slice(0, 20),
         resource,
         target,
         range,
         area,
-        damage: String(raw.damage || (kind === 'attack' ? '1d8' : '')).trim().slice(0, 40),
-        willpowerDamage: String(raw.willpowerDamage ?? raw.willDamage ?? '').trim().slice(0, 40),
+        damage: safeDamage,
+        willpowerDamage: safeWillpowerDamage,
         willpowerOutcome: normalizeWillpowerOutcome(raw.willpowerOutcome ?? raw.willOutcome, 'defeat'),
-        heal: String(raw.heal || (kind === 'heal' ? '1d8+2' : '')).trim().slice(0, 40),
+        heal: safeHeal,
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
         bonusAction: !!raw.bonusAction,
@@ -741,7 +769,8 @@ function normalizeSkill(raw, index, side) {
         spell: raw.spell === true,
         slotLevel: raw.slotLevel == null ? null : clampInt(raw.slotLevel, 0, 9),
         slotKey: String(raw.slotKey || ''),
-        utility: raw.utility === true,
+        utility,
+        noncombat,
         passive,
         trigger: passive ? normalizePassiveTrigger(raw.trigger) : null,
         unlimited,
@@ -767,9 +796,10 @@ function normalizeSkill(raw, index, side) {
  */
 export function normalizeSkillList(rawSkills, side) {
     return (Array.isArray(rawSkills) ? rawSkills : [])
+        .filter(skill => skill && skill.noncombat !== true && skill.intent !== 'noncombat')
         .slice(0, 8)
         .map((skill, index) => normalizeSkill(skill, index, side))
-        .filter(Boolean);
+        .filter(skill => skill && skill.noncombat !== true);
 }
 
 function normalizeItem(raw, index) {
@@ -831,8 +861,9 @@ export function normalizeUnitSeed(seed, meta) {
     const attackRange = clampInt(seed?.attackRange, 1, 24) || 1;
     const speed = clampIntOr(seed?.speed, clampIntOr(meta?.defaultSpeed, TC_DEFAULT_MOVEMENT, 1, 30), 1, 30);
     const skills = (Array.isArray(seed?.skills) ? seed.skills : [])
+        .filter(skill => skill && skill.noncombat !== true && skill.intent !== 'noncombat')
         .map((skill, skillIndex) => normalizeSkill(skill, skillIndex, side))
-        .filter(Boolean);
+        .filter(skill => skill && skill.noncombat !== true);
     const items = (Array.isArray(seed?.items) ? seed.items : [])
         .map((item, itemIndex) => normalizeItem(item, itemIndex))
         .filter(Boolean);
@@ -2939,7 +2970,7 @@ function resolveAreaAttack(state, unit, source, areaResult, options, rng, source
             rng,
             source: sourceLabel,
             attackBonus: getSourceAttackBonus(state, unit, source),
-            damage: source.damage || '1d6',
+            damage: source.damage || unit.damage || '1d6',
             resource: source.resource,
             willpowerDamage: source.willpowerDamage,
             willpowerOutcome: source.willpowerOutcome,
@@ -3139,7 +3170,7 @@ export function applyAction(state, action, options = {}) {
                     rng,
                     source,
                     attackBonus: getSourceAttackBonus(state, unit, skill),
-                    damage: skill.damage || '1d6',
+                    damage: skill.damage || unit.damage || '1d6',
                     resource: skill.resource,
                     willpowerDamage: skill.willpowerDamage,
                     willpowerOutcome: skill.willpowerOutcome,
@@ -3804,12 +3835,14 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
         ),
         stats: unit.stats,
         initiative: unit.initiative,
-        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => {
+        skills: (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat).map(skill => {
             const resourceState = describeResource(skill, unit);
             return {
                 id: skill.id,
                 name: skill.name,
                 kind: skill.kind,
+                intent: skill.intent || skill.kind,
+                utility: skill.utility === true,
                 resource: skill.resource || 'hp',
                 range: skill.range,
                 area: skill.area || null,
@@ -3831,7 +3864,7 @@ export function buildAgentGameState(state, unitIds, catalog = state.actionCatalo
                 resolvable: skill.kind === 'special',
             };
         }),
-        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+        passives: (unit.skills || []).filter(skill => skill.passive && !skill.noncombat).map(skill => ({
             id: skill.id,
             name: skill.name,
             description: skill.description || '',
@@ -4153,7 +4186,10 @@ export function hydrateEncounterState(state) {
         unit.passiveUsage = unit.passiveUsage && typeof unit.passiveUsage === 'object' && !Array.isArray(unit.passiveUsage)
             ? unit.passiveUsage
             : {};
-        unit.skills = (Array.isArray(unit.skills) ? unit.skills : []).map((skill, index) => normalizeSkill(skill, index, unit.side)).filter(Boolean);
+        unit.skills = (Array.isArray(unit.skills) ? unit.skills : [])
+            .filter(skill => skill && skill.noncombat !== true && skill.intent !== 'noncombat')
+            .map((skill, index) => normalizeSkill(skill, index, unit.side))
+            .filter(skill => skill && skill.noncombat !== true);
         unit.items = (Array.isArray(unit.items) ? unit.items : []).map((item, index) => normalizeItem(item, index)).filter(Boolean);
         ensureSpellSlots(unit);
     }

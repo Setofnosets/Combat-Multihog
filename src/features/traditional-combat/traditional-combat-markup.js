@@ -178,27 +178,42 @@ function renderSelectedPanel(state, view) {
     const label = (type, fallback) => escapeHtml(key(type)?.label || fallback);
     const buttons = [];
     if (enabled('attack')) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'attack' ? 'is-armed' : ''}" data-trad-action="mode-attack" ${!canAct || unit.actionUsed ? 'disabled' : ''}>⚔ ${label('attack', 'Attack')}</button>`);
-    const unitSkills = (unit.skills || []).filter(skill => !skill.passive);
-    const unitPassives = (unit.skills || []).filter(skill => skill.passive);
-    if (enabled('skill') && unitSkills.length) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'skill' ? 'is-armed' : ''}" data-trad-action="mode-skill" ${!canAct ? 'disabled' : ''}>✦ ${label('skill', 'Skill')}</button>`);
+    const unitSkills = (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat && !(skill.utility === true && skill.kind === 'special'));
+    const unitUtilities = (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat && skill.utility === true && skill.kind === 'special');
+    const unitPassives = (unit.skills || []).filter(skill => skill.passive && !skill.noncombat);
+    if (enabled('skill') && (unitSkills.length || unitUtilities.length)) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'skill' ? 'is-armed' : ''}" data-trad-action="mode-skill" ${!canAct ? 'disabled' : ''}>✦ ${label('skill', 'Skill')}</button>`);
     if (enabled('item') && (unit.items || []).length) buttons.push(`<button type="button" class="rt-tc-action ${view.mode === 'item' ? 'is-armed' : ''}" data-trad-action="mode-item" ${!canAct || unit.actionUsed ? 'disabled' : ''}>◉ ${label('item', 'Item')}</button>`);
     if (enabled('defend')) buttons.push(`<button type="button" class="rt-tc-action" data-trad-action="defend" ${!canAct || unit.actionUsed ? 'disabled' : ''}>◈ ${label('defend', 'Defend')}</button>`);
     if (enabled('wait')) buttons.push(`<button type="button" class="rt-tc-action" data-trad-action="wait" ${!canAct ? 'disabled' : ''}>⏳ ${label('wait', 'Wait')}</button>`);
     if (enabled('flee')) buttons.push(`<button type="button" class="rt-tc-action rt-tc-action-danger" data-trad-action="flee" ${!canAct ? 'disabled' : ''}>↩ ${label('flee', 'Flee')}</button>`);
 
-    const skills = view.mode === 'skill' && isPlayer ? `<div class="rt-tc-subpane">
-        <div class="rt-tc-subtitle">Skills & spells</div>
-        <div class="rt-tc-skill-list">${unitSkills.map(skill => {
-            const resource = describeResource(skill, unit);
-            const areaNote = skill.area ? ' · AOE IGNORED' : '';
-            return `
+    const renderSkillButtons = list => list.map(skill => {
+        const resource = describeResource(skill, unit);
+        const areaNote = skill.area ? ' · AOE IGNORED' : '';
+        const utility = skill.utility === true;
+        const meta = utility
+            ? 'UTILITY'
+            : skill.kind === 'attack'
+                ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'}${skill.damage ? ` · ${skill.damage}` : ''}`
+                : skill.kind === 'heal'
+                    ? `HEAL${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}`
+                    : skill.kind === 'special' ? 'SPECIAL' : 'BUFF';
+        return `
             <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-trad-action="select-skill" data-trad-skill-id="${escapeHtml(skill.id)}" ${!canAct || !hasUses(skill, unit) || (skill.bonusAction ? unit.bonusUsed : unit.actionUsed) ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(`${skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'}${skill.damage ? ` · ${skill.damage}` : ''}` : skill.kind === 'heal' ? `HEAL${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? 'SPECIAL' : 'BUFF'}${skill.bonusAction ? ' · bonus' : ''}${areaNote}`)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${meta}${skill.bonusAction ? ' · bonus' : ''}${areaNote}`)}</span>
                 <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
-        }).join('')}</div>
+    }).join('');
+    const skillsPane = unitSkills.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Skills & spells</div>
+        <div class="rt-tc-skill-list">${renderSkillButtons(unitSkills)}</div>
     </div>` : '';
+    const utilityPane = unitUtilities.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Utility</div>
+        <div class="rt-tc-skill-list">${renderSkillButtons(unitUtilities)}</div>
+    </div>` : '';
+    const skills = view.mode === 'skill' && isPlayer ? `${skillsPane}${utilityPane}` : '';
 
     const passives = unitPassives.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Passives</div>

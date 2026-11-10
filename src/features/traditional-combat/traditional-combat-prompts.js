@@ -73,7 +73,7 @@ Return exactly ONE JSON object and no prose, no markdown fences:
 2. Stats must be plain numbers. HP 8-60, AC 11-19, attack bonus +2 to +9, damage in XdY+Z form. Never use formulas such as "level+3" or ranges such as "12-18".
 3. Names must fit the location and tone. Do not use generic placeholders such as "Enemy 1". Do not rename party members.
 4. There is no grid and no terrain. Do not output "terrain", "grid", or "terrainTheme" fields. Range values are ignored by this mode; omit them where possible.
-5. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Use "kind":"special" only when the effect genuinely needs freeform adjudication. Include maxUses as a number.
+5. Skills are optional. Use "kind":"attack" for damaging abilities and "kind":"heal" or "kind":"buff" for support. Use "kind":"special" only when the effect genuinely needs freeform adjudication. Never give a skill attack damage unless its description states a damage expression. Use "utility":true with "kind":"special" for non-damaging battlefield utility, "passive":true for passives, and "intent":"noncombat" only for skills with no combat use. Include maxUses as a number.
 6. The description must not dictate player actions, outcomes, or dialogue. It sets the scene only.
 7. Never output player units. The party comes from the state memo, not from you.
 8. The party payload includes abilities, spells, items, and inventory. Treat those as available to the player and design opposition that gives them room to matter. Special/freeform effects are resolved by the framework at cast time; do not try to simulate them in the encounter JSON.

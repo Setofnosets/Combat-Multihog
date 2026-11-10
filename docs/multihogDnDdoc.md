@@ -381,7 +381,7 @@ Worth values can auto-render as coin badges in the UI.
 
 Abilities = non-spell class features only. Spells = cantrips + leveled slots `Level N (avail/max): …`. Never mix the two.
 
-Passive abilities use the `Passive:` prefix inside their description. Tactical and Traditional Combat compile owned passives from the Campaign Skill Registry once into deterministic triggers and then execute them automatically; they are never shown as clickable skills.
+Passive abilities use the `Passive:` prefix inside their description. Tactical and Traditional Combat compile owned passives from the Campaign Skill Registry once into deterministic triggers and then execute them automatically; they are never shown as clickable skills. Battlefield utility uses `Utility:` and appears in the board's Utility pane; purely social/exploration abilities use `Noncombat:` and remain in the registry but are hidden from combat. Without an explicit marker, ambiguous abilities are classified once by the AI intent pass and never default to attacks.
 
 #### `[TIME]`
 

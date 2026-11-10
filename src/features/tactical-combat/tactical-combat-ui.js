@@ -45,7 +45,9 @@ import {
     applyPassiveRecipesToState,
     generateEncounterWithAgent,
     hasPendingPassiveRecipes,
+    hasPendingSkillIntents,
     resolvePendingPassives,
+    resolvePendingSkillIntents,
     resolveSpecialSource,
     runAgentTurn,
 } from './tactical-combat-agent.js';
@@ -1663,6 +1665,16 @@ async function runDeferredEncounterArchitect(provisional, settings, options = {}
     try {
         const context = collectStartContext(settings, options);
         let passiveWarnings = [];
+        if (hasPendingSkillIntents(context)) {
+            setBusy(true, 'Classifying abilities…', true);
+            render();
+            const classified = await resolvePendingSkillIntents(context, getSettings(), {
+                signal: controller.signal,
+                mode: 'tactical',
+                chatId,
+            });
+            passiveWarnings.push(...classified.warnings);
+        }
         if (hasPendingPassiveRecipes(context)) {
             setBusy(true, 'Compiling passive abilities…', true);
             render();
@@ -1671,7 +1683,7 @@ async function runDeferredEncounterArchitect(provisional, settings, options = {}
                 mode: 'tactical',
                 chatId,
             });
-            passiveWarnings = compiled.warnings;
+            passiveWarnings.push(...compiled.warnings);
         }
         const generated = await generateEncounterWithAgent(context, settings, { signal: controller.signal });
         if (controller.signal.aborted || ui.architectToken !== token || getActiveChatId() !== chatId) return false;
@@ -1807,6 +1819,26 @@ async function startEncounterFlow(options = {}) {
     // still running. Defer that path until the generation ends. The provisional
     // board is hidden behind a preparing screen and is replaced by the architect.
     const deferArchitect = needsAgent && options.fromNarrator === true;
+    const pendingIntentsBeforeBuild = hasPendingSkillIntents(context);
+    if (!options.fromNarrator && pendingIntentsBeforeBuild) {
+        setBusy(true, 'Classifying abilities…', true);
+        render();
+        const classified = await resolvePendingSkillIntents(context, settings, {
+            signal: controller.signal,
+            mode: 'tactical',
+            chatId: context.chatId,
+        });
+        warnings.push(...classified.warnings);
+        if (controller.signal.aborted) {
+            if (ui.abortController === controller) ui.abortController = null;
+            ui.starting = false;
+            setBusy(false);
+            render();
+            return { ok: false, cancelled: true };
+        }
+    } else if (options.fromNarrator && pendingIntentsBeforeBuild) {
+        warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+    }
     const pendingPassivesBeforeBuild = hasPendingPassiveRecipes(context);
     const backgroundPassiveCompile = options.fromNarrator === true && !deferArchitect && pendingPassivesBeforeBuild;
     if (!options.fromNarrator && pendingPassivesBeforeBuild) {

@@ -69,7 +69,7 @@ Attr: STR X (mod), DEX X (mod), CON X (mod), INT X (mod), WIS X (mod), CHA X (mo
 Saves: Fort +X | Ref +X | Will +X
 Skills: Skill1 +X, Skill2 +X
 Traits: Trait1 (effect), Trait2 (effect)
-Abilities: Ability1 (specific trigger/action, mechanical effect, save/DC if any; uses remaining/max), Ability2 (specific effect; uses remaining/max)
+Abilities: Ability1 (specific trigger/action, mechanical effect, save/DC if any; uses remaining/max), Ability2 (specific effect; uses remaining/max). Prefix always-on traits with "Passive:" and non-damaging battlefield tricks with "Utility:". Abilities with no combat use at all should be prefixed "Noncombat:".
 Spells: Cantrips: Spell1, Spell2
 Spells: Level N (avail/max): Spell1, Spell2
 HD: dX (current/max)
@@ -148,7 +148,7 @@ Name: current/max HP
 Willpower: current/max
 Att/def: (see MARTIAL or CASTER)
 Saves: Fort +X, Ref +X, Will +X
-Abilities: Ability1 (effect), Ability2 (effect)
+Abilities: Ability1 (effect), Ability2 (effect). Prefix passives with "Passive:", battlefield tricks with "Utility:", and purely social/exploration abilities with "Noncombat:".
 Spells: (CASTER only — one line per spell level, same format as [PARTY])
 Other: Trait1 (description), Trait2 (description)
 Status: Effect (duration)
@@ -253,7 +253,7 @@ Other Items:
 
 Non-spell class features and active abilities ONLY (e.g. Lay on Hands, Action Surge). NEVER mix these with spells. Format each entry as: \`Ability Name (brief description)\`.
 
-Every ability that is use-limited must have its uses in the parentheses, for example: "Silver-Tongued Pivot (Allows the reroll of a failed social check by seamlessly shifting the narrative framing, 1/1 per rest)". At-will / passive abilities omit a uses count. Prefix passive abilities with \`Passive:\` inside the description so combat can compile them as automatic traits rather than clickable actions. When an ability visibly covers an area, include \`Area: burst N\` (N-cell radius) or \`Area: aura N\` (centered on the user) inside the parentheses so tactical combat can resolve every affected subject.`,
+Every ability that is use-limited must have its uses in the parentheses, for example: "Silver-Tongued Pivot (Allows the reroll of a failed social check by seamlessly shifting the narrative framing, 1/1 per rest)". At-will / passive abilities omit a uses count. Prefix passive abilities with \`Passive:\` inside the description so combat can compile them as automatic traits rather than clickable actions. Prefix battlefield utility (teleport, invisibility, disengage, detection) with \`Utility:\` and purely social/exploration abilities with \`Noncombat:\` so combat never turns them into attacks. When an ability visibly covers an area, include \`Area: burst N\` (N-cell radius) or \`Area: aura N\` (centered on the user) inside the parentheses so tactical combat can resolve every affected subject.`,
   spells: `PLAYER CHARACTER ONLY: [SPELLS] describes {{user}}, not companions. Party members' spells belong inside their own [PARTY] entry; never copy a companion's spell here unless {{user}} also knows it.
 
 Spell slots and spells known, grouped by level. Format each line as: \`Level N (avail/max): Spell1, Spell2\`. For cantrips, use \`Cantrips: Spell1, Spell2\`. Track slot usage accurately. NEVER mix these with abilities.

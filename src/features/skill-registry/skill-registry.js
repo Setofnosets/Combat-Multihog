@@ -15,7 +15,9 @@ import {
     normalizeSkillCompendium,
 } from '../tactical-combat/tactical-combat-spell-compendium.js';
 import {
+    classifySkillIntent,
     normalizeClassifierConfig,
+    normalizeSkillIntent,
 } from '../tactical-combat/tactical-combat-classifiers.js';
 import {
     normalizeEffectCheck,
@@ -119,12 +121,20 @@ function mergeOwners(...lists) {
 
 function normalizeMechanics(raw = {}) {
     const source = raw && typeof raw === 'object' ? raw : {};
-    const passive = source.passive === true;
+    const intent = normalizeSkillIntent(source.intent);
+    const passive = source.passive === true || intent === 'passive';
+    const utility = source.utility === true || intent === 'utility';
+    const noncombat = source.noncombat === true || intent === 'noncombat';
     const kindRaw = stringValue(source.kind, 20).toLowerCase();
     const effectTemplate = sanitizeEffectTemplate(source.effectTemplate ?? source.effects ?? source.template, { max: 16 });
-    const kind = SKILL_KINDS.has(kindRaw)
-        ? kindRaw
-        : (passive || effectTemplate.length ? 'special' : 'attack');
+    let kind;
+    if (SKILL_KINDS.has(kindRaw)) kind = kindRaw;
+    else if (passive || utility || noncombat || effectTemplate.length) kind = 'special';
+    else if (source.damage || source.willpowerDamage || source.willDamage) kind = 'attack';
+    else if (source.heal) kind = 'heal';
+    else if (source.acBonus || source.attackBonus) kind = 'buff';
+    else kind = 'special';
+    if (passive || noncombat || utility) kind = 'special';
     const resourceRaw = stringValue(source.resource, 12).toLowerCase();
     const targetRaw = stringValue(source.target, 12).toLowerCase();
     const saveRaw = stringValue(source.save, 12).toLowerCase();
@@ -137,16 +147,17 @@ function normalizeMechanics(raw = {}) {
             : (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally'),
         range: source.range == null ? null : clampInt(source.range, 0, 24, 0),
         area: normalizeArea(source.area ?? source.aoe),
-        damage: stringValue(source.damage, 40),
-        willpowerDamage: stringValue(source.willpowerDamage ?? source.willDamage, 40),
+        damage: passive || noncombat || utility ? '' : stringValue(source.damage, 40),
+        willpowerDamage: passive || noncombat || utility ? '' : stringValue(source.willpowerDamage ?? source.willDamage, 40),
         willpowerOutcome: stringValue(source.willpowerOutcome ?? source.willOutcome ?? 'defeat', 20).toLowerCase(),
-        heal: stringValue(source.heal, 40),
+        heal: passive || noncombat || utility ? '' : stringValue(source.heal, 40),
         acBonus: clampInt(source.acBonus, -10, 20, 0),
         attackBonus: clampInt(source.attackBonus, -10, 20, 0),
         rounds: clampInt(source.rounds, 1, 10, 2),
         bonusAction: source.bonusAction === true,
         save: ['str', 'dex', 'con', 'int', 'wis', 'will', 'cha'].includes(saveRaw) ? saveRaw : '',
-        utility: source.utility === true,
+        utility,
+        noncombat,
         maxUses: unlimited ? 0 : (source.maxUses == null ? null : clampInt(source.maxUses, 0, 99, 0)),
         unlimited,
         passive,
@@ -208,16 +219,28 @@ export function normalizeSkillRegistryEntry(raw, fallbackKey = '') {
         ? typeRaw
         : (raw.spell === true ? 'spell' : 'ability');
     const brief = stringValue(raw.brief || raw.description || '', 400).trim();
+    const explicitIntent = normalizeSkillIntent(raw.intent);
     const passiveHint = raw.passive === true
         || raw.mechanics?.passive === true
+        || explicitIntent === 'passive'
         || /^\s*passive\b/i.test(brief)
         || ((type === 'trait' || type === 'class-feature') && raw.active !== true);
+    const utilityHint = raw.utility === true || raw.mechanics?.utility === true || explicitIntent === 'utility';
+    const noncombatHint = raw.noncombat === true || raw.mechanics?.noncombat === true || explicitIntent === 'noncombat';
     const mechanics = normalizeMechanics({
         ...(raw.mechanics && typeof raw.mechanics === 'object' ? raw.mechanics : raw),
+        intent: explicitIntent || raw.mechanics?.intent,
         passive: passiveHint,
+        utility: utilityHint,
+        noncombat: noncombatHint,
     });
     const aliases = normalizeAliases(raw.aliases, name);
     const status = normalizeStatus(raw.status, mechanics);
+    const storedIntent = explicitIntent
+        || (mechanics.noncombat ? 'noncombat'
+            : mechanics.passive ? 'passive'
+                : mechanics.utility ? 'utility'
+                    : mechanics.kind);
     const entry = {
         id: slugifySkill(raw.id || name, 'skill'),
         name,
@@ -227,11 +250,14 @@ export function normalizeSkillRegistryEntry(raw, fallbackKey = '') {
         tags: normalizeTags(raw.tags),
         source: stringValue(raw.source || 'manual', 20).toLowerCase(),
         status,
+        intent: storedIntent,
+        intentSource: stringValue(raw.intentSource || (explicitIntent ? 'explicit' : ''), 20).toLowerCase(),
+        noncombat: mechanics.noncombat === true,
         locked: raw.locked === true,
         owners: normalizeOwners(raw.owners),
         check: normalizeCheck(raw.check, mechanics, type),
         mechanics,
-        effectSummary: (mechanics.passive || mechanics.effectTemplate.length)
+        effectSummary: (mechanics.passive || mechanics.utility || mechanics.noncombat || mechanics.effectTemplate.length)
             ? (summarizeEffectTemplate(mechanics.effectTemplate) || summarizeMechanics(mechanics))
             : (stringValue(raw.effectSummary, 300)
                 || summarizeEffectTemplate(mechanics.effectTemplate)
@@ -249,7 +275,11 @@ function summarizeMechanics(mechanics) {
     if (!mechanics) return '';
     const bits = [];
     if (mechanics.passive) bits.push(`Passive ${describePassiveTrigger(mechanics.trigger)}`);
-    if (mechanics.kind === 'attack') {
+    if (mechanics.noncombat) {
+        bits.push('non-combat');
+    } else if (mechanics.utility) {
+        bits.push('utility');
+    } else if (mechanics.kind === 'attack') {
         bits.push(mechanics.damage ? `${mechanics.damage} damage` : 'attack');
     } else if (mechanics.kind === 'heal') {
         bits.push(mechanics.heal ? `heal ${mechanics.heal}` : 'healing');
@@ -258,7 +288,7 @@ function summarizeMechanics(mechanics) {
         if (mechanics.acBonus) bonuses.push(`+${mechanics.acBonus} AC`);
         if (mechanics.attackBonus) bonuses.push(`+${mechanics.attackBonus} attack`);
         bits.push(bonuses.length ? `buff ${bonuses.join(', ')}` : 'buff');
-    } else {
+    } else if (!mechanics.passive) {
         bits.push('special');
     }
     if (mechanics.resource && mechanics.resource !== 'hp') bits.push(mechanics.resource);
@@ -556,6 +586,7 @@ function mergeEntryMechanics(existing, incoming, opts = {}) {
         if (incoming.bonusAction) out.bonusAction = true;
         if (incoming.save) out.save = incoming.save;
         if (incoming.utility) out.utility = true;
+        if (incoming.noncombat) out.noncombat = true;
         if (incoming.passive) out.passive = true;
         if (incoming.trigger) out.trigger = cloneJson(incoming.trigger);
         if (incoming.maxUses != null) out.maxUses = incoming.maxUses;
@@ -612,6 +643,17 @@ export function upsertSkillRegistryEntry(registry, rawEntry, options = {}) {
     const incomingRank = SOURCE_RANK[entry.source] || 0;
     if (incomingRank > existingRank) existing.source = entry.source;
     if ((STATUS_RANK[entry.status] || 0) > (STATUS_RANK[existing.status] || 0)) existing.status = entry.status;
+    const incomingIntentExplicit = ['ai', 'ai-intent', 'manual', 'explicit', 'pattern', 'resolver'].includes(String(entry.intentSource || '').toLowerCase());
+    if (entry.intent && (!existing.intent || existing.intent === 'unknown'
+        || (incomingIntentExplicit && existing.status !== 'resolved' && !existing.locked))) {
+        existing.intent = entry.intent;
+    }
+    if (entry.intentSource && (!existing.intentSource || incomingIntentExplicit)) {
+        existing.intentSource = entry.intentSource;
+    }
+    if (entry.noncombat === true && existing.status !== 'resolved' && !existing.locked) {
+        existing.noncombat = true;
+    }
     if (!existing.brief && entry.brief) existing.brief = entry.brief;
     if (entry.locked) existing.locked = true;
     if (!existing.locked || options.force === true) {
@@ -704,6 +746,11 @@ export function registryEntryToDefinition(entry) {
     return {
         kind: mechanics.kind,
         type: entry.type || 'ability',
+        intent: normalizeSkillIntent(entry.intent) || (mechanics.noncombat ? 'noncombat' : mechanics.passive ? 'passive' : mechanics.utility ? 'utility' : mechanics.kind),
+        intentSource: String(entry.intentSource || ''),
+        noncombat: mechanics.noncombat === true || entry.noncombat === true,
+        utility: mechanics.utility === true,
+        passive: mechanics.passive === true,
         resource: mechanics.resource,
         target: mechanics.target,
         range: mechanics.range,
@@ -718,8 +765,6 @@ export function registryEntryToDefinition(entry) {
         bonusAction: mechanics.bonusAction,
         save: mechanics.save,
         check: entry.check ? cloneJson(entry.check) : undefined,
-        utility: mechanics.utility,
-        passive: mechanics.passive === true,
         trigger: mechanics.passive ? cloneJson(mechanics.trigger) : null,
         description: entry.brief || '',
         maxUses: mechanics.maxUses,
@@ -798,9 +843,12 @@ function entryFromSkill(skill, options = {}) {
         status: skill.effectTemplate && skill.effectTemplate.length
             ? 'resolved'
             : (skill.registryStatus === 'inferred' || skill.source === 'inferred' ? 'inferred' : 'confirmed'),
+        intent: normalizeSkillIntent(skill.intent) || (skill.passive ? 'passive' : skill.noncombat ? 'noncombat' : skill.utility ? 'utility' : skill.kind),
+        intentSource: String(skill.intentSource || ''),
+        noncombat: skill.noncombat === true,
         owners: options.owners || [],
         check: {
-            type: skill.save ? 'save' : (skill.kind === 'special' ? 'none' : 'attack'),
+            type: skill.save ? 'save' : (skill.kind === 'special' || skill.utility || skill.passive || skill.noncombat ? 'none' : 'attack'),
             save: skill.save || '',
         },
         mechanics: {
@@ -819,6 +867,7 @@ function entryFromSkill(skill, options = {}) {
             bonusAction: skill.bonusAction,
             save: skill.save,
             utility: skill.utility,
+            noncombat: skill.noncombat === true,
             passive: skill.passive === true,
             trigger: skill.passive ? cloneJson(skill.trigger) : null,
             maxUses: skill.maxUses,
@@ -833,7 +882,7 @@ function registerClassForUnit(registry, unit) {
     if (!name || unit?.side === 'enemy') return false;
     const key = slugifySkill(name, 'class');
     const skillIds = (unit.skills || [])
-        .filter(skill => skill.source !== 'fallback' && skill.synthetic !== true)
+        .filter(skill => skill.source !== 'fallback' && skill.synthetic !== true && skill.noncombat !== true)
         .map(skill => skill.name)
         .filter(Boolean)
         .slice(0, 80);
@@ -881,6 +930,9 @@ export function registerSkillsFromUnits(settings, units = {}, options = {}) {
         const owners = ownerForUnit(unit);
         for (const skill of unit?.skills || []) {
             if (skill?.source === 'fallback' || skill?.synthetic === true) continue;
+            if (skill?.intent === 'unknown' || skill?.noncombat === true) {
+                if (!friendly || skill.noncombat !== true) continue;
+            }
             if (!friendly && skill.kind !== 'special' && !skill.passive && !(skill.effectTemplate && skill.effectTemplate.length)) continue;
             const raw = entryFromSkill(skill, { source: options.source || 'memo', owners });
             if (!raw) continue;

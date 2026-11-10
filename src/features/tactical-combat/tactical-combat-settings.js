@@ -30,6 +30,7 @@ import { persistSkillRegistry } from '../skill-registry/skill-registry-store.js'
 import { mirrorSkillRegistryToLorebook } from '../skill-registry/skill-lorebook.js';
 import {
     DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
+    DEFAULT_SKILL_INTENT_PROMPT,
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
@@ -143,9 +144,10 @@ function skillRegistryStatus(settings) {
     const skills = Object.values(parsed.registry.skills || {});
     const resolved = skills.filter(entry => entry.status === 'resolved').length;
     const conflicts = skills.filter(entry => entry.status === 'conflict').length;
+    const noncombat = skills.filter(entry => entry.intent === 'noncombat' || entry.mechanics?.noncombat === true).length;
     const forms = Object.keys(parsed.registry.forms || {}).length;
     const classes = Object.keys(parsed.registry.classes || {}).length;
-    node.textContent = `Valid campaign registry · ${skills.length} skill(s) · ${resolved} resolved special(s) · ${forms} form(s) · ${classes} class(es)${conflicts ? ` · ${conflicts} conflict(s)` : ''}.`;
+    node.textContent = `Valid campaign registry · ${skills.length} skill(s) · ${resolved} resolved special(s)${noncombat ? ` · ${noncombat} non-combat` : ''} · ${forms} form(s) · ${classes} class(es)${conflicts ? ` · ${conflicts} conflict(s)` : ''}.`;
     node.className = `rt-tc-setting-status${conflicts ? ' rt-tc-error' : ' rt-tc-ok'}`;
 }
 
@@ -223,6 +225,7 @@ function syncControls(settings) {
     setValue(el('rpg_tactical_combat_outcome_prompt'), settings.tacticalCombatOutcomePrompt || DEFAULT_TACTICAL_OUTCOME_PROMPT);
     setValue(el('rpg_tactical_combat_special_prompt'), settings.tacticalCombatSpecialPrompt || DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT);
     setValue(el('rpg_combat_passive_prompt'), settings.combatPassiveResolutionPrompt || DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT);
+    setValue(el('rpg_combat_skill_intent_prompt'), settings.combatSkillIntentPrompt || DEFAULT_SKILL_INTENT_PROMPT);
     setValue(el('rpg_tactical_combat_action_catalog'), settings.tacticalCombatActionCatalogJson || DEFAULT_TACTICAL_ACTION_CATALOG_JSON);
     setValue(el('rpg_tactical_combat_classifier'), settings.tacticalCombatClassifierJson || DEFAULT_LOADOUT_CLASSIFIER_JSON);
     setValue(el('rpg_tactical_combat_spell_compendium'), settings.tacticalCombatSpellCompendiumJson || DEFAULT_SPELL_COMPENDIUM_JSON);
@@ -381,6 +384,7 @@ export function bindTacticalCombatSettings(deps) {
         ['rpg_tactical_combat_outcome_prompt', 'tacticalCombatOutcomePrompt', DEFAULT_TACTICAL_OUTCOME_PROMPT],
         ['rpg_tactical_combat_special_prompt', 'tacticalCombatSpecialPrompt', DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT],
         ['rpg_combat_passive_prompt', 'combatPassiveResolutionPrompt', DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT],
+        ['rpg_combat_skill_intent_prompt', 'combatSkillIntentPrompt', DEFAULT_SKILL_INTENT_PROMPT],
     ]) {
         const node = el(id);
         if (!node) continue;

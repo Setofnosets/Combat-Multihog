@@ -11,12 +11,14 @@ import { createEncounterState } from './tactical-combat-engine.js';
 import {
     DEFAULT_LOADOUT_CLASSIFIER_CONFIG,
     buffModifiers,
-    classifyAbility,
+    classifySkillIntent,
+    detectWillpowerProfile,
     getLoadoutClassifier,
     isBonusAction,
     isRangedAbility,
     matchesAny,
     matchesAnyWord,
+    normalizeSkillIntent,
     parseAreaKeywords,
     willpowerOutcomeFor,
 } from './tactical-combat-classifiers.js';
@@ -77,7 +79,6 @@ function parseWillpowerLine(lines) {
     return null;
 }
 
-const WILLPOWER_BOTH_RX = /(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*HP\s*\+\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*(?:willpower|will)\b/i;
 const WILLPOWER_BREAK_RX = /(?:on\s+)?will(?:power)?\s+break\s*:\s*([a-z_-]+)/i;
 
 function parseWillpowerOutcomeText(text, classifier) {
@@ -176,69 +177,109 @@ function buildSkillFromName(name, description, options = {}) {
     const cleanedName = cleanText(name).slice(0, 80);
     if (!cleanedName || cleanedName.length < 2) return null;
     if (/^(level|cantrips?|spells?|abilities)$/i.test(cleanedName)) return null;
+    if (/^(?:none|none declared|no abilities|no spells|n\/a|unknown|—|-)$/i.test(cleanedName)) return null;
     const classifier = options.classifier || DEFAULT_LOADOUT_CLASSIFIER_CONFIG;
     const definition = options.definition && typeof options.definition === 'object' ? options.definition : null;
     const text = `${cleanedName} ${description || ''}`;
-    const passive = options.passive === true
-        || definition?.passive === true
-        || /^\s*passive\b/i.test(String(description || ''));
-    const bothMatch = text.match(WILLPOWER_BOTH_RX);
-    const willHealMatch = text.match(/(?:willpower|will)\s+heal(?:ing)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\bheal(?:ing)?\s+(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s+(?:willpower|will)\b/i);
-    const willAmountMatch = text.match(/(?:willpower|will)\s*(?:damage)?\s*:?\s*(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)|\b(\d+d\d+(?:\s*[+-]\s*\d+)?|\d+)\s*(?:willpower|will)\b/i);
-    const keywordsWill = matchesAnyWord(text, classifier?.willpower?.damageKeywords || []);
-    const explicitWillpower = !!willAmountMatch || !!bothMatch || !!willHealMatch || keywordsWill
-        || definition?.resource === 'willpower' || definition?.resource === 'both';
-    const outcomeFromText = parseWillpowerOutcomeText(text, classifier);
-    const keywordOutcome = willpowerOutcomeFor(cleanedName, description, classifier);
-    // For implicit classification, only the ability's own name is a strong
-    // enough signal. A defensive ability whose description merely says it
-    // protects against terror must not become a Willpower attack.
-    const nameKeywordOutcome = willpowerOutcomeFor(cleanedName, '', classifier);
+    const definitionAuthoritative = !!definition && (
+        (Array.isArray(definition.effectTemplate) && definition.effectTemplate.length > 0)
+        || definition.locked === true
+        || definition.status === 'resolved'
+        || ['config', 'manual', 'resolver', 'architect', 'lorebook', 'ai', 'ai-intent'].includes(String(definition.source || '').toLowerCase())
+        || ['ai', 'manual', 'explicit', 'definition'].includes(String(definition.intentSource || '').toLowerCase())
+    );
+    const intentInfo = classifySkillIntent(cleanedName, description, {
+        config: classifier,
+        type: options.type || (options.spell === true ? 'spell' : definition?.type),
+        passive: options.passive === true,
+        utility: options.utility === true,
+        noncombat: options.noncombat === true,
+        intent: options.intent,
+        definition,
+        definitionAuthoritative,
+    });
+    let intent = intentInfo.intent;
+    let passive = intent === 'passive';
+    let utility = intent === 'utility';
+    let noncombat = intent === 'noncombat';
+    let intentSource = intentInfo.confidence === 'explicit' ? 'explicit'
+        : intentInfo.confidence === 'definition' ? 'definition'
+            : intentInfo.confidence === 'resolved' ? 'resolved'
+                : intentInfo.confidence === 'fallback' ? 'fallback' : 'pattern';
+    if (intent === 'unknown') {
+        // Ambiguous skills wait for the AI intent classifier. Until then they
+        // are safe utility specials, never attacks. Keep the `unknown` marker
+        // so the async pass can see them.
+        utility = true;
+        intentSource = 'fallback';
+    }
+    if (definitionAuthoritative && Array.isArray(definition?.effectTemplate) && definition.effectTemplate.length && !noncombat && !passive && !utility) {
+        intent = 'special';
+        passive = false;
+        utility = false;
+        intentSource = 'resolved';
+    }
+
+    const willProfile = detectWillpowerProfile(cleanedName, description, classifier);
     let resource = normalizeWillpowerResource(options.resource ?? definition?.resource, 'hp');
     let willpowerDamage = String(definition?.willpowerDamage || '');
     let willpowerOutcome = normalizeWillpowerOutcome(options.willpowerOutcome ?? definition?.willpowerOutcome ?? 'defeat', 'defeat');
-    let kind = options.kind || definition?.kind || classifyAbility(cleanedName, description, classifier);
-    const definitionAuthoritative = !!definition && (
-        definition.registryId
-        || (definition.effectTemplate && definition.effectTemplate.length > 0)
-        || (definition.source && definition.source !== 'inferred')
-        || definition.status === 'confirmed'
-        || definition.status === 'resolved'
-    );
-    const definitionKind = definition?.kind || '';
-    const keepDefinitionKind = definitionAuthoritative && ['attack', 'heal', 'buff', 'special'].includes(definitionKind);
-    let damage = String(options.damage ?? definition?.damage ?? (kind === 'attack' ? (parseDice(description) || options.defaultDamage || '1d8') : ''));
-    let heal = String(options.heal ?? definition?.heal ?? (kind === 'heal' ? (parseDice(description) || '1d8+2') : ''));
-    const complex = matchesAnyWord(text, classifier?.willpower?.complexKeywords || []);
+    let kind = intentInfo.kind || (intent === 'attack' ? 'attack' : intent === 'heal' ? 'heal' : intent === 'buff' ? 'buff' : 'special');
+    let damage = '';
+    let heal = '';
 
-    if (bothMatch) {
-        resource = 'both';
-        damage = bothMatch[1].replace(/\s+/g, '');
-        willpowerDamage = bothMatch[2].replace(/\s+/g, '');
-        kind = keepDefinitionKind ? definitionKind : (complex ? 'special' : 'attack');
-        willpowerOutcome = parseWillpowerOutcomeText(text, classifier);
-    } else if (willHealMatch) {
-        resource = 'willpower';
-        kind = 'heal';
-        heal = (willHealMatch[1] || willHealMatch[2]).replace(/\s+/g, '');
+    if (passive) {
+        kind = 'special';
+        resource = 'hp';
         damage = '';
-    } else if (explicitWillpower) {
-        if (resource === 'hp') resource = 'willpower';
-        if (kind !== 'heal') {
-            kind = keepDefinitionKind ? definitionKind : (complex ? 'special' : (definition?.kind === 'special' ? 'special' : 'attack'));
+        willpowerDamage = '';
+        willpowerOutcome = 'defeat';
+        heal = '';
+    } else if (noncombat || utility) {
+        kind = 'special';
+        resource = 'hp';
+        damage = '';
+        willpowerDamage = '';
+        willpowerOutcome = 'defeat';
+        heal = '';
+    } else {
+        const complex = matchesAnyWord(text, classifier?.complexKeywords || classifier?.willpower?.complexKeywords || []);
+        damage = String(options.damage ?? definition?.damage ?? (kind === 'attack' ? (parseDice(description) || options.defaultDamage || '') : ''));
+        heal = String(options.heal ?? definition?.heal ?? (kind === 'heal' ? (parseDice(description) || '1d8+2') : ''));
+        if (willProfile.explicit) {
+            resource = willProfile.resource;
+            willpowerOutcome = willProfile.willpowerOutcome !== 'defeat'
+                ? willProfile.willpowerOutcome
+                : parseWillpowerOutcomeText(text, classifier);
+            if (willProfile.heal) {
+                kind = 'heal';
+                heal = willProfile.damage || heal || parseDice(description) || '1d6';
+                damage = '';
+                willpowerDamage = '';
+            } else {
+                const keepIntentKind = intent === 'special' || intent === 'buff';
+                if (!keepIntentKind && kind !== 'heal') kind = complex ? 'special' : 'attack';
+                if (willProfile.resource === 'both') {
+                    damage = willProfile.damage || damage;
+                    willpowerDamage = willProfile.willpowerDamage || willpowerDamage || damage || '1d6';
+                } else {
+                    damage = willProfile.damage || damage || parseDice(description) || '1d6';
+                    willpowerDamage = '';
+                }
+            }
+        } else if (resource === 'willpower' || resource === 'both') {
+            if (willpowerOutcome === 'defeat') {
+                willpowerOutcome = parseWillpowerOutcomeText(text, classifier);
+            }
+            if (resource === 'both') {
+                if (!willpowerDamage) willpowerDamage = damage || '1d6';
+            } else {
+                if (!damage) damage = parseDice(description) || '1d6';
+            }
         }
-        if (!damage) damage = (willAmountMatch?.[1] || willAmountMatch?.[2] || parseDice(description) || '1d6').replace(/\s+/g, '');
-        if (willpowerOutcome === 'defeat') {
-            willpowerOutcome = outcomeFromText !== 'defeat' ? outcomeFromText : keywordOutcome;
-        }
-    } else if (kind !== 'heal' && nameKeywordOutcome !== 'defeat') {
-        if (resource === 'hp') resource = 'willpower';
-        willpowerOutcome = nameKeywordOutcome;
-        if (!keepDefinitionKind && (kind !== 'special' || !complex)) kind = complex ? 'special' : 'attack';
-        if (!damage) damage = '1d6';
+        if (resource === 'willpower' && kind === 'attack' && !damage) damage = '1d6';
+        if (resource === 'both' && !willpowerDamage) willpowerDamage = damage || '1d6';
     }
-    if (resource === 'willpower' && kind === 'attack' && !damage) damage = '1d6';
-    if (resource === 'both' && !willpowerDamage) willpowerDamage = damage || '1d6';
 
     const ranged = isRangedAbility(cleanedName, description, classifier) || options.ranged === true;
     const area = options.area !== undefined
@@ -284,6 +325,8 @@ function buildSkillFromName(name, description, options = {}) {
         name: cleanedName,
         description: cleanText(description).slice(0, 400),
         kind,
+        intent,
+        intentSource,
         resource,
         target: String(options.target || definition?.target || (kind === 'attack' ? 'enemy' : kind === 'special' ? 'any' : 'ally')).toLowerCase(),
         range,
@@ -303,7 +346,8 @@ function buildSkillFromName(name, description, options = {}) {
         unlimited,
         maxUses: unlimited ? 0 : Math.max(0, Number(usage.max) || 0),
         uses: unlimited ? 0 : Math.max(0, Math.min(Number(usage.max) || 0, Number(usage.current) || 0)),
-        utility: options.utility === true || definition?.utility === true,
+        utility,
+        noncombat,
         passive,
         trigger: passive
             ? normalizePassiveTrigger(options.trigger ?? definition?.trigger)
@@ -370,7 +414,7 @@ function parseSpellLines(lines, existingNames = new Set(), maxSkills = 6, option
         const namesPart = line.replace(/^[^:]*:\s*/, '').replace(/\([^)]*\)/g, '');
         const names = namesPart.split(/[,;]/).map(cleanText).filter(Boolean);
         for (const name of names) {
-            if (/^(level|cantrips?|spells?|prepared|unprepared|known|memorized|memorised)$/i.test(name)) continue;
+            if (/^(level|cantrips?|spells?|prepared|unprepared|known|memorized|memorised|none|none declared|no spells|n\/a|unknown)$/i.test(name)) continue;
             const definition = getSpellDefinition(compendium, name);
             const description = definition?.description
                 || (usage ? `${isCantrip ? 'Cantrip' : 'Spell'} (${usage})` : (isCantrip ? 'Cantrip' : 'Spell'));
@@ -803,6 +847,7 @@ export function parseInventoryLoadout(memo, classifier = DEFAULT_LOADOUT_CLASSIF
             inventory.push({ name, description, section, equipped, rarity, quantity });
         }
         const definition = getSpellDefinition(options.spellCompendium, name);
+        if (definition?.noncombat === true || normalizeSkillIntent(definition?.intent) === 'noncombat') continue;
         const usable = definition
             ? ['heal', 'buff', 'special'].includes(definition.kind)
             : matchesAnyWord(name, itemRules.usableKeywords);
@@ -880,7 +925,7 @@ export function parseInventoryItems(memo, classifier = DEFAULT_LOADOUT_CLASSIFIE
     return parseInventoryLoadout(memo, classifier, options).items;
 }
 
-function fallbackSkills(side, classLabel = '') {
+export function fallbackSkills(side, classLabel = '') {
     const caster = /\b(wizard|sorcerer|warlock|cleric|druid|bard|mage|priest|shaman|oracle)\b/i.test(classLabel);
     const skills = [
         {
@@ -1187,14 +1232,18 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
     attachRegistryPassives(playerUnits, spellCompendium.registry, classifier);
 
     for (const unit of playerUnits) {
-        if (!unit.skills?.length) unit.skills = fallbackSkills('player', unit.classLabel);
+        if (!(unit.skills || []).some(skill => !skill.noncombat)) {
+            unit.skills = [...(unit.skills || []), ...fallbackSkills('player', unit.classLabel)];
+        }
         if (!unit.items?.length && unit === pcUnit) unit.items = [defaultPotion()];
         if (!Array.isArray(unit.inventory)) unit.inventory = [];
         if (!unit.speed) unit.speed = movement;
         ensureSpellSlots(unit);
     }
     for (const unit of [...enemies, ...allies]) {
-        if (!unit.skills?.length) unit.skills = fallbackSkills(unit.side, unit.classLabel);
+        if (!(unit.skills || []).some(skill => !skill.noncombat)) {
+            unit.skills = [...(unit.skills || []), ...fallbackSkills(unit.side, unit.classLabel)];
+        }
         if (!unit.speed) unit.speed = movement;
         ensureSpellSlots(unit);
     }

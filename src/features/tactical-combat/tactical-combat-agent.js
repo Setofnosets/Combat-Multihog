@@ -35,8 +35,11 @@ import {
 import { describeResource, hasUses } from './tactical-combat-resources.js';
 import { describePassiveTrigger, normalizePassiveTrigger } from './tactical-combat-passives.js';
 import { sanitizeEffectTemplate } from './tactical-combat-effect-template.js';
+import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
+import { fallbackSkills } from './tactical-combat-context.js';
 import {
     DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
+    DEFAULT_SKILL_INTENT_PROMPT,
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
@@ -171,9 +174,11 @@ function compactUnitForContext(unit) {
         willpowerDamage: unit.willpowerDamage || '',
         attackWillpowerOutcome: unit.attackWillpowerOutcome || 'defeat',
         initiativeBonus: unit.initiativeBonus,
-        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => ({
+        skills: (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat).map(skill => ({
             name: skill.name,
             kind: skill.kind,
+            intent: skill.intent || skill.kind,
+            utility: skill.utility === true,
             resource: skill.resource || 'hp',
             range: skill.range,
             area: normalizeArea(skill.area ?? skill.aoe),
@@ -186,7 +191,7 @@ function compactUnitForContext(unit) {
             description: skill.description || '',
             effectTemplate: Array.isArray(skill.effectTemplate) ? skill.effectTemplate : undefined,
         })),
-        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+        passives: (unit.skills || []).filter(skill => skill.passive && !skill.noncombat).map(skill => ({
             name: skill.name,
             description: skill.description || '',
             trigger: describePassiveTrigger(skill.trigger),
@@ -225,6 +230,9 @@ function compactRegistrySkill(entry) {
         brief: String(entry.brief || '').slice(0, 240),
         effect: String(entry.effectSummary || '').slice(0, 240),
         kind: entry.mechanics?.kind || 'special',
+        intent: entry.intent || (entry.mechanics?.noncombat ? 'noncombat' : entry.mechanics?.passive ? 'passive' : entry.mechanics?.utility ? 'utility' : entry.mechanics?.kind) || 'special',
+        utility: entry.mechanics?.utility === true,
+        noncombat: entry.mechanics?.noncombat === true || entry.noncombat === true,
         passive: entry.mechanics?.passive === true,
         trigger: entry.mechanics?.passive ? describePassiveTrigger(entry.mechanics.trigger) : '',
         tags: Array.isArray(entry.tags) ? entry.tags.slice(0, 8) : [],
@@ -252,7 +260,10 @@ export function buildEncounterRequestPayload(context, settings, options = {}) {
     const unitCount = (context?.playerUnits?.length || 1) + (context?.allies?.length || 0) + 4;
     const registry = context?.skillRegistry || getSkillRegistry(settings);
     const knownSkills = Object.values(registry.skills || {})
-        .filter(entry => entry.status === 'resolved' || entry.status === 'confirmed')
+        .filter(entry => (entry.status === 'resolved' || entry.status === 'confirmed')
+            && entry.intent !== 'noncombat'
+            && entry.noncombat !== true
+            && entry.mechanics?.noncombat !== true)
         .sort((a, b) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0))
         .slice(0, 32)
         .map(compactRegistrySkill);
@@ -330,12 +341,55 @@ function applyRegistryDefinitionToSkill(skill, registry) {
     if (!entry) return skill;
     const definition = registryEntryToDefinition(entry);
     if (!definition) return skill;
-    if (definition.passive === true) {
+    const definitionIntent = normalizeSkillIntent(definition.intent);
+    const incomingIntent = normalizeSkillIntent(skill.intent);
+    const protectedIntent = skill.passive === true
+        || skill.utility === true
+        || skill.noncombat === true
+        || ['passive', 'utility', 'noncombat'].includes(incomingIntent);
+    if (definition.passive === true && !skill.noncombat) {
         skill.passive = true;
         skill.trigger = normalizePassiveTrigger(definition.trigger);
         skill.unlimited = true;
         skill.maxUses = 0;
         skill.uses = 0;
+        skill.kind = 'special';
+        skill.intent = 'passive';
+        skill.damage = '';
+        skill.heal = '';
+        skill.willpowerDamage = '';
+        if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
+            skill.effectTemplate = definition.effectTemplate;
+        }
+        return skill;
+    }
+    if (definition.utility === true || definitionIntent === 'utility') {
+        skill.kind = 'special';
+        skill.intent = 'utility';
+        skill.utility = true;
+        skill.damage = '';
+        skill.heal = '';
+        skill.willpowerDamage = '';
+        if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
+            skill.effectTemplate = definition.effectTemplate;
+        }
+        return skill;
+    }
+    if (definition.noncombat === true || definitionIntent === 'noncombat') {
+        skill.kind = 'special';
+        skill.intent = 'noncombat';
+        skill.noncombat = true;
+        skill.utility = false;
+        skill.damage = '';
+        skill.heal = '';
+        skill.willpowerDamage = '';
+        return skill;
+    }
+    if (protectedIntent) {
+        if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
+            skill.effectTemplate = definition.effectTemplate;
+        }
+        return skill;
     }
     if (definition.effectTemplate?.length && !skill.effectTemplate?.length) {
         skill.effectTemplate = definition.effectTemplate;
@@ -343,6 +397,7 @@ function applyRegistryDefinitionToSkill(skill, registry) {
     if ((entry.status === 'resolved' || entry.status === 'confirmed' || entry.locked)
         && definition.kind === 'special') {
         skill.kind = 'special';
+        skill.intent = 'special';
         if (definition.effectTemplate?.length) skill.effectTemplate = definition.effectTemplate;
         if (definition.resource) skill.resource = definition.resource;
         if (definition.save) skill.save = definition.save;
@@ -427,29 +482,47 @@ export function normalizeEncounterPayload(value, options = {}) {
             ? raw.skills.filter(skill => skill && typeof skill === 'object').slice(0, 6).map((skill, skillIndex) => {
                 const normalizedArea = normalizeArea(skill.area ?? skill.aoe);
                 const target = String(skill.target || '').toLowerCase();
+                const skillName = String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80);
+                const skillDescription = String(skill.description || '').slice(0, 400);
+                const intentInfo = classifySkillIntent(skillName, skillDescription, { type: 'ability' });
+                const intent = normalizeSkillIntent(skill.intent) || intentInfo.intent;
+                const passive = skill.passive === true || intent === 'passive';
+                const utility = skill.utility === true || intent === 'utility' || intent === 'unknown';
+                const noncombat = skill.noncombat === true || intent === 'noncombat';
+                const kindRaw = String(skill.kind || '').toLowerCase();
+                let kind;
+                if (passive || utility || noncombat) kind = 'special';
+                else if (['attack', 'heal', 'buff', 'special'].includes(kindRaw)) kind = kindRaw;
+                else if (skill.damage || skill.willpowerDamage || skill.willDamage) kind = 'attack';
+                else if (skill.heal) kind = 'heal';
+                else if (skill.acBonus || skill.attackBonus || skill.rounds) kind = 'buff';
+                else kind = 'special';
+                const blockedDamage = passive || utility || noncombat;
                 const normalized = {
                     id: String(skill.id || `skill-${index}-${skillIndex}`).slice(0, 60),
-                    name: String(skill.name || `Ability ${skillIndex + 1}`).slice(0, 80),
-                    description: String(skill.description || '').slice(0, 400),
-                    kind: ['attack', 'heal', 'buff', 'special'].includes(String(skill.kind || '').toLowerCase())
-                        ? String(skill.kind).toLowerCase()
-                        : 'attack',
+                    name: skillName,
+                    description: skillDescription,
+                    kind,
+                    intent: intent || kind,
+                    intentSource: String(skill.intentSource || 'architect').slice(0, 20),
                     resource: normalizeWillpowerResource(skill.resource ?? skill.targetResource, 'hp'),
                     target: ['enemy', 'ally', 'self', 'any'].includes(target) ? target : undefined,
                     range: numberOr(skill.range, normalizedArea && normalizedArea.origin === 'target' ? 6 : 1, 0, 24),
                     area: normalizedArea,
-                    damage: String(skill.damage || '').slice(0, 40),
-                    willpowerDamage: String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
+                    damage: blockedDamage ? '' : String(skill.damage || '').slice(0, 40),
+                    willpowerDamage: blockedDamage ? '' : String(skill.willpowerDamage ?? skill.willDamage ?? '').slice(0, 40),
                     willpowerOutcome: normalizeWillpowerOutcome(skill.willpowerOutcome ?? skill.willOutcome, 'defeat'),
-                    heal: String(skill.heal || '').slice(0, 40),
+                    heal: blockedDamage ? '' : String(skill.heal || '').slice(0, 40),
                     acBonus: numberOr(skill.acBonus, 0, 0, 10),
                     attackBonus: numberOr(skill.attackBonus, 0, -5, 10),
                     bonusAction: !!skill.bonusAction,
                     rounds: numberOr(skill.rounds, 2, 1, 10),
-                    maxUses: skill.passive === true ? 0 : numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
-                    unlimited: skill.passive === true || skill.unlimited === true,
-                    passive: skill.passive === true,
-                    trigger: skill.passive === true ? normalizePassiveTrigger(skill.trigger) : null,
+                    maxUses: passive ? 0 : numberOr(skill.maxUses ?? skill.uses, 1, 1, 99),
+                    unlimited: passive || skill.unlimited === true,
+                    utility,
+                    noncombat,
+                    passive,
+                    trigger: passive ? normalizePassiveTrigger(skill.trigger) : null,
                     save: String(skill.save || '').toLowerCase().slice(0, 8),
                     spell: skill.spell === true,
                     effectTemplate: Array.isArray(skill.effectTemplate)
@@ -566,6 +639,10 @@ const ENCOUNTER_JSON_SCHEMA = {
                                     name: { type: 'string' },
                                     description: { type: 'string' },
                                     kind: { type: 'string', enum: ['attack', 'heal', 'buff', 'special'] },
+                                    intent: { type: 'string', enum: ['attack', 'heal', 'buff', 'special', 'utility', 'passive', 'noncombat'] },
+                                    utility: { type: 'boolean' },
+                                    passive: { type: 'boolean' },
+                                    noncombat: { type: 'boolean' },
                                     resource: { type: 'string', enum: ['hp', 'willpower', 'both'] },
                                     range: { type: 'integer' },
                                     area: {
@@ -1125,6 +1202,270 @@ export function normalizeSpecialEffects(value, state, options = {}) {
         log: String(value?.log || '').slice(0, 500),
         rejected,
     };
+}
+
+const SKILL_INTENT_CACHE = new Map();
+const MAX_SKILL_INTENT_BATCH = 24;
+
+function skillIntentCacheKey(skill, chatId = '') {
+    const name = String(skill?.name || '').trim().toLowerCase();
+    const description = String(skill?.description || '').trim().toLowerCase();
+    let hash = 0;
+    for (let i = 0; i < description.length; i += 1) {
+        hash = ((hash << 5) - hash + description.charCodeAt(i)) | 0;
+    }
+    return `${chatId}|${name}|${hash}`;
+}
+
+function statedExpression(value, description) {
+    const expression = String(value || '').trim().slice(0, 40);
+    if (!expression) return '';
+    const source = String(description || '').replace(/\s+/g, '').toLowerCase();
+    const needle = expression.replace(/\s+/g, '').toLowerCase();
+    if (!needle || !source) return '';
+    return source.includes(needle) ? expression : '';
+}
+
+function pendingSkillIntentUnits(context) {
+    return [
+        ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
+        ...(Array.isArray(context?.allies) ? context.allies : []),
+        ...(Array.isArray(context?.enemies) ? context.enemies : []),
+    ];
+}
+
+/**
+ * True when the context still contains skills whose role could not be inferred
+ * deterministically. The UI uses this to decide whether to run the AI intent pass.
+ * @param {object} context
+ * @returns {boolean}
+ */
+export function hasPendingSkillIntents(context) {
+    return pendingSkillIntentUnits(context).some(unit =>
+        (unit?.skills || []).some(skill => skill && skill.passive !== true && skill.intent === 'unknown'));
+}
+
+/**
+ * Ask the model to classify a batch of ambiguous skills. This function never
+ * invents mechanical values: it only copies expressions the model quotes from
+ * the supplied ability text.
+ * @param {object[]} skills
+ * @param {Record<string, any>} settings
+ * @param {{ mode?: 'tactical'|'traditional', signal?: AbortSignal, chatId?: string }} [options]
+ * @returns {Promise<{ ok:boolean, results:object[], warnings:string[] }>}
+ */
+export async function classifySkillIntentsWithAgent(skills, settings, options = {}) {
+    const mode = options.mode === 'traditional' ? 'traditional' : 'tactical';
+    const chatId = String(options.chatId || getActiveChatId() || '');
+    const unique = new Map();
+    for (const skill of Array.isArray(skills) ? skills : []) {
+        if (!skill?.name) continue;
+        const key = String(skill.name).trim().toLowerCase();
+        if (!key || unique.has(key)) continue;
+        unique.set(key, skill);
+    }
+    const list = [...unique.values()];
+    if (!list.length) return { ok: true, results: [], warnings: [] };
+    const ownsChat = createChatCommitGuard(chatId, getActiveChatId, { signal: options.signal });
+    const warnings = [];
+    const results = [];
+    for (let offset = 0; offset < list.length; offset += MAX_SKILL_INTENT_BATCH) {
+        const batch = list.slice(offset, offset + MAX_SKILL_INTENT_BATCH);
+        const cached = [];
+        const missing = [];
+        for (const skill of batch) {
+            const hit = SKILL_INTENT_CACHE.get(skillIntentCacheKey(skill, chatId));
+            if (hit) cached.push({ ...hit, name: skill.name });
+            else missing.push(skill);
+        }
+        results.push(...cached);
+        if (!missing.length) continue;
+        const payload = {
+            mode,
+            skills: missing.map(skill => ({
+                name: String(skill.name || '').slice(0, 80),
+                type: String(skill.type || (skill.spell ? 'spell' : 'ability')).slice(0, 20),
+                description: String(skill.description || '').slice(0, 600),
+                classLabel: String(skill.classLabel || '').slice(0, 80),
+                owner: String(skill.owner || '').slice(0, 80),
+                currentKind: String(skill.kind || '').slice(0, 20),
+                resource: String(skill.resource || '').slice(0, 12),
+                damage: String(skill.damage || '').slice(0, 40),
+                heal: String(skill.heal || '').slice(0, 40),
+                maxUses: skill.maxUses ?? null,
+            })),
+            rules: {
+                intents: ['attack', 'heal', 'buff', 'special', 'utility', 'passive', 'noncombat'],
+                utility: 'Battlefield utility only. Never assign direct damage.',
+                passive: 'Always-on or triggered trait. Never a clickable action.',
+                noncombat: 'No combat application at all. Keep it in the campaign registry but hide it from combat.',
+                willpower: 'Use resource "willpower" only for explicit mental, morale, fear, charm, domination, sleep, or psychic effects. Use "both" when HP and Willpower are both explicitly damaged.',
+                damage: 'Never invent a damage expression. Copy only dice or numbers stated in the supplied text.',
+            },
+        };
+        try {
+            const raw = await sendStateRequest(
+                requestSettingsFor(settings, mode),
+                String(settings?.combatSkillIntentPrompt || DEFAULT_SKILL_INTENT_PROMPT),
+                `## SKILL INTENT CLASSIFICATION\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\n\nReturn exactly one JSON object: {"skills":[{"name":"...","intent":"attack|heal|buff|special|utility|passive|noncombat","resource":"hp|willpower|both","damage":"","willpowerDamage":"","willpowerOutcome":"defeat","heal":"","note":""}]}`,
+                options.signal || null,
+                { stream: false, debugSource: 'Combat Skill Intent Classifier' },
+            );
+            if (!ownsChat()) return { ok: false, results, warnings: [...warnings, 'The active chat changed during skill classification.'] };
+            const parsed = parseTacticalResponse(raw, 'skills');
+            const responseSkills = Array.isArray(parsed.value?.skills)
+                ? parsed.value.skills
+                : (Array.isArray(parsed.value) ? parsed.value : []);
+            if (!responseSkills.length) {
+                warnings.push(parsed.error || 'The skill intent classifier returned no skills.');
+                continue;
+            }
+            for (const result of responseSkills) {
+                if (!result || typeof result !== 'object') continue;
+                const name = String(result.name || '').trim();
+                const intent = normalizeSkillIntent(result.intent);
+                if (!name || !intent) continue;
+                const source = missing.find(skill => String(skill.name || '').trim().toLowerCase() === name.toLowerCase());
+                const description = source?.description || '';
+                const normalized = {
+                    name,
+                    intent,
+                    resource: normalizeWillpowerResource(result.resource, 'hp'),
+                    willpowerOutcome: normalizeWillpowerOutcome(result.willpowerOutcome ?? result.willOutcome, 'defeat'),
+                    // Never accept a damage/healing expression the model invented.
+                    damage: statedExpression(result.damage, description),
+                    willpowerDamage: statedExpression(result.willpowerDamage ?? result.willDamage, description),
+                    heal: statedExpression(result.heal, description),
+                    acBonus: result.acBonus == null ? null : numberOr(result.acBonus, 0, -10, 20),
+                    attackBonus: result.attackBonus == null ? null : numberOr(result.attackBonus, 0, -10, 20),
+                    rounds: result.rounds == null ? null : numberOr(result.rounds, 2, 1, 10),
+                    note: String(result.note || '').slice(0, 240),
+                };
+                results.push(normalized);
+                if (source) SKILL_INTENT_CACHE.set(skillIntentCacheKey(source, chatId), normalized);
+            }
+        } catch (error) {
+            warnings.push(`Skill intent classification failed: ${String(error?.message || error)}`);
+        }
+    }
+    return { ok: results.length > 0, results, warnings };
+}
+
+function applyIntentResultToSkill(skill, result) {
+    if (!skill || !result) return false;
+    const intent = normalizeSkillIntent(result.intent);
+    if (!intent || intent === 'unknown') return false;
+    skill.intent = intent;
+    skill.intentSource = 'ai';
+    if (intent === 'noncombat') {
+        skill.kind = 'special';
+        skill.noncombat = true;
+        skill.utility = false;
+        skill.passive = false;
+        skill.damage = '';
+        skill.willpowerDamage = '';
+        skill.heal = '';
+        return true;
+    }
+    if (intent === 'passive') {
+        skill.kind = 'special';
+        skill.passive = true;
+        skill.noncombat = false;
+        skill.utility = false;
+        skill.damage = '';
+        skill.willpowerDamage = '';
+        skill.heal = '';
+        skill.unlimited = true;
+        skill.maxUses = 0;
+        skill.uses = 0;
+        skill.trigger = normalizePassiveTrigger(skill.trigger);
+        return true;
+    }
+    if (intent === 'utility') {
+        skill.kind = 'special';
+        skill.utility = true;
+        skill.passive = false;
+        skill.noncombat = false;
+        skill.damage = '';
+        skill.willpowerDamage = '';
+        skill.heal = '';
+        return true;
+    }
+    skill.passive = false;
+    skill.utility = false;
+    skill.noncombat = false;
+    if (intent === 'attack') {
+        skill.kind = 'attack';
+        if (result.resource) skill.resource = result.resource;
+        if (result.damage) skill.damage = result.damage;
+        if (result.willpowerDamage) skill.willpowerDamage = result.willpowerDamage;
+        if (result.willpowerOutcome) skill.willpowerOutcome = result.willpowerOutcome;
+        return true;
+    }
+    if (intent === 'heal') {
+        skill.kind = 'heal';
+        if (result.resource) skill.resource = result.resource;
+        if (result.heal) skill.heal = result.heal;
+        skill.damage = '';
+        skill.willpowerDamage = '';
+        return true;
+    }
+    if (intent === 'buff') {
+        skill.kind = 'buff';
+        if (result.acBonus != null) skill.acBonus = result.acBonus;
+        if (result.attackBonus != null) skill.attackBonus = result.attackBonus;
+        if (result.rounds != null) skill.rounds = result.rounds;
+        return true;
+    }
+    skill.kind = 'special';
+    skill.damage = '';
+    skill.willpowerDamage = '';
+    skill.heal = '';
+    return true;
+}
+
+/**
+ * Run the AI intent pass for every ambiguous skill in a collected context.
+ * Skills become passive, utility, noncombat, or keep a real combat kind; the
+ * function never defaults an unresolved skill to attack.
+ * @param {object} context
+ * @param {Record<string, any>} settings
+ * @param {{ mode?: 'tactical'|'traditional', signal?: AbortSignal, chatId?: string }} [options]
+ * @returns {Promise<{ changed:number, warnings:string[] }>}
+ */
+export async function resolvePendingSkillIntents(context, settings, options = {}) {
+    const units = pendingSkillIntentUnits(context);
+    const pending = [];
+    const byName = new Map();
+    for (const unit of units) {
+        for (const skill of unit?.skills || []) {
+            if (!skill || skill.passive === true || skill.intent !== 'unknown') continue;
+            const key = String(skill.name || '').trim().toLowerCase();
+            if (!key) continue;
+            if (!byName.has(key)) {
+                byName.set(key, []);
+                pending.push({ ...skill, classLabel: unit.classLabel || '', owner: unit.name || '' });
+            }
+            byName.get(key).push(skill);
+        }
+    }
+    if (!pending.length) return { changed: 0, warnings: [] };
+    const classified = await classifySkillIntentsWithAgent(pending, settings, options);
+    let changed = 0;
+    const resultByName = new Map(classified.results.map(result => [String(result.name || '').trim().toLowerCase(), result]));
+    for (const [key, skills] of byName) {
+        const result = resultByName.get(key);
+        if (!result) continue;
+        for (const skill of skills) {
+            if (applyIntentResultToSkill(skill, result)) changed += 1;
+        }
+    }
+    for (const unit of units) {
+        if ((unit.skills || []).some(skill => !skill?.noncombat)) continue;
+        unit.skills = [...(unit.skills || []), ...fallbackSkills(unit.side || 'player', unit.classLabel)];
+        changed += 1;
+    }
+    return { changed, warnings: classified.warnings };
 }
 
 /**

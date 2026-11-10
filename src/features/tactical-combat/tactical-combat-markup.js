@@ -241,8 +241,10 @@ function renderUnitCard(state, view) {
     const hpPct = pct(unit.hp, unit.maxHp);
     const wpPct = unit.maxWillpower ? pct(unit.willpower, unit.maxWillpower) : 0;
     const movementLeft = Math.max(0, (Number(unit.speed) || 0) - (Number(unit.movementUsed) || 0));
-    const skills = (unit.skills || []).filter(skill => !skill.passive);
-    const passives = (unit.skills || []).filter(skill => skill.passive);
+    const skills = (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat && !(skill.utility === true && skill.kind === 'special'));
+    const utilities = (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat && skill.utility === true && skill.kind === 'special');
+    const passives = (unit.skills || []).filter(skill => skill.passive && !skill.noncombat);
+    const allSkills = [...skills, ...utilities];
     const items = unit.items || [];
     const catalogEntry = type => (state.actionCatalog || []).find(entry => entry.type === type);
     const actionLabel = (type, fallback) => escapeHtml(catalogEntry(type)?.label || fallback);
@@ -254,7 +256,7 @@ function renderUnitCard(state, view) {
     if (actionEnabled(state.actionCatalog, 'attack')) {
         actionButtons.push(`<button type="button" class="rt-tc-action ${view.mode === 'attack' ? 'is-armed' : ''}" data-tc-action="mode-attack" title="${actionTitle('attack', 'Make one attack against a target in range.')}" ${!canAct || unit.actionUsed ? 'disabled' : ''}><span class="rt-tc-action-icon">⚔</span>${actionLabel('attack', 'Attack')}</button>`);
     }
-    if (actionEnabled(state.actionCatalog, 'skill') && skills.length) {
+    if (actionEnabled(state.actionCatalog, 'skill') && allSkills.length) {
         actionButtons.push(`<button type="button" class="rt-tc-action ${view.mode === 'skill' ? 'is-armed' : ''}" data-tc-action="mode-skill" title="${actionTitle('skill', 'Use a listed ability or spell.')}" ${!canAct ? 'disabled' : ''}><span class="rt-tc-action-icon">✦</span>${actionLabel('skill', 'Skill')}</button>`);
     }
     if (actionEnabled(state.actionCatalog, 'item') && items.length) {
@@ -270,20 +272,34 @@ function renderUnitCard(state, view) {
         actionButtons.push(`<button type="button" class="rt-tc-action rt-tc-action-danger" data-tc-action="flee" title="${actionTitle('flee', 'Leave the battlefield.')}" ${!canAct ? 'disabled' : ''}><span class="rt-tc-action-icon">↩</span>${actionLabel('flee', 'Flee')}</button>`);
     }
 
-    const skillList = skills.length ? `<div class="rt-tc-subpane">
-        <div class="rt-tc-subtitle">Skills & spells</div>
-        <div class="rt-tc-skill-list">${skills.map(skill => {
-            const areaLabel = skill.area ? describeArea(skill.area) : '';
-            const resource = describeResource(skill, unit);
-            const title = `${skill.description || skill.name}${areaLabel ? ` (${areaLabel}: affects every eligible unit in the burst.)` : ''}`;
-            return `
+    const renderSkillButtons = list => list.map(skill => {
+        const areaLabel = skill.area ? describeArea(skill.area) : '';
+        const resource = describeResource(skill, unit);
+        const title = `${skill.description || skill.name}${areaLabel ? ` (${areaLabel}: affects every eligible unit in the burst.)` : ''}`;
+        const utility = skill.utility === true;
+        const meta = utility
+            ? `UTILITY ${skill.range}c`
+            : skill.kind === 'attack'
+                ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}`
+                : skill.kind === 'heal'
+                    ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}`
+                    : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`;
+        return `
             <button type="button" class="rt-tc-skill ${view.selectedSkillId === skill.id ? 'is-selected' : ''}" data-tc-action="select-skill" data-tc-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(title)}" ${!canAct || !hasUses(skill, unit) ? 'disabled' : ''}>
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(skill.kind === 'attack' ? `${skill.resource === 'willpower' ? 'WILLPOWER' : skill.resource === 'both' ? 'HP+WP' : 'ATK'} ${skill.range}c${skill.damage ? ` · ${skill.damage}` : ''}${skill.resource === 'both' && skill.willpowerDamage ? `+${skill.willpowerDamage}` : ''}` : skill.kind === 'heal' ? `HEAL ${skill.range}c${skill.heal ? ` · ${skill.heal}` : ''}${skill.resource === 'willpower' ? ' · WP' : ''}` : skill.kind === 'special' ? `SPECIAL ${skill.range}c` : `BUFF ${skill.range}c`)}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}${skill.bonusAction ? ' · bonus' : ''}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${meta}${areaLabel ? ` · ${areaLabel.toUpperCase()}` : ''}${skill.bonusAction ? ' · bonus' : ''}`)}</span>
                 <span class="rt-tc-skill-uses">${escapeHtml(resource.label)}</span>
             </button>`;
-        }).join('')}</div>
+    }).join('');
+    const skillsPane = skills.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Skills & spells</div>
+        <div class="rt-tc-skill-list">${renderSkillButtons(skills)}</div>
     </div>` : '';
+    const utilityPane = utilities.length ? `<div class="rt-tc-subpane">
+        <div class="rt-tc-subtitle">Utility</div>
+        <div class="rt-tc-skill-list">${renderSkillButtons(utilities)}</div>
+    </div>` : '';
+    const skillList = skillsPane || utilityPane ? `${skillsPane}${utilityPane}` : '';
 
     const passiveList = passives.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Passives</div>

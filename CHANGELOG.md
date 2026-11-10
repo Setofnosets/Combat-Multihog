@@ -20,8 +20,15 @@ All notable changes to the **Multihog D&D Framework** will be documented in this
 - **Status persistence** — surviving conditions use the State Tracker's `(+)/(-) Label (effect, duration)` format, are written back to `[CHARACTER]`/`[PARTY]` at combat end, and are re-imported by the next encounter. Carried conditions tick once at round 1; out-of-combat durations follow the normal `[TIME]` rules.
 - **Combat uses `[XP]` level** — unit cards read `Level: N | XP: a/b` or `Total: a / b XP (Level N)` before falling back to the sheet's `Level:`/`HD:` line.
 - **Passive compiler prompt** — Settings → Combat now exposes the editable passive-resolution prompt.
+- **Skill intent layer** — every parsed ability now carries `attack`, `heal`, `buff`, `special`, `utility`, `passive`, or `noncombat` intent. Utility skills get their own clickable board section, passives stay in the Passives section, and noncombat skills remain in the Campaign Skill Registry/lorebook while being hidden from combat.
+- **AI skill intent classifier** — ambiguous abilities are classified once per encounter in a batched call. The editable prompt lives beside the passive compiler prompt. The classifier only copies damage/healing expressions stated in the source text; it never invents damage.
+- **Explicit intent prefixes** — tracker prompts now support `Passive:`, `Utility:`, and `Noncombat:` markers so common cases skip the AI pass.
 
 ### Fixed
+- Unknown abilities no longer default to attacks with invented `1d8` damage. Attack, heal, and buff classification now requires positive mechanical evidence.
+- `recover spell slots` no longer becomes a healing ability.
+- Willpower-only abilities reduce Willpower rather than HP; `both` requires an explicit HP and Willpower expression, and defensive “ward against fear” wording does not turn buffs into Willpower attacks.
+- Noncombat skills are filtered from battle states, agent payloads, architect known-skills, and board markup while still being recorded in the campaign ledger.
 - Unlimited abilities with `maxUses: 0` no longer render as unusable `0/0` skills.
 - One-round control statuses now survive the round-start decrement so they can skip the affected unit's turn.
 - Non-special attack skills now apply their `effectTemplate` on a successful hit, enabling bleeding/riders without marking the skill `special`.

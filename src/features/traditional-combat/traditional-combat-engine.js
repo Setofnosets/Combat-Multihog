@@ -182,12 +182,14 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
                 max: Math.max(0, Number(pool?.max) || 0),
             }]),
         ),
-        skills: (unit.skills || []).filter(skill => !skill.passive).map(skill => {
+        skills: (unit.skills || []).filter(skill => !skill.passive && !skill.noncombat).map(skill => {
             const resource = describeResource(skill, unit);
             return {
                 id: skill.id,
                 name: skill.name,
                 kind: skill.kind,
+                intent: skill.intent || skill.kind,
+                utility: skill.utility === true,
                 resource: skill.resource || 'hp',
                 target: skill.target || '',
                 damage: skill.damage,
@@ -208,7 +210,7 @@ function buildTraditionalUnitPayload(state, unit, options = {}) {
                 resolvable: skill.kind === 'special',
             };
         }),
-        passives: (unit.skills || []).filter(skill => skill.passive).map(skill => ({
+        passives: (unit.skills || []).filter(skill => skill.passive && !skill.noncombat).map(skill => ({
             id: skill.id,
             name: skill.name,
             description: skill.description || '',
