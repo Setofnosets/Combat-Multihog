@@ -20,6 +20,7 @@ Traditional Combat is the no-grid turn-based mode of the Multihog D&D Framework.
 - Attack and harmful skills target living enemies. Heals/buffs and items target living allies or the caster. Special skills may target any living unit.
 - Natural 20 is a critical; natural 1 always misses. Damage, healing, statuses, Willpower, transformations, summons, side changes, and retreat work exactly as in tactical combat.
 - Passive abilities use the same AI-compiled `trigger` + `effectTemplate` registry recipes as tactical combat. They trigger automatically and are never offered as active actions.
+- Utility skills use the same `intent: "utility"` / `kind: "special"` flow and appear in the board's Utility section. Noncombat skills remain in the campaign registry but are hidden from combat. Ambiguous skills are classified once by the same batched AI intent pass; they never default to attacks.
 - Surviving statuses are written back to `[CHARACTER]`/`[PARTY]` at the end of the fight and re-imported by the next encounter. Out-of-combat durations follow the State Tracker's `[TIME]` rules.
 - The unit card's level is read from `[XP]` (`Level: N | XP: a/b` or `Total: a / b XP (Level N)`), then the sheet's `Level:`/`HD:` line, then the fallback heuristic.
 - Terrain-altering special effects are rejected in this mode. Summons join the caster's side and act from the next round.

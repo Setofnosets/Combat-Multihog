@@ -124,6 +124,8 @@ function skillContent(entry, forms = {}) {
     lines.push(`Type: ${entry.type || 'ability'}`);
     if (entry.brief) lines.push(`Brief: ${entry.brief}`);
     if (entry.effectSummary) lines.push(`Effect: ${entry.effectSummary}`);
+    const intent = entry.intent || (entry.mechanics?.noncombat ? 'noncombat' : entry.mechanics?.passive ? 'passive' : entry.mechanics?.utility ? 'utility' : entry.mechanics?.kind);
+    if (intent) lines.push(`Intent: ${intent}`);
     if (entry.mechanics?.passive) {
         lines.push('Passive: yes');
         lines.push(`Trigger: ${describePassiveTrigger(entry.mechanics.trigger)}`);

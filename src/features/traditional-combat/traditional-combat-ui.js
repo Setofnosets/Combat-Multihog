@@ -23,7 +23,14 @@ import {
     restoreCombatScopedState,
     retreatEncounter,
 } from '../tactical-combat/tactical-combat-engine.js';
-import { resolveSpecialSource, hasPendingPassiveRecipes, resolvePendingPassives, applyPassiveRecipesToState } from '../tactical-combat/tactical-combat-agent.js';
+import {
+    applyPassiveRecipesToState,
+    hasPendingPassiveRecipes,
+    hasPendingSkillIntents,
+    resolvePendingPassives,
+    resolvePendingSkillIntents,
+    resolveSpecialSource,
+} from '../tactical-combat/tactical-combat-agent.js';
 import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import { backfillSkillRegistry } from '../skill-registry/skill-registry-discovery.js';
 import { collectEncounterContext } from '../tactical-combat/tactical-combat-context.js';
@@ -946,6 +953,16 @@ async function runDeferredArchitect(provisional, settings, options = {}) {
     try {
         const context = collectStartContext(settings, options);
         const passiveWarnings = [];
+        if (hasPendingSkillIntents(context)) {
+            setBusy(true, 'Classifying abilities…', true);
+            render();
+            const classified = await resolvePendingSkillIntents(context, getSettings(), {
+                signal: controller.signal,
+                mode: 'traditional',
+                chatId,
+            });
+            passiveWarnings.push(...classified.warnings);
+        }
         if (hasPendingPassiveRecipes(context)) {
             setBusy(true, 'Compiling passive abilities…', true);
             render();
@@ -1075,6 +1092,26 @@ async function startEncounterFlow(options = {}) {
     const warnings = [];
     const needsAgent = source === 'agent' || (source === 'auto' && !context.existingCombat);
     const deferArchitect = needsAgent && options.fromNarrator === true;
+    const pendingIntentsBeforeBuild = hasPendingSkillIntents(context);
+    if (!options.fromNarrator && pendingIntentsBeforeBuild) {
+        setBusy(true, 'Classifying abilities…', true);
+        render();
+        const classified = await resolvePendingSkillIntents(context, settings, {
+            signal: controller.signal,
+            mode: 'traditional',
+            chatId: context.chatId,
+        });
+        warnings.push(...classified.warnings);
+        if (controller.signal.aborted) {
+            if (ui.abortController === controller) ui.abortController = null;
+            ui.starting = false;
+            setBusy(false);
+            render();
+            return { ok: false, cancelled: true };
+        }
+    } else if (options.fromNarrator && pendingIntentsBeforeBuild) {
+        warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+    }
     const pendingPassivesBeforeBuild = hasPendingPassiveRecipes(context);
     const backgroundPassiveCompile = options.fromNarrator === true && !deferArchitect && pendingPassivesBeforeBuild;
     if (!options.fromNarrator && pendingPassivesBeforeBuild) {

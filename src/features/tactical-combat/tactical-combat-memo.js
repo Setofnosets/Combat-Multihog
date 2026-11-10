@@ -78,6 +78,8 @@ function abilityLine(unit) {
         let description = cleanText(skill?.description || skill?.name || '');
         if (skill?.passive === true && description && !/^\s*passive\b/i.test(description)) {
             description = `Passive: ${description}`;
+        } else if (skill?.utility === true && description && !/^\s*utility\b/i.test(description)) {
+            description = `Utility: ${description}`;
         }
         if (skill?.resource === 'willpower' || skill?.resource === 'both') {
             if (!/\bwillpower\b/i.test(description)) {

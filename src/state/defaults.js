@@ -20,6 +20,7 @@ import { MAIN_SYSPROMPT_BACKUP_KEY } from './main-sysprompt-backup.js';
 import { DEFAULT_MAP_THEME } from './map-themes.js';
 import {
     DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
+    DEFAULT_SKILL_INTENT_PROMPT,
     DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT,
     DEFAULT_TACTICAL_ENCOUNTER_SYSTEM_PROMPT,
     DEFAULT_TACTICAL_OUTCOME_PROMPT,
@@ -232,6 +233,7 @@ export function buildDefaultSettings() {
         tacticalCombatOutcomePrompt: DEFAULT_TACTICAL_OUTCOME_PROMPT,
         tacticalCombatSpecialPrompt: DEFAULT_TACTICAL_SPECIAL_RESOLUTION_PROMPT,
         combatPassiveResolutionPrompt: DEFAULT_COMBAT_PASSIVE_RESOLUTION_PROMPT,
+        combatSkillIntentPrompt: DEFAULT_SKILL_INTENT_PROMPT,
         tacticalCombatActionCatalogJson: DEFAULT_TACTICAL_ACTION_CATALOG_JSON,
         tacticalCombatClassifierJson: DEFAULT_LOADOUT_CLASSIFIER_JSON,
         tacticalCombatSpellCompendiumJson: DEFAULT_SPELL_COMPENDIUM_JSON,
