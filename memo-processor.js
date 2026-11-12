@@ -12,9 +12,12 @@
 import { getSettings } from './state-manager.js';
 import { DEFAULT_STOCK_PROMPTS, resolveTimePromptKey } from './constants.js';
 import {
+    getCombatMemoState,
+    hasActiveEnemyCombatant,
     isResolvedCombatantStatusLine,
     parseCombatants,
     partitionResolvedCombatants,
+    stripEndedCombatFromMemo,
     stripResolvedCombatantsFromMemo,
 } from './src/state/combat-persistence.js';
 
@@ -22,7 +25,7 @@ const COMBAT_BLOCK_RX = /\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i;
 
 const DEFEATED_COMBATANTS_PROMPT_RULE = '- DEFEATED COMBATANTS: While a fight is active, mark defeated enemies as Status: Defeated and do not omit them from the memo. When every enemy is defeated, routed, surrendered, or otherwise out of the fight, close the encounter with END_COMBAT in that same pass; never leave an empty combat block.';
 const COMBAT_SIDES_PROMPT_RULE = '- COMBAT SIDES: Group combatants under ENEMIES: and NON-PARTY ALLIES: headers, with enemies first. NON-PARTY ALLIES are allied combatants who are NOT listed in [PARTY]. Never put any [PARTY] member in [COMBAT]. Include both headers when non-party allies are present; otherwise include ENEMIES: only.';
-const COMBAT_STATE_PROMPT_RULE = '- COMBAT STATE: Begin every [COMBAT] block with `COMBAT STATE: DORMANT`, `HOSTILE`, or `ACTIVE`. Use DORMANT only for an unresolved encounter whose combatants are still physically present. Use HOSTILE when a hostile action has actually been declared, and ACTIVE while the tactical board owns the fight. Do not use a DORMANT block as a history list for absent, departed, or resolved enemies.';
+const COMBAT_STATE_PROMPT_RULE = '- COMBAT STATE: Begin every [COMBAT] block with `COMBAT STATE: DORMANT`, `HOSTILE`, or `ACTIVE`. Use DORMANT only for an unresolved encounter whose combatants are still physically present. Use HOSTILE when a hostile action has actually been declared, and ACTIVE while the tactical board owns the fight. Do not use a DORMANT block as a history list for absent, departed, or resolved enemies. Follow the two-beat rule: enemies first introduced in the current scene are DORMANT during their prelude; never mark HOSTILE in the same pass that new enemies first appear unless the player\'s immediately preceding message already declared an attack, hostile spell, charge, or ambush.';
 const COMBAT_RESOLUTION_PROMPT_RULE = '- COMBAT RESOLUTION: Close [COMBAT] with `[COMBAT]END_COMBAT[/COMBAT]` in the same pass that a fight ends, or that a DORMANT encounter ends without combat (successful parley, intimidation, bribe, surrender, withdrawal, or the combatants leave the scene). When every enemy is defeated or otherwise out of the fight, close it in that same pass. Never leave a dormant or empty [COMBAT] block in the memo.';
 
 // ── String utilities ──────────────────────────────────────────────────────────
@@ -515,6 +518,8 @@ export function mergeMemo(currentMemo, aiOutput) {
             if (settings.debugMode) console.log('[RPG Tracker] mergeMemo: bare END_COMBAT closed the combat block.');
             return baseMemo;
         }
+        const cleanedMemo = stripEndedCombatFromMemo(currentMemo);
+        if (cleanedMemo !== currentMemo) return cleanedMemo;
         console.warn("[RPG Tracker] No valid [TAG]...[/TAG] blocks found in model output — treating as no-change. Output was:", aiOutput);
         return currentMemo;
     }
@@ -541,9 +546,11 @@ export function mergeMemo(currentMemo, aiOutput) {
         // weaker models sometimes emit a hollow block for a module with nothing to report
         // instead of omitting the section entirely.
         const isCombat = tagUpper === 'COMBAT';
+        const incomingCombatEnded = isCombat
+            && getCombatMemoState(`[COMBAT]\n${newContent}\n[/COMBAT]`) === 'ended';
         const isRemoval = newContent === ''
             || /^(?:REMOVED|EXPIRED|CLEARED|NONE)$/i.test(newContent)
-            || (isCombat && /^END_COMBAT\b/i.test(newContent));
+            || (isCombat && (/^END_COMBAT\b/i.test(newContent) || incomingCombatEnded));
 
         const escapedTag = escapeRegex(tag);
         let mergedContent = newContent;
@@ -569,6 +576,15 @@ export function mergeMemo(currentMemo, aiOutput) {
                 const partitioned = partitionResolvedCombatants(newContent, priorArchive);
                 mergedContent = partitioned.activeContent;
                 settings.combatDefeatedUi = partitioned.defeatedCombatants;
+                // A partial tracker response must never leave a header-only
+                // [COMBAT] shell behind. If every enemy in the incoming block is
+                // already resolved or omitted, close the encounter now.
+                if (!hasActiveEnemyCombatant(mergedContent)) {
+                    settings.combatDefeatedUi = [];
+                    memo = memo.replace(existingPattern, '').replace(/\n{3,}/g, '\n\n').trim();
+                    if (settings.debugMode) console.log('[RPG Tracker] mergeMemo: [COMBAT] has no active enemies — block closed.');
+                    continue;
+                }
             }
         }
 
@@ -598,7 +614,7 @@ export function mergeMemo(currentMemo, aiOutput) {
     if (benchCommands.benches.length || benchCommands.unbenches.length) {
         result = applyBenchCommands(currentMemo, result, benchCommands);
     }
-    return hydratePartyRelocationStats(currentMemo, result);
+    return hydratePartyRelocationStats(currentMemo, stripEndedCombatFromMemo(result));
 }
 
 /**

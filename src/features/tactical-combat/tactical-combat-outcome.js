@@ -226,7 +226,7 @@ export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     }).trim();
     if (!rendered) return '';
     const label = isTraditional ? 'TRADITIONAL_COMBAT_CONTEXT' : 'TACTICAL_COMBAT_CONTEXT';
-    const bridge = `[${label}]\nA ${isTraditional ? 'traditional turn-based' : 'tactical'} encounter triggered by the player's previous message has just been resolved on the board. That previous message is not a new action and must not be replayed. Treat the result below as authoritative over stale State Memo or chat-history assumptions. The fight is over unless the result explicitly leaves enemies standing.\n[/${label}]\n\n`;
+    const bridge = `[${label}]\nA ${isTraditional ? 'traditional turn-based' : 'tactical'} encounter triggered by the player's previous message has just been resolved on the board. Combat is OVER; this is the post-combat aftermath. That previous message is not a new action and must not be replayed. Treat the result below as authoritative over stale State Memo or chat-history assumptions. The fight is over unless the result explicitly leaves enemies standing, and the State Tracker must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies from this result.\n[/${label}]\n\n`;
     return `${bridge}${rendered}\n\n`;
 }
 

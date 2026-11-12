@@ -2,7 +2,7 @@ import { getSettings, getBarBackground, getBarShowAsPercentage, getBarAnimateCha
 import { lookupCustomPortraitSrc } from './portrait-storage.js';
 import { escapeHtml, decodeHtml, highlightParens, highlightNumbers, parseInWorldTime, isRestTimeUnset, formatTimeDiff, isArchivedQuestStatus, questHasEffectiveDeadline, isEmergentQuest } from './memo-processor.js';
 import { BLOCK_ICONS, BLOCK_ORDER, PAGE_SIZE, NO_PAGINATE, renderStartingGearTierOptions } from './constants.js';
-import { isResolvedCombatantStatusLine, parseCombatSideHeader } from './src/state/combat-persistence.js';
+import { getCombatMemoState, isResolvedCombatantStatusLine, parseCombatSideHeader } from './src/state/combat-persistence.js';
 import { buildDisplayGroupRenderPlan } from './src/features/display-groups.js';
 
 // ── Renderer module: pure HTML string producers, localStorage helpers ──
@@ -1240,7 +1240,16 @@ export function renderDayNightBadge(str) {
         const blocks = {};
         const pattern = /\[([^\]\/][^\]]*)\]([\s\S]*?)\[\/\1\]/gi;
         for (const [, tag, content] of memo.matchAll(pattern)) {
-            blocks[tag.trim().toUpperCase()] = content.trim();
+            const key = tag.trim().toUpperCase();
+            const value = content.trim();
+            // A closed combat block is aftermath history, never a live card.
+            // Hiding it here also covers old saves that still contain the
+            // legacy [COMBAT]END_COMBAT[/COMBAT] marker.
+            if (key === 'COMBAT' && getCombatMemoState(`[COMBAT]\n${value}\n[/COMBAT]`) === 'ended') {
+                delete blocks.COMBAT;
+                continue;
+            }
+            blocks[key] = value;
         }
         return blocks;
     }

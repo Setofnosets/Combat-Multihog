@@ -33,7 +33,7 @@ import {
     normalizeWillpowerResource,
 } from './tactical-combat-willpower.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
-import { describePassiveTrigger, normalizePassiveTrigger } from './tactical-combat-passives.js';
+import { builtinPassiveRecipe, describePassiveTrigger, normalizePassiveTrigger } from './tactical-combat-passives.js';
 import { sanitizeEffectTemplate } from './tactical-combat-effect-template.js';
 import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
 import { fallbackSkills } from './tactical-combat-context.js';
@@ -1549,6 +1549,7 @@ export async function resolvePendingPassives(context, settings, options = {}) {
     const units = [
         ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
         ...(Array.isArray(context?.allies) ? context.allies : []),
+        ...(Array.isArray(context?.enemies) ? context.enemies : []),
     ];
     const recipes = new Map();
     const failed = new Set();
@@ -1586,7 +1587,7 @@ export async function resolvePendingPassives(context, settings, options = {}) {
                 name: skill.name,
                 type: 'ability',
                 brief: skill.description || '',
-                owners: [{ type: 'character', name: unit.name }],
+                owners: [{ type: unit.side === 'enemy' ? 'enemy' : 'character', name: unit.name }],
                 mechanics: {
                     kind: skill.kind,
                     resource: skill.resource,
@@ -1596,6 +1597,19 @@ export async function resolvePendingPassives(context, settings, options = {}) {
                     target: skill.target,
                 },
             };
+            const builtin = builtinPassiveRecipe(skill.name);
+            if (builtin) {
+                const remembered = rememberPassiveResolution(settings, entry, builtin.trigger, builtin.effects);
+                const recipe = {
+                    trigger: remembered.entry?.mechanics?.trigger || builtin.trigger,
+                    effects: remembered.entry?.mechanics?.effectTemplate || builtin.effects,
+                    registryId: remembered.entry?.id || '',
+                };
+                recipes.set(key, recipe);
+                applyRecipe(skill, recipe);
+                changed += 1;
+                continue;
+            }
             const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
                 signal: options.signal,
                 mode: options.mode,
@@ -1637,6 +1651,7 @@ export function hasPendingPassiveRecipes(context) {
     const units = [
         ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
         ...(Array.isArray(context?.allies) ? context.allies : []),
+        ...(Array.isArray(context?.enemies) ? context.enemies : []),
     ];
     return units.some(unit => (unit?.skills || []).some(skill =>
         skill?.passive === true && !(Array.isArray(skill.effectTemplate) && skill.effectTemplate.length),
@@ -1656,6 +1671,7 @@ export function applyPassiveRecipesToState(context, state) {
     const units = [
         ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
         ...(Array.isArray(context?.allies) ? context.allies : []),
+        ...(Array.isArray(context?.enemies) ? context.enemies : []),
     ];
     for (const unit of units) {
         for (const skill of unit?.skills || []) {

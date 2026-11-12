@@ -28,6 +28,10 @@ import {
     describePassiveTrigger,
     normalizePassiveTrigger,
 } from '../tactical-combat/tactical-combat-passives.js';
+import {
+    normalizeCombatCondition,
+    normalizeCombatScale,
+} from '../tactical-combat/tactical-combat-variables.js';
 
 export const SKILL_REGISTRY_VERSION = 2;
 export const MAX_REGISTRY_SKILLS = 400;
@@ -153,6 +157,10 @@ function normalizeMechanics(raw = {}) {
         heal: passive || noncombat || utility ? '' : stringValue(source.heal, 40),
         acBonus: clampInt(source.acBonus, -10, 20, 0),
         attackBonus: clampInt(source.attackBonus, -10, 20, 0),
+        damageBonus: clampInt(source.damageBonus, -100, 100, 0),
+        damageReduction: clampInt(source.damageReduction, 0, 100, 0),
+        scale: normalizeCombatScale(source.scale),
+        condition: normalizeCombatCondition(source.condition),
         rounds: clampInt(source.rounds, 1, 10, 2),
         bonusAction: source.bonusAction === true,
         save: ['str', 'dex', 'con', 'int', 'wis', 'will', 'cha'].includes(saveRaw) ? saveRaw : '',
@@ -761,6 +769,10 @@ export function registryEntryToDefinition(entry) {
         heal: mechanics.heal,
         acBonus: mechanics.acBonus,
         attackBonus: mechanics.attackBonus,
+        damageBonus: mechanics.damageBonus,
+        damageReduction: mechanics.damageReduction,
+        scale: mechanics.scale ? cloneJson(mechanics.scale) : null,
+        condition: mechanics.condition ? cloneJson(mechanics.condition) : null,
         rounds: mechanics.rounds,
         bonusAction: mechanics.bonusAction,
         save: mechanics.save,
@@ -863,6 +875,10 @@ function entryFromSkill(skill, options = {}) {
             heal: skill.heal,
             acBonus: skill.acBonus,
             attackBonus: skill.attackBonus,
+            damageBonus: skill.damageBonus,
+            damageReduction: skill.damageReduction,
+            scale: normalizeCombatScale(skill.scale),
+            condition: normalizeCombatCondition(skill.condition),
             rounds: skill.rounds,
             bonusAction: skill.bonusAction,
             save: skill.save,

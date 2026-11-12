@@ -27,6 +27,7 @@ import { buildSkillCatalog, registerSkillsFromUnits, registryEntryToDefinition }
 import { markSkillRegistryDirty } from '../skill-registry/skill-registry-store.js';
 import { buildSpellSlots, ensureSpellSlots, parseUsageState } from './tactical-combat-resources.js';
 import { normalizePassiveTrigger } from './tactical-combat-passives.js';
+import { normalizeCombatCondition, normalizeCombatScale } from './tactical-combat-variables.js';
 import { parseStatusConditions } from './tactical-combat-status.js';
 import {
     TC_DYNAMIC_MAX,
@@ -337,6 +338,10 @@ function buildSkillFromName(name, description, options = {}) {
         heal,
         acBonus: buff.acBonus,
         attackBonus: buff.attackBonus,
+        damageBonus: Number(options.damageBonus ?? definition?.damageBonus) || 0,
+        damageReduction: Math.max(0, Number(options.damageReduction ?? definition?.damageReduction) || 0),
+        scale: normalizeCombatScale(options.scale ?? definition?.scale),
+        condition: normalizeCombatCondition(options.condition ?? definition?.condition),
         bonusAction: options.bonusAction ?? definition?.bonusAction ?? isBonusAction(description, classifier),
         rounds: buff.rounds,
         save: String(options.save ?? definition?.save ?? definition?.check?.save ?? '').toLowerCase(),
@@ -1123,6 +1128,11 @@ function ownerMatchesUnit(owner, unit) {
         const unitKeys = normalizedOwnerKeys(unit.classLabel);
         return ownerKeys.some(key => unitKeys.some(candidate => candidate === key || candidate.includes(key) || key.includes(candidate)));
     }
+    if (type === 'enemy') {
+        if (unit.side !== 'enemy') return false;
+        const unitKeys = normalizedOwnerKeys(unit.name);
+        return ownerKeys.some(key => unitKeys.some(candidate => candidate === key || candidate.includes(key) || key.includes(candidate)));
+    }
     return false;
 }
 
@@ -1230,6 +1240,7 @@ export function collectEncounterContext(settings, ctx = (typeof SillyTavern !== 
     }
 
     attachRegistryPassives(playerUnits, spellCompendium.registry, classifier);
+    attachRegistryPassives([...enemies, ...allies], spellCompendium.registry, classifier);
 
     for (const unit of playerUnits) {
         if (!(unit.skills || []).some(skill => !skill.noncombat)) {

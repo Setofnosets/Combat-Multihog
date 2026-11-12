@@ -7,6 +7,8 @@
  * the compendium and the campaign Skill Registry using the same shape.
  */
 
+import { normalizeCombatCondition, normalizeCombatScale } from './tactical-combat-variables.js';
+
 export const EFFECT_PRIMITIVE_TYPES = Object.freeze([
     'damage',
     'drain',
@@ -114,6 +116,12 @@ export function normalizeEffectPrimitive(raw) {
     }
     if (raw.healResource != null) effect.healResource = stringValue(raw.healResource, 12).toLowerCase();
     if (raw.damageType != null) effect.damageType = stringValue(raw.damageType, 20);
+    if (raw.damageBonus != null) effect.damageBonus = optionalInt(raw.damageBonus, -100, 100) ?? 0;
+    if (raw.damageReduction != null) effect.damageReduction = optionalInt(raw.damageReduction, 0, 100) ?? 0;
+    const scale = normalizeCombatScale(raw.scale);
+    if (scale) effect.scale = scale;
+    const condition = normalizeCombatCondition(raw.condition);
+    if (condition) effect.condition = condition;
 
     if (type === 'status') {
         if (raw.label != null) effect.label = stringValue(raw.label, 60);

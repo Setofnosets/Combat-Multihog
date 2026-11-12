@@ -52,9 +52,11 @@ export function inferStatusPolarity(status) {
     if (!status || typeof status !== 'object') return '';
     const explicit = String(status.polarity || '').toLowerCase();
     if (explicit === 'positive' || explicit === 'negative') return explicit;
-    if (status.damage || Number(status.acBonus) < 0 || Number(status.attackBonus) < 0) return 'negative';
+    if (status.damage || Number(status.acBonus) < 0 || Number(status.attackBonus) < 0
+        || Number(status.damageBonus) < 0 || Number(status.damageReduction) < 0) return 'negative';
     if (['stunned', 'confused', 'frightened', 'charmed', 'berserk'].includes(String(status.behavior || ''))) return 'negative';
-    if (Number(status.acBonus) > 0 || Number(status.attackBonus) > 0) return 'positive';
+    if (Number(status.acBonus) > 0 || Number(status.attackBonus) > 0
+        || Number(status.damageBonus) > 0 || Number(status.damageReduction) > 0) return 'positive';
     return '';
 }
 
@@ -95,6 +97,11 @@ export function formatStatusEffect(status) {
     }
     if (Number(status?.acBonus)) bits.push(`${Number(status.acBonus) >= 0 ? '+' : ''}${Number(status.acBonus)} AC`);
     if (Number(status?.attackBonus)) bits.push(`${Number(status.attackBonus) >= 0 ? '+' : ''}${Number(status.attackBonus)} attack`);
+    if (Number(status?.damageBonus)) bits.push(`${Number(status.damageBonus) >= 0 ? '+' : ''}${Number(status.damageBonus)} damage dealt`);
+    if (Number(status?.damageReduction)) {
+        const reduction = Number(status.damageReduction);
+        bits.push(`${reduction >= 0 ? '-' : '+'}${Math.abs(reduction)} damage taken`);
+    }
     if (status?.behavior) bits.push(stringValue(status.behavior, 20));
     const description = stringValue(status?.description, 120).trim();
     if (description && !bits.length
@@ -225,9 +232,12 @@ export function parseStatusConditions(value) {
         const damage = parseDamage(content);
         const acBonus = Number((content.match(/([+-]\d+)\s*AC\b/i) || [])[1]) || 0;
         const attackBonus = Number((content.match(/([+-]\d+)\s*(?:attack|atk)\b/i) || [])[1]) || 0;
+        const damageBonus = Number((content.match(/([+-]\d+)\s*(?:damage dealt|outgoing damage|damage bonus)\b/i) || [])[1]) || 0;
+        const damageReduction = Math.abs(Number((content.match(/([+-]\d+)\s*(?:damage taken|damage reduction)\b/i) || [])[1]) || 0);
         const behaviorMatch = content.match(/\b(stunned|confused|frightened|charmed|berserk)\b/i);
         const description = content
             .replace(/\d+\s*(?:turns?|rounds?)\b/gi, '')
+            .replace(/[+-]\d+\s*(?:damage dealt|outgoing damage|damage bonus|damage taken|damage reduction)\b/gi, '')
             .replace(/\d+\s*(?:hours?|hrs?|h)\b(?:\s*\d+\s*(?:minutes?|mins?|m)\b)?/gi, '')
             .replace(/\d+\s*(?:minutes?|mins?|m)\b/gi, '')
             .replace(/\b(?:until cured|permanent|until (?:long|short) rest)\b/gi, '')
@@ -243,6 +253,8 @@ export function parseStatusConditions(value) {
             ...damage,
             acBonus,
             attackBonus,
+            ...(damageBonus ? { damageBonus } : {}),
+            ...(damageReduction ? { damageReduction } : {}),
             behavior: behaviorMatch ? normalizeStatusBehavior(behaviorMatch[1]) : '',
             ...(description ? { description: stringValue(description, 300) } : {}),
             source: 'memo',

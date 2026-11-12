@@ -105,7 +105,7 @@ import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/u
 import { restoreEscapedCyoaChoiceMarkup } from './src/ui/panel/cyoa-markup.js';
 import { captureXpGainAnimationState, playXpGainAnimation } from './src/ui/panel/xp-gain-animation.js';
 import { captureBarChangeAnimationState, playBarChangeAnimations } from './src/ui/panel/bar-change-animation.js';
-import { buildCombatDisplayMemo } from './src/state/combat-persistence.js';
+import { buildCombatDisplayMemo, stripEndedCombatFromMemo } from './src/state/combat-persistence.js';
 import { isRealtimeVisualizationDisabled } from './src/state/realtime-visualization-guard.js';
 import {
     blockHistoryPersistence,
@@ -3399,7 +3399,10 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
             // Commit to settings
             settings.prevMemo2 = settings.prevMemo1;
             settings.prevMemo1 = previousMemoSnapshot;
-            settings.currentMemo = applyQuestSyncAndStripMemo(merged);
+            settings.currentMemo = stripEndedCombatFromMemo(
+                applyQuestSyncAndStripMemo(merged),
+            );
+            if (!/\[COMBAT\]/i.test(settings.currentMemo)) settings.combatDefeatedUi = [];
             updateUIMemo(settings.currentMemo);
             syncMemoView();
             refreshRenderedView();
