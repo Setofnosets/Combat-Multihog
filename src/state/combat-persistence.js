@@ -24,7 +24,7 @@ const ENDED_COMBAT_STATES = new Set([
  * @param {string} body
  * @returns {boolean}
  */
-function hasActiveEnemyCombatant(body) {
+export function hasActiveEnemyCombatant(body) {
     return parseCombatants(body).some(entity =>
         entity.side === 'enemies' && !entity.lines.some(line => isResolvedCombatantStatusLine(line)));
 }
@@ -58,6 +58,23 @@ export function getCombatMemoState(memo) {
     const round = Number(body.match(COMBAT_ROUND_RX)?.[1]);
     if (Number.isFinite(round) && round <= 0) return 'dormant';
     return hasActiveEnemyCombatant(body) ? 'engaged' : 'ended';
+}
+
+/**
+ * Remove every [COMBAT] block whose effective state is `ended`. This is the
+ * deterministic aftermath cleanup: END_COMBAT, ENDED/VICTORY/NONE headers, and
+ * header-only blocks with no living enemy all disappear from context and UI.
+ *
+ * @param {string} memo
+ * @returns {string}
+ */
+export function stripEndedCombatFromMemo(memo) {
+    return String(memo || '')
+        .replace(/\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/gi, block => (
+            getCombatMemoState(block) === 'ended' ? '' : block
+        ))
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
 }
 
 /**
@@ -195,11 +212,12 @@ export function stripResolvedCombatantsFromMemo(memo) {
     return String(memo || '').replace(
         /\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/gi,
         (fullBlock, content) => {
-            if (/^\s*END_COMBAT\s*$/i.test(content)) return fullBlock;
+            if (getCombatMemoState(fullBlock) === 'ended') return '';
             const { activeContent } = partitionResolvedCombatants(content);
+            if (!hasActiveEnemyCombatant(activeContent)) return '';
             return `[COMBAT]\n${activeContent}\n[/COMBAT]`;
         },
-    );
+    ).replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**

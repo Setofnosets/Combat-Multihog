@@ -60,7 +60,7 @@ Status: Dead
         expect(getSettings().combatDefeatedUi).toEqual([]);
     });
 
-    it('keeps the block when the update omits a surviving enemy', () => {
+    it('closes the block instead of leaving a header-only shell when no active enemy remains', () => {
         const merged = mergeMemo(ACTIVE, `[COMBAT]
 COMBAT STATE: HOSTILE
 COMBAT ROUND 3
@@ -68,7 +68,9 @@ ENEMIES:
 Goblin: 0/8 HP
 Status: Defeated
 [/COMBAT]`);
-        expect(merged).toContain('[COMBAT]');
+        expect(merged).not.toContain('[COMBAT]');
+        expect(merged).not.toContain('COMBAT STATE: HOSTILE');
+        expect(getSettings().combatDefeatedUi).toEqual([]);
     });
 
     it('keeps the block when a new active enemy appears', () => {

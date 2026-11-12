@@ -57,6 +57,16 @@ import {
     inferStatusPolarity,
 } from './tactical-combat-status.js';
 import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
+import {
+    applyCombatScaleToEffect,
+    buildCombatVariableContext,
+    combatConditionMet,
+    evaluateCombatFormula,
+    evaluateCombatScale,
+    normalizeCombatCondition,
+    normalizeCombatScale,
+    rollCombatExpression,
+} from './tactical-combat-variables.js';
 
 // ── RNG & dice ───────────────────────────────────────────────────────────────
 
@@ -681,6 +691,8 @@ function normalizeStatus(raw) {
         rounds,
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
+        damageBonus: Number(raw.damageBonus) || 0,
+        damageReduction: Math.max(0, Number(raw.damageReduction) || 0),
         damage: String(raw.damage || '').trim(),
         damageResource: normalizeWillpowerResource(raw.damageResource || raw.resource, 'hp'),
         damageType: String(raw.damageType || '').slice(0, 20),
@@ -695,7 +707,11 @@ function normalizeStatus(raw) {
         permanent: raw.permanent === true,
         carriedOver: raw.carriedOver === true,
         expiresAfterTurn: raw.expiresAfterTurn === true,
+        scale: normalizeCombatScale(raw.scale),
+        condition: normalizeCombatCondition(raw.condition),
     };
+    if (!status.scale) delete status.scale;
+    if (!status.condition) delete status.condition;
     if (status.polarity !== 'positive' && status.polarity !== 'negative') {
         status.polarity = inferStatusPolarity(status);
     }
@@ -763,6 +779,10 @@ function normalizeSkill(raw, index, side) {
         heal: safeHeal,
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
+        damageBonus: Number(raw.damageBonus) || 0,
+        damageReduction: Math.max(0, Number(raw.damageReduction) || 0),
+        scale: normalizeCombatScale(raw.scale),
+        condition: normalizeCombatCondition(raw.condition),
         bonusAction: !!raw.bonusAction,
         rounds: clampInt(raw.rounds, 1, 10) || 2,
         save: String(raw.save || '').toLowerCase().slice(0, 8),
@@ -825,6 +845,10 @@ function normalizeItem(raw, index) {
         amount: String(raw.amount || raw.heal || ((raw.kind || 'heal') === 'heal' ? '2d4+2' : '')).slice(0, 40),
         acBonus: Number(raw.acBonus) || 0,
         attackBonus: Number(raw.attackBonus) || 0,
+        damageBonus: Number(raw.damageBonus) || 0,
+        damageReduction: Math.max(0, Number(raw.damageReduction) || 0),
+        scale: normalizeCombatScale(raw.scale),
+        condition: normalizeCombatCondition(raw.condition),
         rounds: clampInt(raw.rounds, 1, 10) || 2,
         maxUses,
         uses: raw.uses == null ? maxUses : clampInt(raw.uses, 0, maxUses),
@@ -1223,27 +1247,51 @@ export function resetUnitForTurn(unit, state, rng, options = {}) {
     }
 }
 
+function scaledStatusDamageExpression(status, state, unit) {
+    if (!status?.scale) return String(status?.damage || '').trim();
+    const context = buildCombatVariableContext(state, {
+        unit,
+        target: unit,
+        statusId: status.scale.statusId || status.id,
+    });
+    const scaled = applyCombatScaleToEffect({
+        type: 'damage',
+        damage: status.damage || '',
+        scale: status.scale,
+    }, context);
+    return String(scaled?.damage || status.damage || '').trim();
+}
+
 function tickStatuses(unit, state, rng) {
     if (!Array.isArray(unit.statuses) || !unit.statuses.length) return;
     const remaining = [];
     for (const status of unit.statuses) {
-        if (status.damage && status.expiresAfterTurn !== true) {
+        const damageExpression = scaledStatusDamageExpression(status, state, unit);
+        if (damageExpression && status.expiresAfterTurn !== true) {
             const stacks = Math.max(1, Number(status.stacks) || 1);
-            const damage = rollDice(status.damage, rng).total * stacks;
+            const source = status.sourceId ? getUnitById(state, status.sourceId) : null;
+            const rolled = rollCombatExpression(state, damageExpression, {
+                unit: source || unit,
+                target: unit,
+                statusId: status.scale?.statusId || status.id,
+                rng,
+            }).total;
+            const outgoing = rolled + getStatusDamageBonus(source, state, unit);
+            const damage = Math.max(0, outgoing - getStatusDamageReduction(unit, state, source)) * stacks;
             if (damage > 0) {
                 if (status.damageResource === 'willpower') {
                     applyWillpowerDamageToUnit(state, unit, damage, status.label, {
                         outcome: status.willpowerOutcome,
                     });
                 } else if (status.damageResource === 'both') {
-                    applyDamageToUnit(state, unit, damage, `${status.label}`);
+                    applyDamageToUnit(state, unit, damage, `${status.label}`, { rng, attackerId: source?.id });
                     if (!unit.defeated) {
                         applyWillpowerDamageToUnit(state, unit, damage, status.label, {
                             outcome: status.willpowerOutcome,
                         });
                     }
                 } else {
-                    applyDamageToUnit(state, unit, damage, `${status.label}`);
+                    applyDamageToUnit(state, unit, damage, `${status.label}`, { rng, attackerId: source?.id });
                 }
             }
         }
@@ -1267,18 +1315,61 @@ function tickStatuses(unit, state, rng) {
     unit.statuses = remaining;
 }
 
-export function getStatusAcBonus(unit) {
-    return (unit.statuses || []).reduce(
-        (sum, status) => sum + (Number(status.acBonus) || 0) * Math.max(1, Number(status.stacks) || 1),
-        0,
-    );
+function statusScaleSteps(status, state, unit, target) {
+    if (!status?.scale || !state) return 0;
+    const context = buildCombatVariableContext(state, {
+        unit,
+        target,
+        statusId: status.scale.statusId || status.id,
+    });
+    return evaluateCombatScale(status.scale, context);
 }
 
-export function getStatusAttackBonus(unit) {
-    return (unit.statuses || []).reduce(
-        (sum, status) => sum + (Number(status.attackBonus) || 0) * Math.max(1, Number(status.stacks) || 1),
-        0,
-    );
+export function getStatusAcBonus(unit, state = null, target = null) {
+    return (unit?.statuses || []).reduce((sum, status) => {
+        const stacks = Math.max(1, Number(status.stacks) || 1);
+        const steps = statusScaleSteps(status, state, unit, target);
+        return sum
+            + (Number(status.acBonus) || 0) * stacks
+            + (Number(status.scale?.acBonus) || 0) * steps;
+    }, 0);
+}
+
+export function getStatusAttackBonus(unit, state = null, target = null) {
+    return (unit?.statuses || []).reduce((sum, status) => {
+        const stacks = Math.max(1, Number(status.stacks) || 1);
+        const steps = statusScaleSteps(status, state, unit, target);
+        return sum
+            + (Number(status.attackBonus) || 0) * stacks
+            + (Number(status.scale?.attackBonus) || 0) * steps;
+    }, 0);
+}
+
+/**
+ * Flat bonus to damage this unit deals. Buffs can scale with living enemies,
+ * allies, missing HP, and the other supported combat variables.
+ */
+export function getStatusDamageBonus(unit, state = null, target = null) {
+    return (unit?.statuses || []).reduce((sum, status) => {
+        const stacks = Math.max(1, Number(status.stacks) || 1);
+        const steps = statusScaleSteps(status, state, unit, target);
+        return sum
+            + (Number(status.damageBonus) || 0) * stacks
+            + (Number(status.scale?.damageBonus) || 0) * steps;
+    }, 0);
+}
+
+/**
+ * Flat reduction applied to incoming damage.
+ */
+export function getStatusDamageReduction(unit, state = null, attacker = null) {
+    return (unit?.statuses || []).reduce((sum, status) => {
+        const stacks = Math.max(1, Number(status.stacks) || 1);
+        const steps = statusScaleSteps(status, state, unit, attacker);
+        return sum
+            + (Number(status.damageReduction) || 0) * stacks
+            + (Number(status.scale?.damageReduction) || 0) * steps;
+    }, 0);
 }
 
 export function getStatusBehavior(unit, behavior) {
@@ -1290,14 +1381,15 @@ function isStunned(unit) {
     return !!getStatusBehavior(unit, 'stunned');
 }
 
-export function getEffectiveAc(state, unit) {
+export function getEffectiveAc(state, unit, attacker = null) {
     const terrain = getTerrain(state, unit.x, unit.y);
-    return Math.max(1, (Number(unit.ac) || 10) + (Number(terrain.cover) || 0) + getStatusAcBonus(unit));
+    return Math.max(1, (Number(unit.ac) || 10) + (Number(terrain.cover) || 0) + getStatusAcBonus(unit, state, attacker));
 }
 
-export function getEffectiveAttackBonus(state, unit, extra = 0) {
+export function getEffectiveAttackBonus(state, unit, extra = 0, target = null) {
     const terrain = getTerrain(state, unit.x, unit.y);
-    return (Number(unit.attackBonus) || 0) + (Number(terrain.attackBonus) || 0) + getStatusAttackBonus(unit) + (Number(extra) || 0);
+    return (Number(unit.attackBonus) || 0) + (Number(terrain.attackBonus) || 0)
+        + getStatusAttackBonus(unit, state, target) + (Number(extra) || 0);
 }
 
 /**
@@ -1309,11 +1401,25 @@ export function getEffectiveAttackBonus(state, unit, extra = 0) {
  * @param {object} source
  * @returns {number}
  */
-function getSourceAttackBonus(state, unit, source) {
+function getSourceAttackBonus(state, unit, source, target = null) {
     const normal = Number(unit?.attackBonus) || 0;
     const spell = unit?.spellAttackBonus == null ? NaN : Number(unit.spellAttackBonus);
     const base = source?.spell === true && Number.isFinite(spell) ? spell : normal;
-    return getEffectiveAttackBonus(state, unit, (Number(source?.attackBonus) || 0) + base - normal);
+    let scaledBonus = 0;
+    if (source?.scale) {
+        const context = buildCombatVariableContext(state, {
+            unit,
+            target,
+            statusId: source.scale.statusId,
+        });
+        scaledBonus = (Number(source.scale.attackBonus) || 0) * evaluateCombatScale(source.scale, context);
+    }
+    return getEffectiveAttackBonus(
+        state,
+        unit,
+        (Number(source?.attackBonus) || 0) + scaledBonus + base - normal,
+        target,
+    );
 }
 
 function applyHazardAtRoundStart(state, unit, rng) {
@@ -1322,7 +1428,7 @@ function applyHazardAtRoundStart(state, unit, rng) {
     if (terrain.id !== 'hazard') return;
     const damage = rollDie(4, rng);
     addLog(state, 'hazard', `${unit.name} is caught in ${terrain.label.toLowerCase()} for ${damage} damage.`, unit.id);
-    applyDamageToUnit(state, unit, damage, 'Hazard');
+    applyDamageToUnit(state, unit, damage, 'Hazard', { rng });
 }
 
 function applyBehaviorAtRoundStart(state, rng) {
@@ -1379,6 +1485,12 @@ export function beginRound(state, rng = Math.random, options = {}) {
     for (const unit of livingUnits(state)) {
         applyPassiveTriggers(state, 'round-start', { unit, rng });
     }
+    if (options.initial && !state.battleStartTriggered) {
+        state.battleStartTriggered = true;
+        for (const unit of livingUnits(state)) {
+            applyPassiveTriggers(state, 'battle-start', { unit, rng });
+        }
+    }
 
     // If a DOT or hazard ended the fight, stop before assigning turns.
     if (checkEncounterEnd(state)) return state;
@@ -1387,11 +1499,20 @@ export function beginRound(state, rng = Math.random, options = {}) {
         advanceTurnPointerToLiving(state);
         const active = getActiveUnit(state);
         state.phase = active && active.side !== 'player' ? 'enemy' : 'player';
+        triggerTurnStart(state, active, rng);
     } else {
         state.phase = 'player';
+        for (const unit of livingUnits(state)) triggerTurnStart(state, unit, rng);
     }
     addLog(state, 'round', `Round ${state.round} begins.`, null);
     return state;
+}
+
+function triggerTurnStart(state, unit, rng) {
+    if (!unit || unit.defeated || unit.fled) return 0;
+    if (Number(unit.lastTurnStartRound) === Number(state.round)) return 0;
+    unit.lastTurnStartRound = Number(state.round) || 0;
+    return applyPassiveTriggers(state, 'turn-start', { unit, rng });
 }
 
 function isSurprisedThisRound(state, unit) {
@@ -1439,11 +1560,13 @@ export function advanceInitiative(state, rng = Math.random) {
             if (active && active.side === 'player') {
                 state.phase = 'player';
                 state.pendingAgentUnitIds = [];
+                triggerTurnStart(state, active, rng);
                 return { agentUnitIds: [], roundAdvanced };
             }
             const ids = collectConsecutiveAgentUnits(state);
             state.phase = ids.length ? 'enemy' : 'player';
             state.pendingAgentUnitIds = ids;
+            for (const id of ids) triggerTurnStart(state, getUnitById(state, id), rng);
             return { agentUnitIds: ids, roundAdvanced };
         }
         beginRound(state, rng);
@@ -1586,17 +1709,41 @@ function canTarget(unit, target, kind) {
     return isFriendly(unit.side, target.side);
 }
 
-export function applyDamageToUnit(state, target, amount, sourceLabel = '') {
+export function applyDamageToUnit(state, target, amount, sourceLabel = '', options = {}) {
     if (!target || target.defeated) return 0;
     const damage = Math.max(0, Math.round(Number(amount) || 0));
     if (!damage) return 0;
-    target.hp = Math.max(0, Number(target.hp) - damage);
+    const beforeHp = Math.max(0, Number(target.hp) || 0);
+    const maxHp = Math.max(1, Number(target.maxHp) || 1);
+    const beforePct = (beforeHp / maxHp) * 100;
+    target.hp = Math.max(0, beforeHp - damage);
     addLog(state, 'damage', `${target.name} takes ${damage} damage${sourceLabel ? ` from ${sourceLabel}` : ''} (${target.hp}/${target.maxHp} HP).`, target.id);
+    const afterPct = (Math.max(0, Number(target.hp) || 0) / maxHp) * 100;
     if (target.hp <= 0) {
         target.defeated = true;
         target.hp = 0;
         target.defeatCause = target.defeatCause || 'hp';
         addLog(state, 'defeat', `${target.name} is defeated.`, target.id);
+    }
+    if (options.rng && !target.defeated && !options.skipPassiveTriggers) {
+        const attacker = options.attackerId ? getUnitById(state, options.attackerId) : (options.attacker || null);
+        applyPassiveTriggers(state, 'damaged', {
+            unit: target,
+            attacker,
+            target: attacker || target,
+            damage,
+            rng: options.rng,
+        });
+        const crossedLowHp = (beforePct > 50 && afterPct <= 50) || (beforePct > 25 && afterPct <= 25);
+        if (crossedLowHp && !target.defeated) {
+            applyPassiveTriggers(state, 'low-hp', {
+                unit: target,
+                attacker,
+                target: attacker || target,
+                damage,
+                rng: options.rng,
+            });
+        }
     }
     return damage;
 }
@@ -1679,6 +1826,12 @@ export function breakWillpower(state, target, options = {}) {
     target.willpowerBreakSource = String(options.source || '').slice(0, 120);
     target.willpowerBreakAt = Date.now();
     target.doneForRound = true;
+
+    applyPassiveTriggers(state, 'willpower-break', {
+        unit: target,
+        target,
+        rng: options.rng || createStateRng(state),
+    });
 
     if (outcome === 'flee') {
         target.fled = true;
@@ -2290,50 +2443,83 @@ export function applySpecialEffects(state, effects, options = {}) {
             continue;
         }
         const type = String(effect.type || '').toLowerCase();
+        const effectTarget = effect.targetId ? getUnitById(state, effect.targetId) : null;
+        const effectContext = buildCombatVariableContext(state, {
+            unit: caster,
+            target: effectTarget,
+            statusId: effect.scale?.statusId || effect.condition?.statusId || effect.statusId || effect.label,
+        });
+        if (!combatConditionMet(effect.condition, effectContext)) {
+            rejected.push(`${label}'s ${type} condition was not met.`);
+            continue;
+        }
+        const activeEffect = type === 'status'
+            ? effect
+            : (applyCombatScaleToEffect(effect, effectContext) || effect);
         if (type === 'damage' || type === 'drain' || type === 'heal' || type === 'status' || type === 'cure') {
             const target = getUnitById(state, effect.targetId);
             if (!target || target.defeated || target.fled) {
                 rejected.push(`Unknown target "${effect.targetId}".`);
                 continue;
             }
-            const resource = normalizeWillpowerResource(effect.resource ?? effect.stat, 'hp');
+            const resource = normalizeWillpowerResource(activeEffect.resource ?? activeEffect.stat, 'hp');
             if (type === 'damage') {
-                const amount = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
+                const rolled = rollCombatExpression(
+                    state,
+                    activeEffect.amount ?? activeEffect.damage ?? '1d6',
+                    { unit: caster, target, statusId: activeEffect.scale?.statusId, rng },
+                ).total;
+                const outgoing = rolled + getStatusDamageBonus(caster, state, target) + (Number(activeEffect.damageBonus) || 0);
+                const effectReduction = Number(activeEffect.damageReduction) || 0;
+                const amount = Math.max(0, outgoing - getStatusDamageReduction(target, state, caster) - effectReduction);
                 let hpDamage = 0;
                 let willpowerDamage = 0;
-                if (resource === 'hp' || resource === 'both') hpDamage = applyDamageToUnit(state, target, amount, label);
+                if (resource === 'hp' || resource === 'both') {
+                    hpDamage = applyDamageToUnit(state, target, amount, label, { rng, attackerId: caster.id });
+                }
                 if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
                     willpowerDamage = applyWillpowerDamageToUnit(state, target, amount, label, {
-                        outcome: effect.willpowerOutcome ?? effect.willOutcome,
+                        outcome: activeEffect.willpowerOutcome ?? activeEffect.willOutcome,
                         casterId: caster.id,
                     });
                 }
                 applied.push({ type, targetId: target.id, amount: hpDamage || willpowerDamage, resource, hpDamage, willpowerDamage });
             } else if (type === 'drain') {
-                const rolled = rollDice(effect.amount ?? effect.damage ?? '1d6', rng).total;
+                const rolled = rollCombatExpression(
+                    state,
+                    activeEffect.amount ?? activeEffect.damage ?? '1d6',
+                    { unit: caster, target, statusId: activeEffect.scale?.statusId, rng },
+                ).total;
+                const outgoing = rolled + getStatusDamageBonus(caster, state, target) + (Number(activeEffect.damageBonus) || 0);
+                const effectReduction = Number(activeEffect.damageReduction) || 0;
+                const amount = Math.max(0, outgoing - getStatusDamageReduction(target, state, caster) - effectReduction);
                 let effective = 0;
                 if (resource === 'hp' || resource === 'both') {
                     const hpBefore = Math.max(0, Number(target.hp) || 0);
-                    const dealt = applyDamageToUnit(state, target, rolled, label);
+                    const dealt = applyDamageToUnit(state, target, amount, label, { rng, attackerId: caster.id });
                     effective += Math.min(Math.max(0, dealt), hpBefore);
                 }
                 if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
-                    effective += applyWillpowerDamageToUnit(state, target, rolled, label, {
-                        outcome: effect.willpowerOutcome ?? effect.willOutcome,
+                    effective += applyWillpowerDamageToUnit(state, target, amount, label, {
+                        outcome: activeEffect.willpowerOutcome ?? activeEffect.willOutcome,
                         casterId: caster.id,
                     });
                 }
-                const ratio = Math.max(0, Math.min(1, Number(effect.healRatio ?? 0.5)));
+                const ratio = Math.max(0, Math.min(1, Number(activeEffect.healRatio ?? 0.5)));
                 const healed = healUnit(
                     state,
                     caster,
                     Math.floor(effective * ratio),
                     label,
-                    normalizeWillpowerResource(effect.healResource, 'hp'),
+                    normalizeWillpowerResource(activeEffect.healResource, 'hp'),
                 );
                 applied.push({ type, targetId: target.id, amount: effective, healed, resource });
             } else if (type === 'heal') {
-                const amount = rollDice(effect.amount ?? effect.heal ?? '1d8+2', rng).total;
+                const amount = rollCombatExpression(
+                    state,
+                    activeEffect.amount ?? activeEffect.heal ?? '1d8+2',
+                    { unit: caster, target, statusId: activeEffect.scale?.statusId, rng },
+                ).total;
                 let hpHealed = 0;
                 let willpowerHealed = 0;
                 if (resource === 'hp' || resource === 'both') hpHealed = healUnit(state, target, amount, label, 'hp');
@@ -2345,25 +2531,29 @@ export function applySpecialEffects(state, effects, options = {}) {
                 applied.push({ type, targetId: target.id, removed });
             } else {
                 addStatus(state, target, {
-                    id: String(effect.id || effect.label || label).slice(0, 40),
-                    label: String(effect.label || effect.name || label).slice(0, 60),
-                    rounds: effect.rounds ?? (effect.permanent === true || Number(effect.durationMinutes) > 0 ? 0 : 2),
-                    acBonus: effect.acBonus,
-                    attackBonus: effect.attackBonus,
-                    damage: effect.damage || '',
-                    damageResource: effect.damageResource ?? effect.resource,
-                    damageType: effect.damageType || '',
-                    willpowerOutcome: effect.willpowerOutcome ?? effect.willOutcome,
-                    behavior: effect.behavior,
-                    sourceId: effect.sourceId || caster.id,
-                    stacks: effect.stacks,
-                    maxStacks: effect.maxStacks,
-                    polarity: effect.polarity || '',
-                    durationMinutes: effect.durationMinutes,
-                    permanent: effect.permanent === true,
-                    description: effect.description || '',
+                    id: String(activeEffect.id || activeEffect.label || label).slice(0, 40),
+                    label: String(activeEffect.label || activeEffect.name || label).slice(0, 60),
+                    rounds: activeEffect.rounds ?? (activeEffect.permanent === true || Number(activeEffect.durationMinutes) > 0 ? 0 : 2),
+                    acBonus: activeEffect.acBonus,
+                    attackBonus: activeEffect.attackBonus,
+                    damageBonus: activeEffect.damageBonus,
+                    damageReduction: activeEffect.damageReduction,
+                    damage: activeEffect.damage || '',
+                    damageResource: activeEffect.damageResource ?? activeEffect.resource,
+                    damageType: activeEffect.damageType || '',
+                    willpowerOutcome: activeEffect.willpowerOutcome ?? activeEffect.willOutcome,
+                    behavior: activeEffect.behavior,
+                    sourceId: activeEffect.sourceId || caster.id,
+                    stacks: activeEffect.stacks,
+                    maxStacks: activeEffect.maxStacks,
+                    polarity: activeEffect.polarity || '',
+                    durationMinutes: activeEffect.durationMinutes,
+                    permanent: activeEffect.permanent === true,
+                    description: activeEffect.description || '',
+                    scale: activeEffect.scale,
+                    condition: activeEffect.condition,
                 });
-                applied.push({ type, targetId: target.id, label: effect.label || label });
+                applied.push({ type, targetId: target.id, label: activeEffect.label || label });
             }
             continue;
         }
@@ -2856,10 +3046,35 @@ function consumePassiveLimit(state, unit, skill) {
     return true;
 }
 
+function passiveAreaUnits(state, caster, target, skill) {
+    const living = (state?.units || []).filter(unit => unit && !unit.defeated && !unit.fled);
+    const area = normalizeArea(skill?.area ?? skill?.aoe);
+    if (!area || !state?.grid || state.theater) return living;
+    const anchor = area.origin === 'self' ? caster : (target || caster);
+    if (!anchor || !Number.isFinite(Number(anchor.x)) || !Number.isFinite(Number(anchor.y))) return living;
+    return living.filter(unit => withinPassiveArea(anchor, unit, area));
+}
+
+function withinPassiveArea(anchor, unit, area) {
+    if (!unit || !Number.isFinite(Number(unit.x)) || !Number.isFinite(Number(unit.y))) return false;
+    const dx = Math.abs(Number(unit.x) - Number(anchor.x));
+    const dy = Math.abs(Number(unit.y) - Number(anchor.y));
+    const radius = Math.max(1, Number(area?.radius) || 1);
+    if (String(area?.shape || 'burst').toLowerCase() === 'line') {
+        return dx === 0 || dy === 0 ? Math.max(dx, dy) <= radius : false;
+    }
+    return Math.max(dx, dy) <= radius;
+}
+
 function passiveEffectList(state, caster, target, skill) {
-    const targetIds = target ? [target.id] : [];
-    const friendlyIds = caster ? [caster.id] : [];
-    const hostileIds = target && isHostileSide(caster?.side, target.side) ? [target.id] : [];
+    const areaUnits = passiveAreaUnits(state, caster, target, skill);
+    const targetIds = areaUnits.map(unit => unit.id);
+    const friendlyIds = areaUnits
+        .filter(unit => isFriendlySide(caster?.side, unit.side))
+        .map(unit => unit.id);
+    const hostileIds = areaUnits
+        .filter(unit => isHostileSide(caster?.side, unit.side))
+        .map(unit => unit.id);
     return resolveEffectTemplate(skill?.effectTemplate, {
         casterId: caster?.id || '',
         casterName: caster?.name || '',
@@ -2875,6 +3090,17 @@ function passiveEffectList(state, caster, target, skill) {
     });
 }
 
+const PASSIVE_EVENT_LABELS = {
+    attacked: ' when hit',
+    'round-start': ' at round start',
+    'battle-start': ' at battle start',
+    'turn-start': ' at turn start',
+    damaged: ' when damaged',
+    'low-hp': ' when badly wounded',
+    kill: ' on a kill',
+    'willpower-break': ' on a Willpower break',
+};
+
 function applyPassiveSkill(state, caster, target, skill, rng, event) {
     if (!caster || caster.defeated || caster.fled) return false;
     if (!Array.isArray(skill?.effectTemplate) || !skill.effectTemplate.length) return false;
@@ -2884,7 +3110,7 @@ function applyPassiveSkill(state, caster, target, skill, rng, event) {
     addLog(
         state,
         'passive',
-        `${caster.name}'s ${skill.name} triggers${event === 'attacked' ? ' when hit' : event === 'round-start' ? ' at round start' : event === 'kill' ? ' on a kill' : ''}.`,
+        `${caster.name}'s ${skill.name} triggers${PASSIVE_EVENT_LABELS[event] || ''}.`,
         caster.id,
     );
     applySpecialEffects(state, effects, {
@@ -2899,15 +3125,32 @@ function applyPassiveSkill(state, caster, target, skill, rng, event) {
 function applyPassiveTriggers(state, event, context = {}) {
     const unit = context.unit;
     if (!unit || unit.defeated || unit.fled) return 0;
+    const depth = Math.max(0, Number(state.passiveTriggerDepth) || 0);
+    if (depth >= 6) return 0;
+    state.passiveTriggerDepth = depth + 1;
     let triggered = 0;
-    for (const skill of unit.skills || []) {
-        if (!passiveMatchesEvent(skill, event, context)) continue;
-        const target = event === 'attacked'
-            ? context.attacker
-            : event === 'round-start' ? unit : context.target;
-        if (event !== 'kill' && (!target || target.defeated || target.fled)) continue;
-        if (!target) continue;
-        if (applyPassiveSkill(state, unit, target, skill, context.rng || Math.random, event)) triggered += 1;
+    try {
+        const target = event === 'attacked' || event === 'damaged' || event === 'low-hp'
+            ? (context.attacker || context.target || unit)
+            : (event === 'hit' || event === 'kill' || event === 'willpower-break'
+                ? (context.target || unit)
+                : unit);
+        for (const skill of unit.skills || []) {
+            if (!passiveMatchesEvent(skill, event, context)) continue;
+            const trigger = normalizePassiveTrigger(skill.trigger);
+            if (trigger.condition) {
+                const variables = buildCombatVariableContext(state, {
+                    unit,
+                    target,
+                    statusId: context.statusId || trigger.condition.statusId,
+                });
+                if (!combatConditionMet(trigger.condition, variables)) continue;
+            }
+            if (!target) continue;
+            if (applyPassiveSkill(state, unit, target, skill, context.rng || Math.random, event)) triggered += 1;
+        }
+    } finally {
+        state.passiveTriggerDepth = depth;
     }
     return triggered;
 }
@@ -2969,7 +3212,7 @@ function resolveAreaAttack(state, unit, source, areaResult, options, rng, source
         const result = resolveAttack(state, unit, target, {
             rng,
             source: sourceLabel,
-            attackBonus: getSourceAttackBonus(state, unit, source),
+            attackBonus: getSourceAttackBonus(state, unit, source, target),
             damage: source.damage || unit.damage || '1d6',
             resource: source.resource,
             willpowerDamage: source.willpowerDamage,
@@ -2994,7 +3237,6 @@ function resolveAreaAttack(state, unit, source, areaResult, options, rng, source
 
 function resolveAreaHeal(state, unit, source, areaResult, rng) {
     const label = source.name;
-    const amount = rollDice(source.heal || source.amount || '1d8+2', rng).total;
     addLog(
         state,
         'skill',
@@ -3002,6 +3244,16 @@ function resolveAreaHeal(state, unit, source, areaResult, rng) {
         unit.id,
     );
     for (const target of areaResult.targets) {
+        const expression = scaledSourceExpression({
+            heal: source.heal || source.amount || '1d8+2',
+            scale: source.scale,
+        }, state, unit, target, 'heal');
+        const amount = rollCombatExpression(state, expression, {
+            unit,
+            target,
+            statusId: source.scale?.statusId,
+            rng,
+        }).total;
         if (source.resource === 'both') {
             healUnit(state, target, amount, label, 'hp');
             healUnit(state, target, amount, label, 'willpower');
@@ -3033,6 +3285,10 @@ function resolveAreaBuff(state, unit, source, areaResult) {
             rounds: source.rounds || 2,
             acBonus: source.acBonus,
             attackBonus: source.attackBonus,
+            damageBonus: source.damageBonus,
+            damageReduction: source.damageReduction,
+            scale: source.scale,
+            condition: source.condition,
             description: source.description,
         });
     }
@@ -3116,7 +3372,7 @@ export function applyAction(state, action, options = {}) {
             return resolveAttack(state, unit, target, {
                 rng,
                 source,
-                attackBonus: getEffectiveAttackBonus(state, unit),
+                attackBonus: getEffectiveAttackBonus(state, unit, 0, target),
                 damage: unit.damage,
                 resource: unit.attackResource,
                 willpowerDamage: unit.willpowerDamage,
@@ -3163,13 +3419,23 @@ export function applyAction(state, action, options = {}) {
             if (!options.ignoreLineOfSight && skill.kind === 'attack' && (Number(skill.range) || 1) > 1 && !hasLineOfSight(state, unit, target)) {
                 return rejectAction(state, action, 'Line of sight is blocked.', source);
             }
+            if (skill.condition) {
+                const conditionContext = buildCombatVariableContext(state, {
+                    unit,
+                    target,
+                    statusId: skill.scale?.statusId,
+                });
+                if (!combatConditionMet(skill.condition, conditionContext)) {
+                    return rejectAction(state, action, `${skill.name}'s condition was not met.`, source);
+                }
+            }
             unit[resourceKey] = true;
             consumeUse(skill, unit);
             if (skill.kind === 'attack') {
                 return resolveAttack(state, unit, target, {
                     rng,
                     source,
-                    attackBonus: getSourceAttackBonus(state, unit, skill),
+                    attackBonus: getSourceAttackBonus(state, unit, skill, target),
                     damage: skill.damage || unit.damage || '1d6',
                     resource: skill.resource,
                     willpowerDamage: skill.willpowerDamage,
@@ -3182,7 +3448,16 @@ export function applyAction(state, action, options = {}) {
                 });
             }
             if (skill.kind === 'heal') {
-                const heal = rollDice(skill.heal || '1d8+2', rng).total;
+                const healExpression = scaledSourceExpression({
+                    heal: skill.heal || '1d8+2',
+                    scale: skill.scale,
+                }, state, unit, target, 'heal');
+                const heal = rollCombatExpression(state, healExpression, {
+                    unit,
+                    target,
+                    statusId: skill.scale?.statusId,
+                    rng,
+                }).total;
                 if (skill.resource === 'both') {
                     healUnit(state, target, heal, skill.name, 'hp');
                     healUnit(state, target, heal, skill.name, 'willpower');
@@ -3197,6 +3472,10 @@ export function applyAction(state, action, options = {}) {
                     rounds: skill.rounds || 2,
                     acBonus: skill.acBonus,
                     attackBonus: skill.attackBonus,
+                    damageBonus: skill.damageBonus,
+                    damageReduction: skill.damageReduction,
+                    scale: skill.scale,
+                    condition: skill.condition,
                     description: skill.description,
                 });
                 addLog(state, 'skill', `${unit.name} uses ${skill.name} on ${target.name}.`, unit.id);
@@ -3238,7 +3517,11 @@ export function applyAction(state, action, options = {}) {
             unit.actionUsed = true;
             consumeUse(item, unit);
             if (item.kind === 'heal') {
-                const amount = rollDice(item.amount || '2d4+2', rng).total;
+                const amount = rollCombatExpression(state, item.amount || '2d4+2', {
+                    unit,
+                    target,
+                    rng,
+                }).total;
                 if (item.resource === 'both') {
                     healUnit(state, target, amount, item.name, 'hp');
                     healUnit(state, target, amount, item.name, 'willpower');
@@ -3252,6 +3535,10 @@ export function applyAction(state, action, options = {}) {
                     rounds: item.rounds || 2,
                     acBonus: item.acBonus,
                     attackBonus: item.attackBonus,
+                    damageBonus: item.damageBonus,
+                    damageReduction: item.damageReduction,
+                    scale: item.scale,
+                    condition: item.condition,
                     description: item.description,
                 });
             }
@@ -3525,29 +3812,56 @@ function applyMove(state, unit, path, rng, source) {
     return { ok: true, log: `Moved ${cost} cells.`, ended: false };
 }
 
-function rollDamagePool(expression, critical, rng) {
+function rollDamagePool(expression, critical, rng, variables = null) {
     const source = String(expression || '1d6');
-    const base = rollDice(source, rng);
+    const base = variables
+        ? evaluateCombatFormula(source, variables, rng)
+        : rollDice(source, rng);
+    const diceTotal = variables
+        ? Math.max(0, Number(base.diceTotal) || 0)
+        : (base.rolls || []).reduce((sum, roll) => sum + roll, 0);
     let damage = base.total;
     if (critical) {
-        const diceMatch = source.toLowerCase().match(/^(\d*)d(\d+)([+-]\d+)?$/);
-        if (diceMatch) {
-            damage += rollDice(`${diceMatch[1] || 1}d${diceMatch[2]}`, rng).total;
-        } else {
-            damage *= 2;
-        }
+        if (diceTotal > 0) damage += diceTotal;
+        else damage *= 2;
     }
     return damage;
+}
+
+function scaledSourceExpression(source, state, unit, target, field = 'damage') {
+    const base = String(source?.[field] || '').trim();
+    if (!source?.scale) return base;
+    const context = buildCombatVariableContext(state, {
+        unit,
+        target,
+        statusId: source.scale.statusId,
+    });
+    const scaled = applyCombatScaleToEffect({
+        type: field === 'heal' ? 'heal' : 'damage',
+        [field]: base,
+        scale: source.scale,
+    }, context);
+    return String(scaled?.[field] || base).trim();
 }
 
 function resolveAttack(state, unit, target, options) {
     const rng = options.rng;
     const attackBonus = Number(options.attackBonus) || 0;
     const resource = normalizeWillpowerResource(options.resource, 'hp');
+    const sourceSkill = options.sourceSkill || null;
+    const variableContext = buildCombatVariableContext(state, {
+        unit,
+        target,
+        statusId: sourceSkill?.scale?.statusId || sourceSkill?.condition?.statusId,
+    });
+    if (sourceSkill?.condition && !combatConditionMet(sourceSkill.condition, variableContext)) {
+        addLog(state, 'rejected', `${sourceSkill.name}'s condition was not met.`, unit.id);
+        return { ok: false, error: `${sourceSkill.name}'s condition was not met.`, hit: false, ended: state.status !== 'active' };
+    }
     const roll = rollDie(20, rng);
     const natural = roll;
     const total = roll + attackBonus;
-    const ac = getEffectiveAc(state, target);
+    const ac = getEffectiveAc(state, target, unit);
     const label = options.label || 'attack';
     const crit = natural === 20;
     const miss = natural === 1 || (!crit && total < ac);
@@ -3568,13 +3882,24 @@ function resolveAttack(state, unit, target, options) {
     let hpDamage = 0;
     let willpowerDamage = 0;
     const targetAliveBefore = !target.defeated;
+    const outgoingBonus = getStatusDamageBonus(unit, state, target);
+    const incomingReduction = getStatusDamageReduction(target, state, unit);
     if (resource === 'hp' || resource === 'both') {
-        hpDamage = rollDamagePool(options.damage || unit.damage || '1d6', crit, rng);
-        applyDamageToUnit(state, target, hpDamage, `${unit.name}'s ${label}`);
+        const hpExpression = scaledSourceExpression({
+            damage: options.damage || unit.damage || '1d6',
+            scale: sourceSkill?.scale,
+        }, state, unit, target);
+        hpDamage = rollDamagePool(hpExpression, crit, rng, variableContext);
+        hpDamage = Math.max(0, hpDamage + outgoingBonus - incomingReduction);
+        applyDamageToUnit(state, target, hpDamage, `${unit.name}'s ${label}`, { rng, attackerId: unit.id });
     }
     if ((resource === 'willpower' || resource === 'both') && !target.defeated) {
-        const expression = options.willpowerDamage || options.damage || unit.willpowerDamage || '1d6';
-        willpowerDamage = rollDamagePool(expression, crit, rng);
+        const willpowerExpression = scaledSourceExpression({
+            damage: options.willpowerDamage || options.damage || unit.willpowerDamage || '1d6',
+            scale: sourceSkill?.scale,
+        }, state, unit, target);
+        willpowerDamage = rollDamagePool(willpowerExpression, crit, rng, variableContext);
+        willpowerDamage = Math.max(0, willpowerDamage + outgoingBonus - incomingReduction);
         applyWillpowerDamageToUnit(state, target, willpowerDamage, `${unit.name}'s ${label}`, {
             outcome: options.willpowerOutcome,
             casterId: unit.id,
@@ -3583,7 +3908,6 @@ function resolveAttack(state, unit, target, options) {
     }
     if (options.consumeAction !== false) unit.actionUsed = true;
 
-    const sourceSkill = options.sourceSkill || null;
     const sourceArea = sourceSkill?.area || options.area || null;
     const sourceRange = Number(options.range ?? sourceSkill?.range ?? unit.attackRange ?? 1);
     const attackType = sourceArea?.origin === 'self' ? 'area' : (sourceRange <= 1 ? 'melee' : 'ranged');

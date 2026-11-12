@@ -31,6 +31,7 @@ import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.j
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
 import { getPendingNarration, hasPendingNarration } from './src/features/tactical-combat/tactical-combat-store.js';
+import { stripEndedCombatFromMemo } from './src/state/combat-persistence.js';
 import { isTacticalCombatMode, isTraditionalCombatMode } from './src/features/combat/combat-mode.js';
 import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
 import { buildNarrativeModeTags, hasInjectableNarrativePacing } from './src/state/narrative-pacing.js';
@@ -661,7 +662,7 @@ export function buildTacticalCombatRuntimeOverride(settings) {
         const combatState = getCombatState(settings.currentMemo);
         if (combatState === 'absent' || combatState === 'ended') return '';
         if (combatState !== 'engaged') {
-            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). Combat has not begun. Do not roll initiative, simulate attacks, or call StartTacticalCombat. The party may negotiate, intimidate, surrender, or leave. Start tactical combat only when a hostile action is actually declared.\n[/DORMANT_ENCOUNTER]\n\n`;
+            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). This is Beat 1 — the prelude/standoff. Narrate the threat and stop for the player's reaction; do not roll initiative or simulate attacks. Do not call StartTacticalCombat unless the player's current input initiates hostilities or the NPCs attack in response to this turn. Never introduce a fresh enemy group and call the tool in the same turn; prelude first, engagement next turn.\n[/DORMANT_ENCOUNTER]\n\n`;
         }
         const hasTool = isEffectiveSectionEnabled('tactical_combat', settings)
             && settings.tacticalCombatAutoStartOnHostility !== false;
@@ -688,7 +689,7 @@ export function buildTraditionalCombatRuntimeOverride(settings) {
         const combatState = getCombatState(settings.currentMemo);
         if (combatState === 'absent' || combatState === 'ended') return '';
         if (combatState !== 'engaged') {
-            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). Combat has not begun. Do not roll initiative, simulate attacks, or call StartTraditionalCombat. The party may negotiate, intimidate, surrender, or leave. Start traditional combat only when a hostile action is actually declared.\n[/DORMANT_ENCOUNTER]\n\n`;
+            return `[DORMANT_ENCOUNTER]\nA potential encounter roster is present in [COMBAT] (COMBAT STATE: DORMANT). This is Beat 1 — the prelude/standoff. Narrate the threat and stop for the player's reaction; do not roll initiative or simulate attacks. Do not call StartTraditionalCombat unless the player's current input initiates hostilities or the NPCs attack in response to this turn. Never introduce a fresh enemy group and call the tool in the same turn; prelude first, engagement next turn.\n[/DORMANT_ENCOUNTER]\n\n`;
         }
         const hasTool = isEffectiveSectionEnabled('traditional_combat', settings)
             && settings.traditionalCombatAutoStartOnHostility !== false;
@@ -775,7 +776,7 @@ export function registerTacticalCombatTool() {
         registerFunctionTool({
             name: 'StartTacticalCombat',
             displayName: 'Tactical Combat',
-            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Call this only when a real fight begins: a hostile attack, hostile spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
+            description: 'Open the tactical combat board and begin a grid encounter for the current scene. Follow the Two-Beat Encounter Rule. Beat 1 — Prelude (DO NOT CALL): when enemies first appear, are spotted, block the path, or set up an ambush, narrate the introduction and stop for the player to react; the State Tracker records COMBAT STATE: DORMANT. Never introduce new enemies and call this tool in the same turn unless the player\'s immediately preceding message already declared an attack, hostile spell, charge, or ambush. Beat 2 — Engagement (CALL): call this only when a real fight begins: the player declares a concrete hostile action, a prelude standoff/parley breaks into blows, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board; the board can also be opened from the tracker header. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action (a spell, ambush, charge, or attack), copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -900,7 +901,7 @@ export function registerTraditionalCombatTool() {
         registerFunctionTool({
             name: 'StartTraditionalCombat',
             displayName: 'Traditional Combat',
-            description: 'Open the traditional turn-based combat board and begin an encounter for the current scene. Call this only when a real fight begins: a hostile attack, hostile spell, charge, or ambush has been declared, an enemy has attacked, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action, copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
+            description: 'Open the traditional turn-based combat board and begin an encounter for the current scene. Follow the Two-Beat Encounter Rule. Beat 1 — Prelude (DO NOT CALL): when enemies first appear, are spotted, block the path, or set up an ambush, narrate the introduction and stop for the player to react; the State Tracker records COMBAT STATE: DORMANT. Never introduce new enemies and call this tool in the same turn unless the player\'s immediately preceding message already declared an attack, hostile spell, charge, or ambush. Beat 2 — Engagement (CALL): call this only when a real fight begins: the player declares a concrete hostile action, a prelude standoff/parley breaks into blows, or [COMBAT] explicitly says COMBAT STATE: HOSTILE or ACTIVE. Do not call it for mere enemy presence, threats, standoffs, negotiation, intimidation, surrender offers, or a COMBAT STATE: DORMANT block. Do not call it merely to inspect the board. If an encounter is already active, this reopens it instead of starting another. If the player declared a concrete opening action, copy it into openingAction and do not resolve it narratively. After calling, do not resolve the fight yourself.',
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -1782,8 +1783,8 @@ export function installInterceptor() {
                 tacticalNarrationBlock = tacticalBlock;
                 const traditionalResult = getPendingNarration(settings, getActiveChatId())?.kind === 'traditional';
                 injections += traditionalResult
-                    ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
-                    : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
+                    ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
+                    : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
             }
 
             if (settings.enabled) {
@@ -3413,6 +3414,16 @@ export function resetRouterAutoTick(reason = 'manual') {
  * runStateModelPass is resolved via the module import below to avoid
  * a hard circular dep — it will be a direct import once memo-processor.js exists.
  */
+function stripEndedCombatAftermath(settings) {
+    if (!settings?.currentMemo) return false;
+    const stripped = stripEndedCombatFromMemo(settings.currentMemo);
+    if (stripped === settings.currentMemo) return false;
+    settings.currentMemo = stripped;
+    if (!/\[COMBAT\]/i.test(stripped)) settings.combatDefeatedUi = [];
+    try { saveSettings(); } catch (_) { /* runtime bridge not ready */ }
+    return true;
+}
+
 export async function onGenerationEnded() {
     syncTacticalCombatToolRegistration();
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId);
@@ -3626,6 +3637,11 @@ export async function onGenerationEnded() {
                 void globalThis._rpgCheckRealtimeSceneArt();
             }
         }
+
+        // The tracker pass (or the aftermath generation when the tracker is
+        // throttled/off) has finished. Remove any closed [COMBAT] block so it
+        // cannot become a ghost card or leak into the next scene's prompt.
+        stripEndedCombatAftermath(settings);
 
         // Map Updater cadence is independent of Lorebook Agent. It can run every turn
         // while LA stays on a slower record/relationship schedule. Occupancy runs before

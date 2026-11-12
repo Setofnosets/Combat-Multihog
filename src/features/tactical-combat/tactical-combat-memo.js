@@ -731,6 +731,9 @@ export function buildCombatTrackerReport(state, options = {}) {
     } else {
         lines.push('', 'Willpower is restored to max for all survivors after combat. Do not persist current Willpower loss.');
     }
-    lines.push('Apply this report to [CHARACTER]/[PARTY], close [COMBAT], and record only the macro-level result. Do not re-adjudicate the fight.');
+    lines.push(
+        'Combat is OVER. This tracker pass is the post-combat aftermath: apply this report to [CHARACTER]/[PARTY] and record only the macro-level result. Do not re-adjudicate the fight.',
+        'Output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT] entirely). Never re-open [COMBAT] for defeated, fled, surrendered, withdrawn, or otherwise resolved enemies mentioned in the aftermath prose.',
+    );
     return lines.join('\n');
 }

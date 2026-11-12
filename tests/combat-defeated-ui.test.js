@@ -212,6 +212,9 @@ Status: Dead
     it('keeps the UI archive across rounds, removes revived names, and clears it at END_COMBAT', () => {
         mergeMemo(ACTIVE_COMBAT, `[COMBAT]
 COMBAT ROUND 2
+Ghoul: 6/24 HP
+Att/def: Claws
+Status: Healthy
 Bandit: 0/18 HP
 Status: Defeated
 [/COMBAT]`);
