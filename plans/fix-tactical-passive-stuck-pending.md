@@ -154,7 +154,7 @@
 - **Acceptance criteria:** all suites green under `npx vitest run --pool=threads`; no snapshot regressions in existing tactical suites.
 - **Risk:** low
 - **Model / Effort:** implementer model #medium
-- **Commit:** `test(passives): cover empty-effects acceptance, targetId remap, agent-enemy compile, retry guards`
+- **Commit:** `test(passives): cover empty-effects acceptance, targetId remap, agent-enemy compile, retry guards` — done in 6f80b8e
 
 ## Verification & Testing
 - **Automated checks (run after every step):**
