@@ -15,6 +15,7 @@ import {
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
 import { resolvePassiveRecipeWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { isPassiveRecipePending } from '../src/features/tactical-combat/tactical-combat-passives.js';
 import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
     createEncounterState,
@@ -82,6 +83,80 @@ describe('passive compiler', () => {
         expect(remembered.entry.mechanics.trigger).toMatchObject({ event: 'hit', attack: 'melee' });
         expect(remembered.entry.mechanics.effectTemplate[0].type).toBe('drain');
         expect(findSkillRegistryEntry(settings, 'Blood Bank').status).toBe('resolved');
+    });
+
+    it('accepts an empty effect list as a resolved flavour passive (no recompile)', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'battle-start', limit: 'per-encounter' },
+            effects: [],
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Noble Bearing',
+            type: 'ability',
+            brief: 'Passive: the character carries themselves with quiet authority.',
+            owners: [{ type: 'character', name: 'Aria' }],
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, { mode: 'tactical' });
+        expect(compiled.ok).toBe(true);
+        expect(compiled.effects).toEqual([]);
+        expect(compiled.trigger).toMatchObject({ event: 'battle-start' });
+
+        const remembered = rememberPassiveResolution(settings, entry, compiled.trigger, compiled.effects);
+        expect(remembered.entry.status).toBe('resolved');
+        expect(remembered.entry.mechanics.effectTemplate).toEqual([]);
+        expect(isPassiveRecipePending({
+            passive: true,
+            registryStatus: 'resolved',
+            effectTemplate: [],
+        })).toBe(false);
+    });
+
+    it('rejects a response without an effects array instead of persisting a false no-op', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'hit', attack: 'melee' },
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Unclear Passive',
+            type: 'ability',
+            brief: 'Passive: something happens, somehow.',
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, { mode: 'tactical' });
+        expect(compiled.ok).toBe(false);
+    });
+
+    it('remaps targetId-only effects to role selectors instead of dropping them', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'round-start' },
+            effects: [
+                { type: 'status', targetId: 'aria-1', label: 'Shielded', rounds: 1, acBonus: 1 },
+                { type: 'damage', targetId: 'goblin-1', amount: '1d4', resource: 'hp' },
+            ],
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Warded Stance',
+            type: 'ability',
+            brief: 'Passive: shields the owner and pricks an attacker each round.',
+            owners: [{ type: 'character', name: 'Aria' }],
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
+            mode: 'tactical',
+            casterId: 'aria-1',
+            casterName: 'Aria',
+        });
+        expect(compiled.ok).toBe(true);
+        expect(compiled.effects).toHaveLength(2);
+        expect(compiled.effects[0]).toMatchObject({ type: 'status', target: '$caster', label: 'Shielded' });
+        expect(compiled.effects[0].targetId).toBeUndefined();
+        expect(compiled.effects[1]).toMatchObject({ type: 'damage', target: '$target' });
     });
 });
 

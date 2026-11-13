@@ -110,6 +110,40 @@ export function builtinPassiveRecipe(name) {
     return JSON.parse(JSON.stringify(recipe));
 }
 
+/**
+ * A passive is resolved once a compiled recipe exists, even when that recipe is
+ * a deliberate no-op (a purely narrative "flavour" passive). Boards saved
+ * before `registryStatus` existed still count as resolved when they carry an
+ * effect template, so legacy encounters never regress to "pending".
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveRecipeResolved(skill) {
+    if (!skill || skill.passive !== true) return false;
+    if (String(skill.registryStatus || '') === 'resolved') return true;
+    return Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+}
+
+/**
+ * A resolved passive with no mechanics: the model returned `effects: []` or the
+ * registry stored a no-op recipe. It must never be re-compiled or retried.
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveFlavourOnly(skill) {
+    if (!isPassiveRecipeResolved(skill)) return false;
+    return !(Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0);
+}
+
+/**
+ * True when a passive still needs (or failed) recipe compilation.
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveRecipePending(skill) {
+    return skill?.passive === true && !isPassiveRecipeResolved(skill);
+}
+
 export function passiveMatchesEvent(skill, event, context = {}) {
     if (!skill || skill.passive !== true || !skill.trigger) return false;
     const trigger = normalizePassiveTrigger(skill.trigger);

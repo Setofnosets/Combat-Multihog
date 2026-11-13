@@ -33,7 +33,13 @@ import {
     normalizeWillpowerResource,
 } from './tactical-combat-willpower.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
-import { builtinPassiveRecipe, describePassiveTrigger, normalizePassiveTrigger } from './tactical-combat-passives.js';
+import {
+    builtinPassiveRecipe,
+    describePassiveTrigger,
+    isPassiveRecipePending,
+    isPassiveRecipeResolved,
+    normalizePassiveTrigger,
+} from './tactical-combat-passives.js';
 import { sanitizeEffectTemplate } from './tactical-combat-effect-template.js';
 import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
 import { fallbackSkills } from './tactical-combat-context.js';
@@ -102,10 +108,13 @@ function hasDeterministicSpecialRecipe(settings, source) {
  * @returns {{ value: any, error: string|null }}
  */
 function parseTacticalResponse(text, key) {
+    // Presence, not truthiness: a valid `effects: []` (a flavour-only passive)
+    // must not be mistaken for a missing key.
+    const hasKey = value => value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key);
     const first = parseMapArchitectResponse(text);
-    if (first.value && (Array.isArray(first.value) || first.value[key])) return first;
+    if (first.value && (Array.isArray(first.value) || hasKey(first.value))) return first;
     for (const value of extractJsonObjects(text)) {
-        if (value && value[key]) return { value, error: null };
+        if (hasKey(value)) return { value, error: null };
     }
     return first;
 }
@@ -1469,11 +1478,47 @@ export async function resolvePendingSkillIntents(context, settings, options = {}
 }
 
 /**
+ * Passive recipes never carry unit ids: the engine resolves role selectors
+ * against whoever owns the passive at trigger time. The resolver may still
+ * answer with `targetId` (the prompt does not forbid it), so remap those
+ * effects to `$caster`/`$target` instead of discarding them. An effect that
+ * already uses a role selector keeps it.
+ * @param {object[]} effects sanitized effects
+ * @param {object} entry registry/fallback entry for the passive
+ * @param {{ casterId?: string, casterName?: string }} [options]
+ * @returns {object[]}
+ */
+function remapPassiveEffectTargets(effects, entry, options = {}) {
+    const casterKeys = new Set();
+    const addKey = value => {
+        const key = String(value ?? '').trim().toLowerCase();
+        if (key) casterKeys.add(key);
+    };
+    addKey(options.casterId);
+    addKey(options.casterName);
+    for (const owner of entry?.owners || []) {
+        addKey(owner?.name);
+        addKey(owner?.id);
+    }
+    return (Array.isArray(effects) ? effects : []).map(effect => {
+        if (!effect || effect.targetId == null) return effect;
+        const out = { ...effect };
+        const targetId = String(out.targetId).trim();
+        const existingSelector = typeof out.target === 'string' && out.target.startsWith('$');
+        if (!existingSelector) {
+            out.target = casterKeys.has(targetId.toLowerCase()) ? '$caster' : '$target';
+        }
+        delete out.targetId;
+        return out;
+    });
+}
+
+/**
  * Compile a prose passive into a deterministic trigger/effect recipe with one
  * AI call. The result is cached in the Campaign Skill Registry.
  * @param {object} entry
  * @param {Record<string, any>} settings
- * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional' }} [options]
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional', casterId?: string, casterName?: string }} [options]
  * @returns {Promise<{ ok: boolean, trigger?: object, effects?: object[], error?: string }>}
  */
 export async function resolvePassiveRecipeWithAgent(entry, settings, options = {}) {
@@ -1515,17 +1560,29 @@ export async function resolvePassiveRecipeWithAgent(entry, settings, options = {
         );
         if (!ownsChat()) return { ok: false, error: 'The active chat changed.' };
         const parsed = parseTacticalResponse(raw, 'effects');
-        if (!parsed.value) return { ok: false, error: parsed.error || 'The passive resolver returned no JSON.' };
+        if (!parsed.value || Array.isArray(parsed.value)) {
+            return { ok: false, error: parsed.error || 'The passive resolver returned no JSON.' };
+        }
+        const rawEffects = parsed.value.effects;
+        if (!Array.isArray(rawEffects)) {
+            return { ok: false, error: 'The passive resolver returned no "effects" array.', trigger: normalizePassiveTrigger(parsed.value.trigger) };
+        }
         const trigger = normalizePassiveTrigger(parsed.value.trigger);
-        const effects = sanitizeEffectTemplate(parsed.value.effects, { max: 16 })
-            .filter(effect => !effect.targetId)
-            .map(effect => ({
-                ...effect,
-                ...(effect.type === 'status' && effect.damage && !effect.damageResource
-                    ? { damageResource: 'hp' }
-                    : {}),
-            }));
-        if (!effects.length) {
+        const effects = remapPassiveEffectTargets(
+            sanitizeEffectTemplate(rawEffects, { max: 16 }),
+            entry,
+            { casterId: options.casterId, casterName: options.casterName },
+        ).map(effect => ({
+            ...effect,
+            ...(effect.type === 'status' && effect.damage && !effect.damageResource
+                ? { damageResource: 'hp' }
+                : {}),
+        }));
+        // The prompt explicitly allows `effects: []` for a passive with no
+        // safely expressible mechanics. That is a *resolved* no-op, not a
+        // failure: persisting it stops the passive being recompiled forever.
+        // A non-empty list that sanitizes to nothing, however, is malformed.
+        if (!effects.length && rawEffects.length) {
             return { ok: false, error: 'The passive resolver returned no usable effects.', trigger };
         }
         return { ok: true, trigger, effects };
@@ -1556,7 +1613,7 @@ export async function resolvePendingPassives(context, settings, options = {}) {
     const applyRecipe = (skill, recipe) => {
         if (!recipe) return false;
         skill.trigger = normalizePassiveTrigger(recipe.trigger);
-        skill.effectTemplate = recipe.effects;
+        skill.effectTemplate = Array.isArray(recipe.effects) ? recipe.effects : [];
         skill.registryId = recipe.registryId || skill.registryId || '';
         skill.registryStatus = 'resolved';
         return true;
@@ -1577,6 +1634,19 @@ export async function resolvePendingPassives(context, settings, options = {}) {
                 const recipe = {
                     trigger: existingEntry.mechanics.trigger,
                     effects: existingTemplate,
+                    registryId: existingEntry.id || '',
+                };
+                recipes.set(key, recipe);
+                applyRecipe(skill, recipe);
+                continue;
+            }
+            // A registry entry already marked resolved with an empty template is a
+            // persisted flavour-only recipe. Reusing it avoids an AI call every
+            // encounter for a passive that can never have mechanics.
+            if (existingEntry?.status === 'resolved' && existingEntry?.mechanics?.passive === true) {
+                const recipe = {
+                    trigger: existingEntry.mechanics.trigger,
+                    effects: [],
                     registryId: existingEntry.id || '',
                 };
                 recipes.set(key, recipe);
@@ -1613,6 +1683,8 @@ export async function resolvePendingPassives(context, settings, options = {}) {
             const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
                 signal: options.signal,
                 mode: options.mode,
+                casterId: unit.id || '',
+                casterName: unit.name || '',
             });
             if (!compiled.ok) {
                 failed.add(key);
@@ -1653,42 +1725,68 @@ export function hasPendingPassiveRecipes(context) {
         ...(Array.isArray(context?.allies) ? context.allies : []),
         ...(Array.isArray(context?.enemies) ? context.enemies : []),
     ];
-    return units.some(unit => (unit?.skills || []).some(skill =>
-        skill?.passive === true && !(Array.isArray(skill.effectTemplate) && skill.effectTemplate.length),
-    ));
+    return units.some(unit => (unit?.skills || []).some(skill => isPassiveRecipePending(skill)));
 }
 
 /**
  * Copy freshly compiled passive recipes from a collected context into an
  * already-built encounter state. Used by the narrator-triggered background
  * compile path, where the board may be built before the resolver returns.
+ *
+ * Matching prefers `registryId` (stable across renames/suffixes such as
+ * "Goblin Archer" -> "Goblin Archer (elite)"), then falls back to the lowercase
+ * skill name, and only then to the passive name when the skill list names the
+ * owner. Flavour-only recipes (empty effect template) are copied too so the
+ * board stops reporting them as pending.
  * @param {object} context
  * @param {object} state
  * @returns {number} number of skills updated
  */
 export function applyPassiveRecipesToState(context, state) {
+    const recipeById = new Map();
     const recipeByName = new Map();
     const units = [
-        ...(Array.isArray(context?.playerUnits) ? context.playerUnits : []),
-        ...(Array.isArray(context?.allies) ? context.allies : []),
-        ...(Array.isArray(context?.enemies) ? context.enemies : []),
+        ...(Array.isArray(context?.playerUnits) ? context.playerUnits.map(unit => ({ unit, side: 'player' })) : []),
+        ...(Array.isArray(context?.allies) ? context.allies.map(unit => ({ unit, side: 'ally' })) : []),
+        ...(Array.isArray(context?.enemies) ? context.enemies.map(unit => ({ unit, side: 'enemy' })) : []),
     ];
-    for (const unit of units) {
+    for (const { unit, side } of units) {
         for (const skill of unit?.skills || []) {
-            if (skill?.passive !== true || !Array.isArray(skill.effectTemplate) || !skill.effectTemplate.length) continue;
-            recipeByName.set(String(skill.name || '').toLowerCase(), {
+            if (skill?.passive !== true || !isPassiveRecipeResolved(skill)) continue;
+            const recipe = {
                 trigger: normalizePassiveTrigger(skill.trigger),
-                effectTemplate: skill.effectTemplate,
+                effectTemplate: Array.isArray(skill.effectTemplate) ? skill.effectTemplate : [],
                 registryId: skill.registryId || '',
-            });
+            };
+            const nameKey = String(skill.name || '').trim().toLowerCase();
+            if (recipe.registryId) recipeById.set(String(recipe.registryId), recipe);
+            if (nameKey) {
+                if (!recipeByName.has(nameKey)) recipeByName.set(nameKey, new Map());
+                const bySide = recipeByName.get(nameKey);
+                if (!bySide.has(side)) bySide.set(side, recipe);
+            }
         }
     }
-    if (!recipeByName.size) return 0;
+    if (!recipeById.size && !recipeByName.size) return 0;
+    const recipeForSkill = (skill, side) => {
+        if (skill.registryId) {
+            const byId = recipeById.get(String(skill.registryId));
+            if (byId) return byId;
+        }
+        const bySide = recipeByName.get(String(skill.name || '').trim().toLowerCase());
+        if (!bySide) return null;
+        // Never cross-apply a same-named passive across sides (two units on
+        // opposite teams can both be "Goblin"): only an unambiguous single-side
+        // match is used as a fallback.
+        if (bySide.has(side)) return bySide.get(side);
+        if (bySide.size === 1) return [...bySide.values()][0];
+        return null;
+    };
     let changed = 0;
     for (const unit of state?.units || []) {
         for (const skill of unit?.skills || []) {
-            if (skill?.passive !== true || (Array.isArray(skill.effectTemplate) && skill.effectTemplate.length)) continue;
-            const recipe = recipeByName.get(String(skill.name || '').toLowerCase());
+            if (!isPassiveRecipePending(skill)) continue;
+            const recipe = recipeForSkill(skill, unit.side || 'enemy');
             if (!recipe) continue;
             skill.trigger = normalizePassiveTrigger(recipe.trigger);
             skill.effectTemplate = recipe.effectTemplate;

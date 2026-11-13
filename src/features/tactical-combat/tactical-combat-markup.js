@@ -15,7 +15,7 @@ import {
     describeArea,
 } from './tactical-combat-constants.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
-import { describePassiveTrigger } from './tactical-combat-passives.js';
+import { describePassiveTrigger, isPassiveFlavourOnly, isPassiveRecipePending } from './tactical-combat-passives.js';
 import { formatStatusCondition } from './tactical-combat-status.js';
 
 export function escapeHtml(value) {
@@ -304,12 +304,16 @@ function renderUnitCard(state, view) {
     const passiveList = passives.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Passives</div>
         <div class="rt-tc-skill-list">${passives.map(skill => {
-            const resolved = Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+            const flavour = isPassiveFlavourOnly(skill);
+            const pending = isPassiveRecipePending(skill);
             const trigger = describePassiveTrigger(skill.trigger);
+            const meta = pending
+                ? 'recipe pending'
+                : `${trigger}${flavour ? ' · flavour, no mechanical effect' : ''}`;
             return `
             <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(`${trigger}${resolved ? '' : ' · recipe pending'}`)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(meta)}</span>
                 <span class="rt-tc-skill-uses">PASSIVE</span>
             </div>`;
         }).join('')}</div>
