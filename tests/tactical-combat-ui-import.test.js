@@ -71,4 +71,25 @@ describe('tactical combat UI module', () => {
         expect(ui.liveUnitAtCell({ units: [defeated] }, 1, 1)).toBe(null);
         expect(ui.liveUnitAtCell({ units: [{ ...live, fled: true }] }, 1, 1)).toBe(null);
     });
+
+    it('decides idle passive compile actions for the deferred-architect give-up path', () => {
+        const base = {
+            busy: false,
+            attemptsLeft: 10,
+            activeChatId: 'chat-1',
+            expectedChatId: 'chat-1',
+            stateId: 'state-1',
+            currentStateId: 'state-1',
+            status: 'active',
+        };
+        expect(ui.idlePassiveCompileAction(base)).toBe('compile');
+        expect(ui.idlePassiveCompileAction({ ...base, busy: true })).toBe('retry');
+        expect(ui.idlePassiveCompileAction({ ...base, busy: true, attemptsLeft: 0 })).toBe('warn');
+        // Chat switched away: never compile into the wrong chat.
+        expect(ui.idlePassiveCompileAction({ ...base, activeChatId: 'chat-2' })).toBe('cancel');
+        // Board replaced or finished: stop.
+        expect(ui.idlePassiveCompileAction({ ...base, currentStateId: 'state-2' })).toBe('cancel');
+        expect(ui.idlePassiveCompileAction({ ...base, status: 'victory' })).toBe('cancel');
+        expect(ui.idlePassiveCompileAction({ ...base, expectedChatId: '' })).toBe('cancel');
+    });
 });

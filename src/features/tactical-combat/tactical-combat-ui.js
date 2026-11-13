@@ -1690,6 +1690,12 @@ function scheduleBackgroundPassiveCompile(context, stateId, chatId) {
         // A manual click-to-retry is already resolving this board's passives;
         // do not race it with a second provider call.
         if (ui.passiveController) return;
+        // The narrator may have started generating again while this timer was
+        // queued; re-defer instead of nesting a provider request.
+        if (narratorPipelineBusy()) {
+            scheduleIdlePassiveCompile(context, stateId, chatId);
+            return;
+        }
         // A hung provider request must not block the serial resolver forever;
         // abort after 90s so the failure is visible instead of silently
         // leaving the passive pending.
@@ -1886,6 +1892,45 @@ async function runDeferredEncounterArchitect(provisional, settings, options = {}
     }
 }
 
+/**
+ * Decide what an idle passive-compile poll should do next. Exported for tests:
+ * the timer wiring itself stays in the UI controller.
+ * @param {{ busy: boolean, attemptsLeft: number, activeChatId: string, expectedChatId: string, stateId: string, currentStateId: string, status: string }} input
+ * @returns {'cancel'|'retry'|'warn'|'compile'}
+ */
+export function idlePassiveCompileAction(input = {}) {
+    if (!input.expectedChatId || input.activeChatId !== input.expectedChatId) return 'cancel';
+    if (!input.currentStateId || input.currentStateId !== input.stateId || input.status !== 'active') return 'cancel';
+    if (input.busy) return Number(input.attemptsLeft) > 0 ? 'retry' : 'warn';
+    return 'compile';
+}
+
+function scheduleIdlePassiveCompile(context, stateId, chatId, attemptsLeft = 300) {
+    if (!chatId) return;
+    setTimeout(() => {
+        const current = getState();
+        const action = idlePassiveCompileAction({
+            busy: narratorPipelineBusy(),
+            attemptsLeft,
+            activeChatId: getActiveChatId(),
+            expectedChatId: chatId,
+            stateId,
+            currentStateId: current?.id || '',
+            status: current?.status || '',
+        });
+        if (action === 'cancel') return;
+        if (action === 'retry') {
+            scheduleIdlePassiveCompile(context, stateId, chatId, attemptsLeft - 1);
+            return;
+        }
+        if (action === 'warn') {
+            toast('warning', 'Passive abilities are still pending; click a pending passive to retry.');
+            return;
+        }
+        scheduleBackgroundPassiveCompile(context, stateId, chatId);
+    }, 1000);
+}
+
 function scheduleDeferredEncounterArchitect(provisional, settings, options = {}) {
     if (!provisional?.preparing?.active) return;
     const chatId = provisional.chatId || getActiveChatId();
@@ -1911,9 +1956,30 @@ function scheduleDeferredEncounterArchitect(provisional, settings, options = {})
         }
         ui.architectStateId = '';
         if (narratorPipelineBusy()) {
-            void finalizePreparedEncounter(latest, getSettings(), options, {
+            // The architect cannot call a provider while the narrator is still
+            // generating. Finalize a local roster instead of leaving the board
+            // stuck, but collect the scene now and compile its passives as soon
+            // as narration ends, so nothing is silently skipped.
+            const settings = getSettings();
+            const fallbackWarnings = [];
+            let context = null;
+            try {
+                context = collectStartContext(settings, options);
+            } catch (error) {
+                fallbackWarnings.push(`Could not read the current scene: ${error?.message || error}`);
+            }
+            if (context && hasPendingSkillIntents(context)) {
+                fallbackWarnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+            }
+            if (context && hasPendingPassiveRecipes(context)) {
+                fallbackWarnings.push('Passive abilities could not be compiled while the narrator was generating; click a pending passive to retry.');
+            }
+            void finalizePreparedEncounter(latest, settings, options, {
+                context,
+                warnings: fallbackWarnings,
                 error: 'The narrator was still generating, so a local roster was used.',
             });
+            if (context) scheduleIdlePassiveCompile(context, latest.id, latest.chatId || chatId);
             return;
         }
         void runDeferredEncounterArchitect(latest, getSettings(), options);
@@ -2208,9 +2274,27 @@ function handleOverlayAction(action, element) {
                     ui.abortController = null;
                 }
                 cancelArchitectPreparation();
-                void finalizePreparedEncounter(state, getSettings(), state.preparing.options || {}, {
+                const settings = getSettings();
+                const options = state.preparing.options || {};
+                let context = null;
+                const warnings = [];
+                try {
+                    context = collectStartContext(settings, options);
+                } catch (error) {
+                    warnings.push(`Could not read the current scene: ${error?.message || error}`);
+                }
+                if (context && hasPendingSkillIntents(context)) {
+                    warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+                }
+                if (context && hasPendingPassiveRecipes(context)) {
+                    warnings.push('Passive abilities could not be compiled while the narrator was generating; click a pending passive to retry.');
+                }
+                void finalizePreparedEncounter(state, settings, options, {
+                    context,
+                    warnings,
                     error: 'The local roster was used instead of the encounter architect.',
                 });
+                if (context) scheduleIdlePassiveCompile(context, state.id, state.chatId || getActiveChatId());
             }
             break;
         }

@@ -54,6 +54,7 @@ import {
 import { continueToNarration, queueCombatOutcome, requeueCombatOutcomeIfMissing } from '../tactical-combat/tactical-combat-outcome.js';
 import { isTraditionalCombatMode } from '../combat/combat-mode.js';
 import { buildTraditionalCombatMarkup } from './traditional-combat-markup.js';
+import { idlePassiveCompileAction } from '../tactical-combat/tactical-combat-ui.js';
 import {
     applyTraditionalAction,
     buildTraditionalEncounterFromContext,
@@ -986,6 +987,91 @@ function applyEncounterOptionsToState(state, settings, options = {}) {
     return openingNeedsAgent;
 }
 
+/**
+ * Poll until the narrator finishes, then run the deferred passive compile for a
+ * board that was finalized from the local roster. Compiling before then would
+ * nest a provider request inside the running narrator generation.
+ * @param {object} context
+ * @param {string} stateId
+ * @param {string} chatId
+ * @param {number} [attemptsLeft]
+ */
+function scheduleIdlePassiveCompile(context, stateId, chatId, attemptsLeft = 300) {
+    if (!chatId) return;
+    setTimeout(() => {
+        const current = getState();
+        const action = idlePassiveCompileAction({
+            busy: narratorPipelineBusy(),
+            attemptsLeft,
+            activeChatId: getActiveChatId(),
+            expectedChatId: chatId,
+            stateId,
+            currentStateId: current?.id || '',
+            status: current?.status || '',
+        });
+        if (action === 'cancel') return;
+        if (action === 'retry') {
+            scheduleIdlePassiveCompile(context, stateId, chatId, attemptsLeft - 1);
+            return;
+        }
+        if (action === 'warn') {
+            toast('warning', 'Passive abilities are still pending; click a pending passive to retry.');
+            return;
+        }
+        scheduleBackgroundPassiveCompile(context, stateId, chatId);
+    }, 1000);
+}
+
+/**
+ * Finalize a local-roster encounter when the architect could not run because
+ * the narrator was still generating. The scene is collected now so pending
+ * passives can be compiled as soon as narration ends instead of being skipped.
+ * @param {object} provisional
+ * @param {Record<string, any>} settings
+ * @param {object} options
+ * @returns {boolean}
+ */
+function finalizeFallbackEncounter(provisional, settings, options = {}) {
+    const chatId = provisional?.chatId || getActiveChatId();
+    const warnings = [];
+    let context = null;
+    try {
+        context = collectStartContext(settings, options);
+    } catch (error) {
+        warnings.push(`Could not read the current scene: ${error?.message || error}`);
+    }
+    let built;
+    try {
+        built = buildTraditionalEncounterFromContext(context, settings, {
+            source: options.source || settings.traditionalCombatEncounterSource || 'auto',
+            seed: Math.floor(Math.random() * 0x7fffffff),
+            actionCatalog: getTraditionalActionCatalog(settings).catalog,
+        });
+    } catch (error) {
+        console.warn('[RPG Tracker] Local roster fallback failed:', error);
+        toast('error', `The encounter could not be prepared: ${error?.message || error}`);
+        return false;
+    }
+    if (context && hasPendingSkillIntents(context)) {
+        warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+    }
+    if (context && hasPendingPassiveRecipes(context)) {
+        warnings.push('Passive abilities could not be compiled while the narrator was generating; click a pending passive to retry.');
+    }
+    applyPassiveRecipesToState(context, built.state);
+    const result = finalizePrepared(
+        provisional,
+        built.state,
+        settings,
+        options,
+        context,
+        [...warnings, ...(built.warnings || [])],
+        'The narrator was still generating, so a local roster was used.',
+    );
+    if (context) scheduleIdlePassiveCompile(context, provisional.id, chatId);
+    return result;
+}
+
 function scheduleDeferredArchitect(provisional, settings, options = {}) {
     if (!provisional?.preparing?.active) return;
     const chatId = provisional.chatId || getActiveChatId();
@@ -1010,6 +1096,13 @@ function scheduleDeferredArchitect(provisional, settings, options = {}) {
             return;
         }
         ui.architectStateId = '';
+        if (narratorPipelineBusy()) {
+            // No provider calls inside a live narrator generation. Finalize the
+            // local roster now (collecting the scene first) and compile its
+            // passives as soon as narration ends.
+            finalizeFallbackEncounter(latest, getSettings(), options);
+            return;
+        }
         void runDeferredArchitect(latest, getSettings(), options);
     };
     ui.architectTimer = setTimeout(attempt, 850);
@@ -1131,6 +1224,12 @@ function scheduleBackgroundPassiveCompile(context, stateId, chatId) {
         // A manual click-to-retry is already resolving this board's passives;
         // do not race it with a second provider call.
         if (ui.passiveController) return;
+        // The narrator may have started generating again while this timer was
+        // queued; re-defer instead of nesting a provider request.
+        if (narratorPipelineBusy()) {
+            scheduleIdlePassiveCompile(context, stateId, chatId);
+            return;
+        }
         // Bound the background request so a hung provider cannot block the
         // serial resolver; the failure must surface as a toast.
         const passiveController = new AbortController();
@@ -1454,7 +1553,16 @@ function useLocalRoster() {
             seed: Math.floor(Math.random() * 0x7fffffff),
             actionCatalog: getTraditionalActionCatalog(settings).catalog,
         });
-        finalizePrepared(current, built.state, settings, options, context, built.warnings, 'The local roster was used instead of the encounter architect.');
+        const warnings = [...(built.warnings || [])];
+        if (hasPendingSkillIntents(context)) {
+            warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
+        }
+        if (hasPendingPassiveRecipes(context)) {
+            warnings.push('Passive abilities could not be compiled while the narrator was generating; click a pending passive to retry.');
+        }
+        applyPassiveRecipesToState(context, built.state);
+        finalizePrepared(current, built.state, settings, options, context, warnings, 'The local roster was used instead of the encounter architect.');
+        scheduleIdlePassiveCompile(context, current.id, current.chatId || getActiveChatId());
     } catch (error) {
         toast('error', String(error?.message || error));
         render();

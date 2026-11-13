@@ -2,7 +2,7 @@
 
 ## Meta
 - Slug: fix-tactical-passive-stuck-pending
-- Status: in progress (Step 4 of 6 done)
+- Status: in progress (Step 5 of 6 done)
 - Date: 2026-11-12
 
 ## Summary
@@ -127,6 +127,7 @@
 - **Commit:** `fix(passives): compile agent-authored enemy passives; match recipes by registryId then name` — done in 0d22fe7
 
 ### 5. Fix the deferred-architect give-up path (C)
+- **Status:** [x] done (passes are deferred until narration ends to preserve the no-nested-provider-request constraint)
 - **Files:** `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`.
 - **Depends on:** Step 3 (toast plumbing) — soft dependency; can precede it if needed
 - **Parallelizable:** yes (after Step 4 lands the context merge helper)
