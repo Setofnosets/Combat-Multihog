@@ -107,7 +107,7 @@
   - Traditional board gets identical behaviour.
 - **Risk:** low-medium (delegated event wiring in two UIs)
 - **Model / Effort:** implementer model #medium
-- **Commit:** `feat(passives): surface background compile failures; click a pending passive to re-resolve it`
+- **Commit:** `feat(passives): surface background compile failures; click a pending passive to re-resolve it` — done in 0a3e049
 
 ### 4. Compile agent-authored enemy passives (D, F)
 - **Files:** `src/features/tactical-combat/tactical-combat-agent.js`, `src/features/tactical-combat/tactical-combat-context.js`, `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`.
