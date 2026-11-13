@@ -15,7 +15,7 @@ import {
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
 import { resolvePassiveRecipeWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
-import { isPassiveRecipePending } from '../src/features/tactical-combat/tactical-combat-passives.js';
+import { isPassiveRecipePending, PASSIVE_ACTION_LIST, PASSIVE_ATTACK_LIST, PASSIVE_EVENTS, PASSIVE_EVENT_LIST, PASSIVE_LIMIT_LIST } from '../src/features/tactical-combat/tactical-combat-passives.js';
 import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
     createEncounterState,
@@ -157,6 +157,32 @@ describe('passive compiler', () => {
         expect(compiled.effects[0]).toMatchObject({ type: 'status', target: '$caster', label: 'Shielded' });
         expect(compiled.effects[0].targetId).toBeUndefined();
         expect(compiled.effects[1]).toMatchObject({ type: 'damage', target: '$target' });
+    });
+
+    it('advertises exactly the events the prompt documents and the engine implements', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({ trigger: { event: 'hit' }, effects: [] }));
+        const settings = makeSettings();
+        await resolvePassiveRecipeWithAgent({
+            name: 'Event Vocabulary Probe',
+            type: 'ability',
+            brief: 'Passive: probe.',
+            mechanics: { kind: 'special', passive: true },
+        }, settings, { mode: 'tactical' });
+        const userPrompt = sendStateRequest.mock.calls[0][2];
+        const systemPrompt = sendStateRequest.mock.calls[0][1];
+        const payloadMatch = userPrompt.match(/```json\n([\s\S]*?)\n```/);
+        expect(payloadMatch).toBeTruthy();
+        const payload = JSON.parse(payloadMatch[1]);
+        expect(payload.rules.supportedEvents).toEqual(PASSIVE_EVENT_LIST);
+        expect([...PASSIVE_EVENT_LIST].sort()).toEqual([...PASSIVE_EVENTS].sort());
+        for (const event of PASSIVE_EVENT_LIST) {
+            expect(userPrompt).toContain(`"${event}"`);
+            expect(systemPrompt).toContain(`"${event}"`);
+        }
+        expect(payload.rules.supportedAttackFilters).toEqual(PASSIVE_ATTACK_LIST);
+        expect(payload.rules.supportedActionFilters).toEqual(PASSIVE_ACTION_LIST);
+        expect(payload.rules.supportedLimits).toEqual(PASSIVE_LIMIT_LIST);
     });
 });
 

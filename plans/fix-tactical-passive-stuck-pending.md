@@ -81,6 +81,7 @@
 - **Commit:** `fix(passives): accept empty effects as resolved no-op; remap targetId effects to role selectors`
 
 ### 2. Prompt/payload consistency (E)
+- **Status:** [x] done
 - **Files:** `src/features/tactical-combat/tactical-combat-agent.js`, `src/features/tactical-combat/tactical-combat-prompts.js`.
 - **Depends on:** none
 - **Parallelizable:** yes (with Step 1)

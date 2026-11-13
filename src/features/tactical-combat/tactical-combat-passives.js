@@ -8,7 +8,7 @@
 
 import { describeCombatCondition, normalizeCombatCondition } from './tactical-combat-variables.js';
 
-const PASSIVE_EVENTS = new Set([
+const PASSIVE_EVENT_LIST = Object.freeze([
     'hit',
     'attacked',
     'round-start',
@@ -19,9 +19,13 @@ const PASSIVE_EVENTS = new Set([
     'kill',
     'willpower-break',
 ]);
+const PASSIVE_EVENTS = new Set(PASSIVE_EVENT_LIST);
 const PASSIVE_ATTACKS = new Set(['melee', 'ranged', 'any']);
 const PASSIVE_ACTIONS = new Set(['basic', 'skill', 'any']);
 const PASSIVE_LIMITS = new Set(['per-hit', 'per-turn', 'per-round', 'per-encounter']);
+const PASSIVE_ATTACK_LIST = Object.freeze(['melee', 'ranged', 'any']);
+const PASSIVE_ACTION_LIST = Object.freeze(['basic', 'skill', 'any']);
+const PASSIVE_LIMIT_LIST = Object.freeze(['per-hit', 'per-turn', 'per-round', 'per-encounter']);
 
 function clampInt(value, min, max, fallback) {
     const n = Math.round(Number(value));
@@ -66,7 +70,7 @@ export function normalizePassiveTrigger(raw) {
 
 /**
  * @param {object|null|undefined} skill
- * @param {'hit'|'attacked'|'round-start'|'kill'} event
+ * @param {string} event one of PASSIVE_EVENT_LIST
  * @param {{attackType?:string, actionType?:string}} [context]
  * @returns {boolean}
  */
@@ -193,4 +197,4 @@ export function describePassiveTrigger(raw) {
     return text;
 }
 
-export { PASSIVE_EVENTS, PASSIVE_ATTACKS, PASSIVE_ACTIONS, PASSIVE_LIMITS };
+export { PASSIVE_EVENTS, PASSIVE_ATTACKS, PASSIVE_ACTIONS, PASSIVE_LIMITS, PASSIVE_EVENT_LIST, PASSIVE_ATTACK_LIST, PASSIVE_ACTION_LIST, PASSIVE_LIMIT_LIST };

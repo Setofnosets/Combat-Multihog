@@ -39,6 +39,10 @@ import {
     isPassiveRecipePending,
     isPassiveRecipeResolved,
     normalizePassiveTrigger,
+    PASSIVE_ACTION_LIST,
+    PASSIVE_ATTACK_LIST,
+    PASSIVE_EVENT_LIST,
+    PASSIVE_LIMIT_LIST,
 } from './tactical-combat-passives.js';
 import { sanitizeEffectTemplate } from './tactical-combat-effect-template.js';
 import { classifySkillIntent, normalizeSkillIntent } from './tactical-combat-classifiers.js';
@@ -1542,10 +1546,10 @@ export async function resolvePassiveRecipeWithAgent(entry, settings, options = {
             },
         },
         rules: {
-            supportedEvents: ['hit', 'attacked', 'round-start', 'kill'],
-            supportedAttackFilters: ['melee', 'ranged', 'any'],
-            supportedActionFilters: ['basic', 'skill', 'any'],
-            supportedLimits: ['per-hit', 'per-turn', 'per-round', 'per-encounter'],
+            supportedEvents: [...PASSIVE_EVENT_LIST],
+            supportedAttackFilters: [...PASSIVE_ATTACK_LIST],
+            supportedActionFilters: [...PASSIVE_ACTION_LIST],
+            supportedLimits: [...PASSIVE_LIMIT_LIST],
             selectors: ['$caster', '$target'],
             mode,
         },
