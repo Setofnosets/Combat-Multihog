@@ -14,9 +14,13 @@ import {
     rememberSpecialResolution,
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
-import { resolvePassiveRecipeWithAgent, resolvePassiveSkillWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { resolveAgentEncounterPassives, resolvePassiveRecipeWithAgent, resolvePassiveSkillWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
 import { isPassiveRecipePending, PASSIVE_ACTION_LIST, PASSIVE_ATTACK_LIST, PASSIVE_EVENTS, PASSIVE_EVENT_LIST, PASSIVE_LIMIT_LIST } from '../src/features/tactical-combat/tactical-combat-passives.js';
-import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
+import {
+    buildEncounterFromContext,
+    collectEncounterContext,
+    mergeAgentEncounterPassives,
+} from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
     createEncounterState,
     getUnitById,
@@ -242,6 +246,89 @@ describe('passive compiler', () => {
         await expect(resolvePassiveSkillWithAgent(state, 'nope', 'nope', settings)).resolves.toMatchObject({ ok: false });
         await expect(resolvePassiveSkillWithAgent(state, 'pc-1', 'nope', settings)).resolves.toMatchObject({ ok: false });
         expect(sendStateRequest).not.toHaveBeenCalled();
+    });
+
+    it('compiles an architect-authored enemy passive before the board is built', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'round-start' },
+            effects: [{ type: 'heal', target: '$caster', amount: '1d4', resource: 'hp' }],
+        }));
+        const settings = makeSettings();
+        const normalized = normalizeEncounterPayload({
+            title: 'Rooftop Ambush',
+            enemies: [{
+                name: 'Goblin Archer',
+                maxHp: 12,
+                ac: 12,
+                attackBonus: 3,
+                damage: '1d6',
+                skills: [{ name: 'Steady Aim', passive: true, description: 'Passive: steadies the shot each round.' }],
+            }],
+        }, { skillRegistry: settings.skillRegistry });
+        expect(normalized.ok).toBe(true);
+        const agentEncounter = normalized.encounter;
+        const context = {
+            chatId: 'vitest-chat',
+            playerUnits: [{ id: 'pc-1', name: 'Aria', side: 'player', maxHp: 20, hp: 20, ac: 12, attackBonus: 3, damage: '1d6', skills: [] }],
+            allies: [],
+            enemies: [],
+            existingCombat: false,
+            movement: 6,
+            willpowerMaxPercent: 30,
+            theme: 'plain',
+        };
+        const compileSet = mergeAgentEncounterPassives(context, agentEncounter, { source: 'agent' });
+        expect(compileSet).not.toBe(context);
+        const compiled = await resolveAgentEncounterPassives(context, agentEncounter, settings, {
+            mode: 'tactical',
+            source: 'agent',
+            chatId: 'vitest-chat',
+        });
+        expect(compiled.warnings).toEqual([]);
+        expect(compiled.pending).toBe(false);
+        expect(compiled.changed).toBe(1);
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        const built = buildEncounterFromContext(compiled.context, settings, {
+            agentEncounter,
+            source: 'agent',
+            seed: 12,
+        });
+        expect(built.state.round).toBe(1);
+        const enemy = built.state.units.find(unit => unit.name === 'Goblin Archer');
+        const passive = enemy.skills.find(skill => skill.name === 'Steady Aim');
+        expect(passive).toMatchObject({ passive: true, registryStatus: 'resolved' });
+        expect(passive.trigger).toMatchObject({ event: 'round-start' });
+        expect(passive.effectTemplate[0]).toMatchObject({ type: 'heal', target: '$caster' });
+    });
+
+    it('reports pending agent passives when the resolver fails', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockRejectedValue(new Error('offline'));
+        const settings = makeSettings();
+        const agentEncounter = {
+            enemies: [{
+                name: 'Goblin Archer',
+                side: 'enemy',
+                skills: [{ name: 'Steady Aim', passive: true, description: 'Passive: steady.' }],
+            }],
+        };
+        const context = {
+            chatId: 'vitest-chat',
+            playerUnits: [],
+            allies: [],
+            enemies: [],
+            existingCombat: false,
+        };
+        const compiled = await resolveAgentEncounterPassives(context, agentEncounter, settings, {
+            mode: 'tactical',
+            source: 'agent',
+            chatId: 'vitest-chat',
+        });
+        expect(compiled.pending).toBe(true);
+        expect(compiled.warnings).toHaveLength(1);
+        expect(compiled.warnings[0]).toContain('Steady Aim');
+        expect(compiled.warnings[0]).toContain('could not be compiled');
     });
 });
 

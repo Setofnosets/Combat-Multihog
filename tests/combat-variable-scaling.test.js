@@ -21,7 +21,14 @@ import {
     describePassiveTrigger,
     normalizePassiveTrigger,
 } from '../src/features/tactical-combat/tactical-combat-passives.js';
-import { hasPendingPassiveRecipes } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import {
+    applyPassiveRecipesToState,
+    hasPendingAgentPassives,
+    hasPendingPassiveRecipes,
+    resolvePendingPassives,
+} from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { mergeAgentEncounterPassives } from '../src/features/tactical-combat/tactical-combat-context.js';
+import { createEmptySkillRegistry } from '../src/features/skill-registry/skill-registry.js';
 import {
     applyTraditionalAction,
     createTraditionalEncounterState,
@@ -387,6 +394,127 @@ describe('variable-scaled skills and passives', () => {
             }],
         };
         expect(hasPendingPassiveRecipes(context)).toBe(true);
+    });
+
+    it('resolves the agent-enemy predicate scenario end-to-end', async () => {
+        const agentEncounter = {
+            enemies: [{
+                name: 'Goblin',
+                side: 'enemy',
+                skills: [{
+                    name: 'Pack Tactics',
+                    passive: true,
+                    effectTemplate: [],
+                }],
+            }],
+        };
+        const context = { playerUnits: [], allies: [], enemies: [], existingCombat: false };
+        const merged = mergeAgentEncounterPassives(context, agentEncounter, { source: 'agent' });
+        expect(merged).not.toBe(context);
+        expect(hasPendingAgentPassives(agentEncounter)).toBe(true);
+        expect(hasPendingPassiveRecipes(merged)).toBe(true);
+        const compiled = await resolvePendingPassives(merged, { skillRegistry: createEmptySkillRegistry() }, { chatId: 'vitest-chat' });
+        expect(compiled.changed).toBe(1);
+        const skill = agentEncounter.enemies[0].skills[0];
+        expect(skill.registryStatus).toBe('resolved');
+        expect(skill.trigger.event).toBe('hit');
+        expect(hasPendingPassiveRecipes(merged)).toBe(false);
+    });
+
+    it('applies recipes by registryId before name and keeps name fallback side-scoped', () => {
+        const context = {
+            playerUnits: [],
+            allies: [],
+            enemies: [{
+                name: 'Goblin',
+                side: 'enemy',
+                skills: [{
+                    name: 'Pack Tactics',
+                    passive: true,
+                    trigger: { event: 'hit', limit: 'per-turn' },
+                    effectTemplate: [{ type: 'status', target: '$caster', label: 'Pack Tactics', rounds: 1, attackBonus: 2 }],
+                    registryId: 'pack-tactics',
+                    registryStatus: 'resolved',
+                }],
+            }],
+        };
+        // Renamed/suffixed enemy: the skill name no longer matches, but the
+        // stable registryId does.
+        const renamed = createEncounterState({
+            seed: 5,
+            grid: { rows: 5, cols: 5 },
+            terrainRows: Array.from({ length: 5 }, () => '.....'),
+            units: [{
+                id: 'enemy-1',
+                name: 'Goblin Archer (elite)',
+                side: 'enemy',
+                maxHp: 10,
+                hp: 10,
+                ac: 12,
+                attackBonus: 3,
+                damage: '1d6',
+                skills: [{ id: 'elite-pack', name: 'Elite Volley', passive: true, registryId: 'pack-tactics', effectTemplate: null }],
+            }],
+        });
+        expect(applyPassiveRecipesToState(context, renamed)).toBe(1);
+        expect(renamed.units[0].skills[0].registryStatus).toBe('resolved');
+        expect(renamed.units[0].skills[0].effectTemplate).toHaveLength(1);
+
+        // No registryId: fall back to the lowercase skill name and same side.
+        const byName = createEncounterState({
+            seed: 6,
+            grid: { rows: 5, cols: 5 },
+            terrainRows: Array.from({ length: 5 }, () => '.....'),
+            units: [{
+                id: 'enemy-2',
+                name: 'Goblin Archer',
+                side: 'enemy',
+                maxHp: 10,
+                hp: 10,
+                ac: 12,
+                attackBonus: 3,
+                damage: '1d6',
+                skills: [{ id: 'pack', name: 'PACK TACTICS', passive: true, effectTemplate: null }],
+            }],
+        });
+        expect(applyPassiveRecipesToState(context, byName)).toBe(1);
+        expect(byName.units[0].skills[0].registryStatus).toBe('resolved');
+    });
+
+    it('does not cross-apply a same-named passive across sides', () => {
+        const context = {
+            playerUnits: [{
+                name: 'Aria',
+                side: 'player',
+                skills: [{
+                    name: 'Pack Tactics',
+                    passive: true,
+                    trigger: { event: 'hit' },
+                    effectTemplate: [{ type: 'damage', target: '$target', amount: '1d4' }],
+                    registryStatus: 'resolved',
+                }],
+            }],
+            allies: [],
+            enemies: [],
+        };
+        const state = createEncounterState({
+            seed: 7,
+            grid: { rows: 5, cols: 5 },
+            terrainRows: Array.from({ length: 5 }, () => '.....'),
+            units: [{
+                id: 'enemy-1',
+                name: 'Goblin',
+                side: 'enemy',
+                maxHp: 10,
+                hp: 10,
+                ac: 12,
+                attackBonus: 3,
+                damage: '1d6',
+                skills: [{ id: 'enemy-pack', name: 'Pack Tactics', passive: true, effectTemplate: null }],
+            }],
+        });
+        expect(applyPassiveRecipesToState(context, state)).toBe(0);
+        expect(state.units[0].skills[0].registryStatus).not.toBe('resolved');
     });
 
     it('evaluates the same formulas in traditional theater mode', () => {

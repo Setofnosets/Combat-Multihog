@@ -1413,6 +1413,42 @@ export function selectEncounterEnemies(context, settings, options = {}) {
 }
 
 /**
+ * Build the compile set for an encounter that may use an agent-authored enemy
+ * roster. `selectEncounterEnemies` replaces the context enemies with
+ * `agentEncounter.enemies` for `source: 'agent'` (and for `auto` when there is
+ * no existing [COMBAT] block), so `hasPendingPassiveRecipes` /
+ * `resolvePendingPassives` would never see agent-authored passives. This helper
+ * returns a shallow context copy whose `enemies` are exactly the units the
+ * builder will use, sharing the original skill objects so a compiled recipe
+ * mutates the encounter payload in place.
+ *
+ * It never throws and returns the original context unchanged when the agent
+ * roster is not used (existing-combat `auto` / `existing`) or empty.
+ * @param {object} context
+ * @param {object|null} agentEncounter
+ * @param {{ source?: string }} [options]
+ * @returns {object}
+ */
+export function mergeAgentEncounterPassives(context, agentEncounter, options = {}) {
+    if (!context || typeof context !== 'object') return context;
+    const agentEnemies = Array.isArray(agentEncounter?.enemies) ? agentEncounter.enemies : [];
+    if (!agentEnemies.length) return context;
+    const source = String(options.source || '');
+    if (source === 'existing') return context;
+    // Mirror selectEncounterEnemies: the agent roster only wins for an explicit
+    // agent source, or for auto when no usable [COMBAT] opposition exists.
+    const existingWins = context.existingCombat
+        && Array.isArray(context.enemies)
+        && context.enemies.length > 0;
+    if (source !== 'agent' && existingWins) return context;
+    const enemies = agentEnemies
+        .filter(enemy => enemy && typeof enemy === 'object')
+        .map(enemy => ({ ...enemy, side: 'enemy', source: 'agent' }));
+    if (!enemies.length) return context;
+    return { ...context, enemies };
+}
+
+/**
  * Build a ready-to-play encounter state from parsed context.
  * @param {object} context
  * @param {Record<string, any>} settings

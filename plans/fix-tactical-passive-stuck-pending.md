@@ -2,7 +2,7 @@
 
 ## Meta
 - Slug: fix-tactical-passive-stuck-pending
-- Status: in progress (Step 3 of 6 done)
+- Status: in progress (Step 4 of 6 done)
 - Date: 2026-11-12
 
 ## Summary
@@ -110,6 +110,7 @@
 - **Commit:** `feat(passives): surface background compile failures; click a pending passive to re-resolve it` — done in 0a3e049
 
 ### 4. Compile agent-authored enemy passives (D, F)
+- **Status:** [x] done
 - **Files:** `src/features/tactical-combat/tactical-combat-agent.js`, `src/features/tactical-combat/tactical-combat-context.js`, `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`.
 - **Depends on:** Step 1
 - **Parallelizable:** no
@@ -123,7 +124,7 @@
   - The `combat-variable-scaling.test.js:376` predicate scenario now resolves end-to-end.
 - **Risk:** medium (touches the shared enemy-selection seam used by both modes)
 - **Model / Effort:** implementer model #high (glm-5.3)
-- **Commit:** `fix(passives): compile agent-authored enemy passives; match recipes by registryId then name`
+- **Commit:** `fix(passives): compile agent-authored enemy passives; match recipes by registryId then name` — done in 0d22fe7
 
 ### 5. Fix the deferred-architect give-up path (C)
 - **Files:** `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`.

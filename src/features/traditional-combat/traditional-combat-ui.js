@@ -25,8 +25,10 @@ import {
 } from '../tactical-combat/tactical-combat-engine.js';
 import {
     applyPassiveRecipesToState,
+    hasPendingAgentPassives,
     hasPendingPassiveRecipes,
     hasPendingSkillIntents,
+    resolveAgentEncounterPassives,
     resolvePassiveSkillWithAgent,
     resolvePendingPassives,
     resolvePendingSkillIntents,
@@ -34,7 +36,7 @@ import {
 } from '../tactical-combat/tactical-combat-agent.js';
 import { flushSkillRegistry } from '../skill-registry/skill-registry-store.js';
 import { backfillSkillRegistry } from '../skill-registry/skill-registry-discovery.js';
-import { collectEncounterContext } from '../tactical-combat/tactical-combat-context.js';
+import { collectEncounterContext, mergeAgentEncounterPassives } from '../tactical-combat/tactical-combat-context.js';
 import {
     clearPendingNarration,
     getEncounterForChat,
@@ -1016,6 +1018,10 @@ function scheduleDeferredArchitect(provisional, settings, options = {}) {
 async function runDeferredArchitect(provisional, settings, options = {}) {
     const chatId = provisional?.chatId || getActiveChatId();
     if (!provisional?.preparing?.active || !chatId) return false;
+    if (narratorPipelineBusy()) {
+        scheduleDeferredArchitect(provisional, settings, options);
+        return false;
+    }
     const controller = new AbortController();
     ui.abortController = controller;
     setBusy(true, 'The encounter architect is designing the opposition…', true);
@@ -1048,27 +1054,116 @@ async function runDeferredArchitect(provisional, settings, options = {}) {
         if (controller.signal.aborted || getActiveChatId() !== chatId) return false;
         const latest = getState();
         if (!latest || latest.id !== provisional.id || !latest.preparing?.active) return false;
-        const built = buildTraditionalEncounterFromContext(context, settings, {
+        // Agent-authored enemies replace the context roster in the builder, so
+        // compile their passives now — before the board is built — instead of
+        // leaving "recipe pending" on Round 1.
+        const source = options.source || settings.traditionalCombatEncounterSource || 'auto';
+        let compileContext = generated.ok
+            ? mergeAgentEncounterPassives(context, generated.encounter, { source })
+            : context;
+        if (generated.ok && hasPendingAgentPassives(generated.encounter)) {
+            setBusy(true, 'Compiling passive abilities…', true);
+            render();
+            const compiled = await resolveAgentEncounterPassives(context, generated.encounter, getSettings(), {
+                signal: controller.signal,
+                mode: 'traditional',
+                source,
+                chatId,
+            });
+            compileContext = compiled.context;
+            // Keep named passive failures at the front so the finalize toast
+            // always surfaces them, and surface them immediately as well.
+            passiveWarnings.unshift(...compiled.warnings);
+            if (compiled.warnings.length) {
+                const message = compiled.warnings.join(' ');
+                console.warn('[RPG Tracker] Agent passive compilation warnings:', compiled.warnings);
+                toast('warning', message);
+            }
+        }
+        if (controller.signal.aborted || getActiveChatId() !== chatId) return false;
+        // The compile await may have overlapped a fallback action or a chat
+        // switch; only finalize the encounter that is still preparing.
+        const latestAfterCompile = getState();
+        if (!latestAfterCompile || latestAfterCompile.id !== provisional.id || !latestAfterCompile.preparing?.active) return false;
+        const built = buildTraditionalEncounterFromContext(compileContext, settings, {
             agentEncounter: generated.ok ? generated.encounter : null,
-            source: options.source || settings.traditionalCombatEncounterSource || 'auto',
+            source,
             seed: Math.floor(Math.random() * 0x7fffffff),
             actionCatalog: getTraditionalActionCatalog(settings).catalog,
         });
-        built.warnings.push(...passiveWarnings);
-        return finalizePrepared(latest, built.state, settings, options, context, built.warnings, generated.error);
+        built.warnings.unshift(...passiveWarnings);
+        applyPassiveRecipesToState(compileContext, built.state);
+        return finalizePrepared(latestAfterCompile, built.state, settings, options, compileContext, built.warnings, generated.error);
     } catch (error) {
         const latest = getState();
         if (!latest || latest.id !== provisional.id) return false;
-        const built = buildTraditionalEncounterFromContext(collectStartContext(settings, options), settings, {
-            source: options.source || settings.traditionalCombatEncounterSource || 'auto',
-            seed: Math.floor(Math.random() * 0x7fffffff),
-        });
-        return finalizePrepared(latest, built.state, settings, options, built.state, [], String(error?.message || error));
+        try {
+            const built = buildTraditionalEncounterFromContext(collectStartContext(settings, options), settings, {
+                source: options.source || settings.traditionalCombatEncounterSource || 'auto',
+                seed: Math.floor(Math.random() * 0x7fffffff),
+            });
+            return finalizePrepared(latest, built.state, settings, options, built.state, [], String(error?.message || error));
+        } catch (fallbackError) {
+            console.warn('[RPG Tracker] Traditional encounter fallback failed:', fallbackError);
+            toast('error', `The encounter could not be prepared: ${fallbackError?.message || fallbackError}`);
+            return false;
+        }
     } finally {
         if (ui.abortController === controller) ui.abortController = null;
         setBusy(false);
         render();
     }
+}
+
+/**
+ * Deferred passive compile for boards that were built before the recipes were
+ * available (narrator background path and agent-authored enemies that arrive
+ * after the provisional board). Compiles the given context, copies the recipes
+ * onto the live board, and surfaces failures with the same named toast used by
+ * the click-to-retry flow.
+ * @param {object} context compile set (enemies may be agent-authored)
+ * @param {string} stateId
+ * @param {string} chatId
+ */
+function scheduleBackgroundPassiveCompile(context, stateId, chatId) {
+    setTimeout(() => {
+        if (getActiveChatId() !== chatId) return;
+        // A manual click-to-retry is already resolving this board's passives;
+        // do not race it with a second provider call.
+        if (ui.passiveController) return;
+        // Bound the background request so a hung provider cannot block the
+        // serial resolver; the failure must surface as a toast.
+        const passiveController = new AbortController();
+        const passiveTimeout = setTimeout(() => passiveController.abort(), 90000);
+        void resolvePendingPassives(context, getSettings(), {
+            signal: passiveController.signal,
+            mode: 'traditional',
+            chatId,
+        }).then(result => {
+            clearTimeout(passiveTimeout);
+            if (getActiveChatId() !== chatId) return;
+            const current = getState();
+            const boardLive = current && current.id === stateId && current.status === 'active';
+            if (Array.isArray(result.warnings) && result.warnings.length) {
+                const message = result.warnings.join(' ');
+                console.warn('[RPG Tracker] Deferred passive compilation warnings:', result.warnings);
+                if (boardLive) {
+                    addLog(current, 'passive', message);
+                    persist(current);
+                    render();
+                }
+                toast('warning', message);
+            }
+            if (!result.changed || !boardLive) return;
+            if (!applyPassiveRecipesToState(context, current)) return;
+            persist(current);
+            render();
+        }).catch(error => {
+            clearTimeout(passiveTimeout);
+            console.warn('[RPG Tracker] Deferred passive compilation failed:', error);
+            toast('error', `Passive compilation failed: ${error?.message || error}. Click a pending passive to retry.`);
+        });
+    }, 1000);
 }
 
 function finalizePrepared(provisional, next, settings, options, context, warnings = [], error = '') {
@@ -1077,8 +1172,11 @@ function finalizePrepared(provisional, next, settings, options, context, warning
     next.createdAt = provisional.createdAt;
     next.chatId = provisional.chatId;
     next.preparing = null;
-    const allWarnings = [...(provisional.preparing.warnings || []), ...(warnings || [])];
-    if (error) allWarnings.push(String(error));
+    const allWarnings = [
+        ...(Array.isArray(warnings) ? warnings : []),
+        ...(error ? [String(error)] : []),
+        ...(provisional.preparing.warnings || []),
+    ];
     const openingNeedsAgent = applyEncounterOptionsToState(next, settings, options);
     persist(next);
     ui.starting = false;
@@ -1184,7 +1282,6 @@ async function startEncounterFlow(options = {}) {
         warnings.push('Some abilities are still being classified; they remain safe utility abilities until the next encounter.');
     }
     const pendingPassivesBeforeBuild = hasPendingPassiveRecipes(context);
-    const backgroundPassiveCompile = options.fromNarrator === true && !deferArchitect && pendingPassivesBeforeBuild;
     if (!options.fromNarrator && pendingPassivesBeforeBuild) {
         setBusy(true, 'Compiling passive abilities…', true);
         render();
@@ -1204,6 +1301,7 @@ async function startEncounterFlow(options = {}) {
     } else if (options.fromNarrator && pendingPassivesBeforeBuild) {
         warnings.push('Passive abilities are still being compiled; they will activate after the narrator finishes.');
     }
+    let compileContext = context;
     if (needsAgent && !deferArchitect) {
         setBusy(true, 'The combat agent is designing the encounter…', true);
         render();
@@ -1215,8 +1313,43 @@ async function startEncounterFlow(options = {}) {
             render();
             return { ok: false, cancelled: true };
         }
-        if (generated.ok) agentEncounter = generated.encounter;
-        else if (generated.error) warnings.push(generated.error);
+        if (generated.ok) {
+            agentEncounter = generated.encounter;
+            // Architect-authored enemies replace the context roster in the
+            // builder, so their `passive: true` skills are invisible to the
+            // compile pass above. Merge them into the compile set and resolve
+            // before the board exists, so Round 1 never sees a pending recipe.
+            if (!options.fromNarrator && hasPendingAgentPassives(agentEncounter)) {
+                setBusy(true, 'Compiling passive abilities…', true);
+                render();
+                const compiled = await resolveAgentEncounterPassives(context, agentEncounter, settings, {
+                    signal: controller.signal,
+                    mode: 'traditional',
+                    source,
+                    chatId: context.chatId,
+                });
+                compileContext = compiled.context;
+                // Named passive failures must be the first warning shown, and
+                // a failure has to be visible before Round 1.
+                warnings.unshift(...compiled.warnings);
+                if (compiled.warnings.length) {
+                    const message = compiled.warnings.join(' ');
+                    console.warn('[RPG Tracker] Agent passive compilation warnings:', compiled.warnings);
+                    toast('warning', message);
+                }
+                if (controller.signal.aborted) {
+                    if (ui.abortController === controller) ui.abortController = null;
+                    ui.starting = false;
+                    setBusy(false);
+                    render();
+                    return { ok: false, cancelled: true };
+                }
+            } else {
+                compileContext = mergeAgentEncounterPassives(context, agentEncounter, { source });
+            }
+        } else if (generated.error) {
+            warnings.push(generated.error);
+        }
     }
     if (ui.abortController === controller) ui.abortController = null;
 
@@ -1229,8 +1362,11 @@ async function startEncounterFlow(options = {}) {
         return { ok: false, error: ui.view.error };
     }
 
+    const backgroundPassiveCompile = options.fromNarrator === true
+        && !deferArchitect
+        && hasPendingPassiveRecipes(compileContext);
     try {
-        const built = buildTraditionalEncounterFromContext(context, settings, {
+        const built = buildTraditionalEncounterFromContext(compileContext, settings, {
             agentEncounter,
             source,
             seed: Math.floor(Math.random() * 0x7fffffff),
@@ -1238,6 +1374,7 @@ async function startEncounterFlow(options = {}) {
         });
         warnings.push(...(built.warnings || []));
         const state = built.state;
+        applyPassiveRecipesToState(compileContext, state);
         if (options.title) state.title = String(options.title).slice(0, 140);
         if (options.location) state.location = String(options.location).slice(0, 200);
         if (options.description) state.description = String(options.description).slice(0, 4000);
@@ -1268,45 +1405,7 @@ async function startEncounterFlow(options = {}) {
         const openingNeedsAgent = applyEncounterOptionsToState(state, settings, options);
         persist(state);
         if (backgroundPassiveCompile) {
-            const stateId = state.id;
-            setTimeout(() => {
-                if (getActiveChatId() !== context.chatId) return;
-                // A manual click-to-retry is already resolving this board's
-                // passives; do not race it with a second provider call.
-                if (ui.passiveController) return;
-                // Bound the background request so a hung provider cannot block
-                // the serial resolver; the failure must surface as a toast.
-                const passiveController = new AbortController();
-                const passiveTimeout = setTimeout(() => passiveController.abort(), 90000);
-                void resolvePendingPassives(context, getSettings(), {
-                    signal: passiveController.signal,
-                    mode: 'traditional',
-                    chatId: context.chatId,
-                }).then(result => {
-                    clearTimeout(passiveTimeout);
-                    if (getActiveChatId() !== context.chatId) return;
-                    const current = getState();
-                    const boardLive = current && current.id === stateId && current.status === 'active';
-                    if (Array.isArray(result.warnings) && result.warnings.length) {
-                        const message = result.warnings.join(' ');
-                        console.warn('[RPG Tracker] Deferred passive compilation warnings:', result.warnings);
-                        if (boardLive) {
-                            addLog(current, 'passive', message);
-                            persist(current);
-                            render();
-                        }
-                        toast('warning', message);
-                    }
-                    if (!result.changed || !boardLive) return;
-                    if (!applyPassiveRecipesToState(context, current)) return;
-                    persist(current);
-                    render();
-                }).catch(error => {
-                    clearTimeout(passiveTimeout);
-                    console.warn('[RPG Tracker] Deferred passive compilation failed:', error);
-                    toast('error', `Passive compilation failed: ${error?.message || error}. Click a pending passive to retry.`);
-                });
-            }, 1000);
+            scheduleBackgroundPassiveCompile(compileContext, state.id, context.chatId);
         }
         ui.starting = false;
         setBusy(false);
