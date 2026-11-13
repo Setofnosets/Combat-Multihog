@@ -135,7 +135,7 @@
 - **Acceptance criteria:** narrator busy >90s still yields compiled passives (or a visible named error) on the finalized board — never a silent skip.
 - **Risk:** low
 - **Model / Effort:** implementer model #medium
-- **Commit:** `fix(passives): compile passives on the deferred-architect fallback path`
+- **Commit:** `fix(passives): compile passives on the deferred-architect fallback path` — done in 5e3fb2f
 
 ### 6. Tests
 - **Files:** new `tests/combat-passive-resolution.test.js`; extensions to `tests/combat-passives-and-status.test.js`, `tests/combat-variable-scaling.test.js`.
