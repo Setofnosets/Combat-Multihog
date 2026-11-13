@@ -220,13 +220,19 @@ function renderSelectedPanel(state, view) {
         <div class="rt-tc-skill-list">${unitPassives.map(skill => {
             const flavour = isPassiveFlavourOnly(skill);
             const pending = isPassiveRecipePending(skill);
-            const meta = pending
-                ? 'recipe pending'
-                : `${describePassiveTrigger(skill.trigger)}${flavour ? ' · flavour, no mechanical effect' : ''}`;
+            if (pending) {
+                const description = skill.description || skill.name;
+                return `
+            <button type="button" class="rt-tc-skill rt-tc-skill-passive is-pending" data-trad-action="resolve-passive" data-trad-unit-id="${escapeHtml(unit.id)}" data-trad-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(`${description} — click to compile this passive's recipe.`)}" ${state.status !== 'active' || view.busy ? 'disabled' : ''}>
+                <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
+                <span class="rt-tc-skill-meta">recipe pending · click to compile</span>
+                <span class="rt-tc-skill-uses">PASSIVE</span>
+            </button>`;
+            }
             return `
             <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(meta)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${describePassiveTrigger(skill.trigger)}${flavour ? ' · flavour, no mechanical effect' : ''}`)}</span>
                 <span class="rt-tc-skill-uses">PASSIVE</span>
             </div>`;
         }).join('')}</div>

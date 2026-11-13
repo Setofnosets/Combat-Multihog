@@ -286,4 +286,61 @@ describe('tactical combat markup', () => {
         expect(html).toContain('data-tc-select-unit="enemy-3"');
         expect(html).toContain('Goblin Archer');
     });
+
+    it('renders an unresolved passive as a click-to-compile button', () => {
+        const state = makeState();
+        getUnitById(state, 'pc-1').skills.push({
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: null,
+            effectTemplate: null,
+        });
+        const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1', mode: 'move' });
+        expect(html).toContain('data-tc-action="resolve-passive"');
+        expect(html).toContain('data-tc-unit-id="pc-1"');
+        expect(html).toContain('data-tc-skill-id="noble-bearing"');
+        expect(html).toContain('recipe pending · click to compile');
+    });
+
+    it('renders a resolved flavour passive without a retry button', () => {
+        const state = makeState();
+        getUnitById(state, 'pc-1').skills.push({
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: { event: 'battle-start' },
+            effectTemplate: [],
+            registryStatus: 'resolved',
+        });
+        const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1', mode: 'move' });
+        expect(html).not.toContain('data-tc-action="resolve-passive"');
+        expect(html).toContain('flavour, no mechanical effect');
+        expect(html).not.toContain('recipe pending');
+    });
+
+    it('disables the retry button while the board is busy', () => {
+        const state = makeState();
+        getUnitById(state, 'pc-1').skills.push({
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            effectTemplate: null,
+        });
+        const html = buildTacticalCombatMarkup(state, { selectedUnitId: 'pc-1', mode: 'move', busy: true });
+        expect(html).toContain('data-tc-action="resolve-passive"');
+        expect(html).toMatch(/data-tc-action="resolve-passive"[^>]*disabled/);
+    });
 });

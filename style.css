@@ -12025,6 +12025,21 @@ body.rt-tc-modal-open {
     background: rgba(255, 255, 255, 0.035);
 }
 
+.rt-tc-skill-passive.is-pending {
+    cursor: pointer;
+    border-color: var(--tc-accent);
+    opacity: 1;
+}
+
+.rt-tc-skill-passive.is-pending .rt-tc-skill-meta {
+    color: var(--tc-accent);
+}
+
+.rt-tc-skill-passive.is-pending:hover {
+    border-color: var(--tc-accent);
+    background: rgba(240, 179, 90, 0.13);
+}
+
 .rt-tc-skill.is-selected {
     border-color: var(--tc-accent);
     background: rgba(240, 179, 90, 0.13);

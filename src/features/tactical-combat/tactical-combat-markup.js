@@ -306,14 +306,20 @@ function renderUnitCard(state, view) {
         <div class="rt-tc-skill-list">${passives.map(skill => {
             const flavour = isPassiveFlavourOnly(skill);
             const pending = isPassiveRecipePending(skill);
+            if (pending) {
+                const description = skill.description || skill.name;
+                return `
+            <button type="button" class="rt-tc-skill rt-tc-skill-passive is-pending" data-tc-action="resolve-passive" data-tc-unit-id="${escapeHtml(unit.id)}" data-tc-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(`${description} — click to compile this passive's recipe.`)}" ${state.status !== 'active' || view.busy ? 'disabled' : ''}>
+                <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
+                <span class="rt-tc-skill-meta">recipe pending · click to compile</span>
+                <span class="rt-tc-skill-uses">PASSIVE</span>
+            </button>`;
+            }
             const trigger = describePassiveTrigger(skill.trigger);
-            const meta = pending
-                ? 'recipe pending'
-                : `${trigger}${flavour ? ' · flavour, no mechanical effect' : ''}`;
             return `
             <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(meta)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${trigger}${flavour ? ' · flavour, no mechanical effect' : ''}`)}</span>
                 <span class="rt-tc-skill-uses">PASSIVE</span>
             </div>`;
         }).join('')}</div>

@@ -46,6 +46,7 @@ import {
     generateEncounterWithAgent,
     hasPendingPassiveRecipes,
     hasPendingSkillIntents,
+    resolvePassiveSkillWithAgent,
     resolvePendingPassives,
     resolvePendingSkillIntents,
     resolveSpecialSource,
@@ -92,6 +93,7 @@ const ui = {
         dismissResult: false,
     },
     abortController: null,
+    passiveController: null,
     starting: false,
     centerNextRender: false,
     agentRunToken: 0,
@@ -991,6 +993,75 @@ function handleSelectSkill(skillId) {
     ui.view.selectedItemId = '';
     ui.view.mode = 'skill';
     render();
+}
+
+async function handleResolvePassive(element) {
+    const unitId = element?.dataset?.tcUnitId || '';
+    const skillId = element?.dataset?.tcSkillId || '';
+    const state = getState();
+    if (!state || state.status !== 'active' || !unitId || !skillId) return;
+    if (!state.chatId || state.chatId !== getActiveChatId()) {
+        toast('warning', 'That encounter belongs to a different chat.');
+        return;
+    }
+    if (ui.view.busy || ui.starting) return;
+    if (narratorPipelineBusy()) {
+        toast('info', 'Wait for the narrator to finish before compiling a passive.');
+        return;
+    }
+    const unit = state.units.find(candidate => candidate.id === unitId);
+    const skill = (unit?.skills || []).find(candidate => candidate.id === skillId);
+    if (!unit || !skill) return;
+    const controller = new AbortController();
+    ui.passiveController?.abort?.();
+    ui.passiveController = controller;
+    setBusy(true, 'Compiling passive ability…', true);
+    render();
+    try {
+        const result = await resolvePassiveSkillWithAgent(state, unitId, skillId, getSettings(), {
+            signal: controller.signal,
+            mode: 'tactical',
+            chatId: state.chatId,
+        });
+        if (controller.signal.aborted || getActiveChatId() !== state.chatId) return;
+        const current = getState();
+        if (!current || current.id !== state.id) return;
+        if (!result.ok) {
+            const message = `${skill.name} could not be compiled: ${result.error || 'unknown error'}`;
+            console.warn('[RPG Tracker] Passive re-resolution failed:', message);
+            addLog(current, 'passive', message, unit.id);
+            persist(current);
+            render();
+            toast('error', message);
+            return;
+        }
+        if (!result.changed) return;
+        // The board may have been reloaded while the resolver was running. Copy
+        // the recipe onto the live object instead of relying on the stale copy.
+        const liveSkill = (current.units.find(candidate => candidate.id === unitId)?.skills || [])
+            .find(candidate => candidate.id === skillId);
+        if (liveSkill && liveSkill !== skill) {
+            liveSkill.trigger = skill.trigger;
+            liveSkill.effectTemplate = skill.effectTemplate;
+            liveSkill.registryId = skill.registryId;
+            liveSkill.registryStatus = 'resolved';
+        }
+        persist(current);
+        render();
+        toast('success', result.flavour
+            ? `${skill.name} is a flavour passive with no mechanical effect.`
+            : `${skill.name} passive recipe compiled.`);
+    } catch (error) {
+        console.warn('[RPG Tracker] Passive re-resolution crashed:', error);
+        toast('error', `Passive compilation failed: ${error?.message || error}`);
+    } finally {
+        if (ui.passiveController === controller) {
+            ui.passiveController = null;
+            // Only clear the busy flag if another flow has not taken it over.
+            if (ui.view.busyLabel === 'Compiling passive ability…') setBusy(false);
+            render();
+        }
+    }
 }
 
 function handleSelectItem(itemId) {
@@ -1941,18 +2012,41 @@ async function startEncounterFlow(options = {}) {
             const stateId = state.id;
             setTimeout(() => {
                 if (getActiveChatId() !== context.chatId) return;
+                // A manual click-to-retry is already resolving this board's
+                // passives; do not race it with a second provider call.
+                if (ui.passiveController) return;
+                // A hung provider request must not block the serial resolver
+                // forever; abort after 90s so the failure is visible instead of
+                // silently leaving the passive pending.
+                const passiveController = new AbortController();
+                const passiveTimeout = setTimeout(() => passiveController.abort(), 90000);
                 void resolvePendingPassives(context, getSettings(), {
+                    signal: passiveController.signal,
                     mode: 'tactical',
                     chatId: context.chatId,
                 }).then(result => {
-                    if (!result.changed || getActiveChatId() !== context.chatId) return;
+                    clearTimeout(passiveTimeout);
+                    if (getActiveChatId() !== context.chatId) return;
                     const current = getState();
-                    if (!current || current.id !== stateId || current.status !== 'active') return;
+                    const boardLive = current && current.id === stateId && current.status === 'active';
+                    if (Array.isArray(result.warnings) && result.warnings.length) {
+                        const message = result.warnings.join(' ');
+                        console.warn('[RPG Tracker] Deferred passive compilation warnings:', result.warnings);
+                        if (boardLive) {
+                            addLog(current, 'passive', message);
+                            persist(current);
+                            render();
+                        }
+                        toast('warning', message);
+                    }
+                    if (!result.changed || !boardLive) return;
                     if (!applyPassiveRecipesToState(context, current)) return;
                     persist(current);
                     render();
                 }).catch(error => {
+                    clearTimeout(passiveTimeout);
                     console.warn('[RPG Tracker] Deferred passive compilation failed:', error);
+                    toast('error', `Passive compilation failed: ${error?.message || error}. Click a pending passive to retry.`);
                 });
             }, 1000);
         }
@@ -2064,6 +2158,9 @@ function handleOverlayAction(action, element) {
             break;
         case 'select-item':
             handleSelectItem(element?.dataset?.tcItemId || '');
+            break;
+        case 'resolve-passive':
+            void handleResolvePassive(element);
             break;
         case 'continue-narration': {
             const current = getState();

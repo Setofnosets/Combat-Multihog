@@ -1803,6 +1803,72 @@ export function applyPassiveRecipesToState(context, state) {
 }
 
 /**
+ * Compile one pending passive on a running board (click-to-retry). Applies and
+ * persists the recipe immediately; it does not touch any other skill. Callers
+ * own the guards (active state, matching chat, not busy, narrator idle).
+ * @param {object} state
+ * @param {string} unitId
+ * @param {string} skillId
+ * @param {Record<string, any>} settings
+ * @param {{ signal?: AbortSignal, mode?: 'tactical'|'traditional', chatId?: string }} [options]
+ * @returns {Promise<{ ok: boolean, changed?: boolean, alreadyResolved?: boolean, flavour?: boolean, trigger?: object, effects?: object[], error?: string }>}
+ */
+export async function resolvePassiveSkillWithAgent(state, unitId, skillId, settings, options = {}) {
+    const unit = (Array.isArray(state?.units) ? state.units : []).find(candidate => candidate.id === unitId);
+    const skill = (unit?.skills || []).find(candidate => candidate.id === skillId);
+    if (!unit || !skill) return { ok: false, error: 'That passive is no longer on the board.' };
+    if (skill.passive !== true) return { ok: false, error: 'Only passive abilities can be re-resolved.' };
+    if (isPassiveRecipeResolved(skill)) return { ok: true, alreadyResolved: true, changed: false };
+    const chatId = options.chatId || getActiveChatId();
+    try {
+        const existingEntry = findSkillRegistryEntry(settings, skill.name, { ownerName: unit.name });
+        const entry = existingEntry || {
+            name: skill.name,
+            type: 'ability',
+            brief: skill.description || '',
+            owners: [{ type: unit.side === 'enemy' ? 'enemy' : 'character', name: unit.name }],
+            mechanics: {
+                kind: skill.kind,
+                resource: skill.resource,
+                range: skill.range,
+                damage: skill.damage,
+                heal: skill.heal,
+                target: skill.target,
+            },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
+            signal: options.signal,
+            mode: options.mode,
+            casterId: unit.id || '',
+            casterName: unit.name || '',
+        });
+        if (!compiled.ok) return { ok: false, error: compiled.error || 'The passive resolver failed.' };
+        const remembered = rememberPassiveResolution(settings, entry, compiled.trigger, compiled.effects);
+        const stored = remembered.effects;
+        const effects = Array.isArray(stored) && stored.length ? stored : compiled.effects;
+        skill.trigger = normalizePassiveTrigger(remembered.entry?.mechanics?.trigger || compiled.trigger);
+        skill.effectTemplate = Array.isArray(effects) ? effects : [];
+        skill.registryId = remembered.entry?.id || skill.registryId || '';
+        skill.registryStatus = 'resolved';
+        markSkillRegistryDirty(chatId);
+        try {
+            persistSkillRegistry(settings, chatId, { force: false });
+        } catch (error) {
+            if (settings?.debugMode) console.warn('[RPG Tracker] Passive recipe persistence failed:', error);
+        }
+        return {
+            ok: true,
+            changed: true,
+            flavour: !skill.effectTemplate.length,
+            trigger: skill.trigger,
+            effects: skill.effectTemplate,
+        };
+    } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+    }
+}
+
+/**
  * Resolve one special ability/item into engine primitives. Called only when a
  * `kind: 'special'` skill or item is actually used, so ordinary combat spends
  * no extra tokens.

@@ -2,7 +2,7 @@
 
 ## Meta
 - Slug: fix-tactical-passive-stuck-pending
-- Status: in progress (Step 2 of 6 done)
+- Status: in progress (Step 3 of 6 done)
 - Date: 2026-11-12
 
 ## Summary
@@ -92,6 +92,7 @@
 - **Commit:** `fix(passives): align resolver payload event list with prompt + engine vocabulary` — done in 9a85664
 
 ### 3. Click-to-resolve retry affordance (B; user-approved UX)
+- **Status:** [x] done
 - **Files:** `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`, `src/features/tactical-combat/tactical-combat-markup.js`, `src/features/traditional-combat/traditional-combat-markup.js`, `style.css`, `src/features/tactical-combat/tactical-combat-agent.js` (helper export if needed).
 - **Depends on:** Step 1 (status semantics)
 - **Parallelizable:** no (consumes Step 1 predicates)

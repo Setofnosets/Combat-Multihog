@@ -14,7 +14,7 @@ import {
     rememberSpecialResolution,
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
-import { resolvePassiveRecipeWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { resolvePassiveRecipeWithAgent, resolvePassiveSkillWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
 import { isPassiveRecipePending, PASSIVE_ACTION_LIST, PASSIVE_ATTACK_LIST, PASSIVE_EVENTS, PASSIVE_EVENT_LIST, PASSIVE_LIMIT_LIST } from '../src/features/tactical-combat/tactical-combat-passives.js';
 import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
@@ -183,6 +183,65 @@ describe('passive compiler', () => {
         expect(payload.rules.supportedAttackFilters).toEqual(PASSIVE_ATTACK_LIST);
         expect(payload.rules.supportedActionFilters).toEqual(PASSIVE_ACTION_LIST);
         expect(payload.rules.supportedLimits).toEqual(PASSIVE_LIMIT_LIST);
+    });
+
+    it('re-resolves a single pending passive on a running board (retry helper)', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'attacked' },
+            effects: [{ type: 'damage', target: '$target', amount: '1d4', resource: 'hp' }],
+        }));
+        const settings = makeSettings();
+        const state = makeState();
+        state.units[0].skills = [{
+            id: 'thorn-mail',
+            name: 'Thorn Mail',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: null,
+            effectTemplate: null,
+        }];
+        const result = await resolvePassiveSkillWithAgent(state, 'pc-1', 'thorn-mail', settings, { mode: 'tactical' });
+        expect(result.ok).toBe(true);
+        expect(result.changed).toBe(true);
+        expect(result.flavour).toBe(false);
+        const skill = state.units[0].skills[0];
+        expect(skill.registryStatus).toBe('resolved');
+        expect(skill.trigger).toMatchObject({ event: 'attacked' });
+        expect(skill.effectTemplate[0]).toMatchObject({ type: 'damage', target: '$target' });
+    });
+
+    it('retry helper is a no-op for an already resolved passive', async () => {
+        sendStateRequest.mockReset();
+        const settings = makeSettings();
+        const state = makeState();
+        state.units[0].skills = [{
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: { event: 'battle-start' },
+            effectTemplate: [],
+            registryStatus: 'resolved',
+        }];
+        const result = await resolvePassiveSkillWithAgent(state, 'pc-1', 'noble-bearing', settings, { mode: 'tactical' });
+        expect(result).toMatchObject({ ok: true, alreadyResolved: true, changed: false });
+        expect(sendStateRequest).not.toHaveBeenCalled();
+    });
+
+    it('retry helper rejects unknown units or skills', async () => {
+        sendStateRequest.mockReset();
+        const settings = makeSettings();
+        const state = makeState();
+        await expect(resolvePassiveSkillWithAgent(state, 'nope', 'nope', settings)).resolves.toMatchObject({ ok: false });
+        await expect(resolvePassiveSkillWithAgent(state, 'pc-1', 'nope', settings)).resolves.toMatchObject({ ok: false });
+        expect(sendStateRequest).not.toHaveBeenCalled();
     });
 });
 
