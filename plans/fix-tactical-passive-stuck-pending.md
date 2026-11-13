@@ -2,7 +2,7 @@
 
 ## Meta
 - Slug: fix-tactical-passive-stuck-pending
-- Status: in progress (Step 5 of 6 done)
+- Status: complete
 - Date: 2026-11-12
 
 ## Summary
@@ -138,6 +138,7 @@
 - **Commit:** `fix(passives): compile passives on the deferred-architect fallback path` — done in 5e3fb2f
 
 ### 6. Tests
+- **Status:** [x] done
 - **Files:** new `tests/combat-passive-resolution.test.js`; extensions to `tests/combat-passives-and-status.test.js`, `tests/combat-variable-scaling.test.js`.
 - **Depends on:** Steps 1, 2 (minimum for resolver tests); Steps 4-5 for their suites
 - **Parallelizable:** yes (per suite)

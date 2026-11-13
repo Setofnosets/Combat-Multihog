@@ -73,6 +73,8 @@ describe('traditional combat markup', () => {
         expect(html).toContain('data-trad-action="resolve-passive"');
         expect(html).toContain(`data-trad-unit-id="${state.units[0].id}"`);
         expect(html).toContain('data-trad-skill-id="noble-bearing"');
+        const busyHtml = buildTraditionalCombatMarkup(state, { selectedUnitId: state.units[0].id, mode: 'attack', busy: true });
+        expect(busyHtml).toMatch(/data-trad-action="resolve-passive"[^>]*disabled/);
     });
 
     it('shows a resolved flavour passive as inactive, not pending', () => {

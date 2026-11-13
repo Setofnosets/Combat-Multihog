@@ -1870,6 +1870,7 @@ export async function resolvePassiveSkillWithAgent(state, unitId, skillId, setti
     const unit = (Array.isArray(state?.units) ? state.units : []).find(candidate => candidate.id === unitId);
     const skill = (unit?.skills || []).find(candidate => candidate.id === skillId);
     if (!unit || !skill) return { ok: false, error: 'That passive is no longer on the board.' };
+    if (state?.status && state.status !== 'active') return { ok: false, error: 'That encounter is no longer active.' };
     if (skill.passive !== true) return { ok: false, error: 'Only passive abilities can be re-resolved.' };
     if (isPassiveRecipeResolved(skill)) return { ok: true, alreadyResolved: true, changed: false };
     const chatId = options.chatId || getActiveChatId();
