@@ -2,7 +2,7 @@
 
 ## Meta
 - Slug: fix-tactical-passive-stuck-pending
-- Status: draft
+- Status: in progress (Step 2 of 6 done)
 - Date: 2026-11-12
 
 ## Summary
@@ -89,7 +89,7 @@
 - **Acceptance criteria:** payload and prompt enumerate identical events; no behaviour change for existing recipes.
 - **Risk:** low
 - **Model / Effort:** implementer model #low
-- **Commit:** `fix(passives): align resolver payload event list with prompt + engine vocabulary`
+- **Commit:** `fix(passives): align resolver payload event list with prompt + engine vocabulary` — done in 9a85664
 
 ### 3. Click-to-resolve retry affordance (B; user-approved UX)
 - **Files:** `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/traditional-combat/traditional-combat-ui.js`, `src/features/tactical-combat/tactical-combat-markup.js`, `src/features/traditional-combat/traditional-combat-markup.js`, `style.css`, `src/features/tactical-combat/tactical-combat-agent.js` (helper export if needed).
