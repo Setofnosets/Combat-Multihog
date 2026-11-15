@@ -8,7 +8,7 @@
 
 import { describeCombatCondition, normalizeCombatCondition } from './tactical-combat-variables.js';
 
-const PASSIVE_EVENTS = new Set([
+const PASSIVE_EVENT_LIST = Object.freeze([
     'hit',
     'attacked',
     'round-start',
@@ -19,9 +19,13 @@ const PASSIVE_EVENTS = new Set([
     'kill',
     'willpower-break',
 ]);
+const PASSIVE_EVENTS = new Set(PASSIVE_EVENT_LIST);
 const PASSIVE_ATTACKS = new Set(['melee', 'ranged', 'any']);
 const PASSIVE_ACTIONS = new Set(['basic', 'skill', 'any']);
 const PASSIVE_LIMITS = new Set(['per-hit', 'per-turn', 'per-round', 'per-encounter']);
+const PASSIVE_ATTACK_LIST = Object.freeze(['melee', 'ranged', 'any']);
+const PASSIVE_ACTION_LIST = Object.freeze(['basic', 'skill', 'any']);
+const PASSIVE_LIMIT_LIST = Object.freeze(['per-hit', 'per-turn', 'per-round', 'per-encounter']);
 
 function clampInt(value, min, max, fallback) {
     const n = Math.round(Number(value));
@@ -66,7 +70,7 @@ export function normalizePassiveTrigger(raw) {
 
 /**
  * @param {object|null|undefined} skill
- * @param {'hit'|'attacked'|'round-start'|'kill'} event
+ * @param {string} event one of PASSIVE_EVENT_LIST
  * @param {{attackType?:string, actionType?:string}} [context]
  * @returns {boolean}
  */
@@ -108,6 +112,40 @@ export function builtinPassiveRecipe(name) {
     const recipe = BUILTIN_PASSIVE_RECIPES[key];
     if (!recipe) return null;
     return JSON.parse(JSON.stringify(recipe));
+}
+
+/**
+ * A passive is resolved once a compiled recipe exists, even when that recipe is
+ * a deliberate no-op (a purely narrative "flavour" passive). Boards saved
+ * before `registryStatus` existed still count as resolved when they carry an
+ * effect template, so legacy encounters never regress to "pending".
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveRecipeResolved(skill) {
+    if (!skill || skill.passive !== true) return false;
+    if (String(skill.registryStatus || '') === 'resolved') return true;
+    return Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+}
+
+/**
+ * A resolved passive with no mechanics: the model returned `effects: []` or the
+ * registry stored a no-op recipe. It must never be re-compiled or retried.
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveFlavourOnly(skill) {
+    if (!isPassiveRecipeResolved(skill)) return false;
+    return !(Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0);
+}
+
+/**
+ * True when a passive still needs (or failed) recipe compilation.
+ * @param {object|null|undefined} skill
+ * @returns {boolean}
+ */
+export function isPassiveRecipePending(skill) {
+    return skill?.passive === true && !isPassiveRecipeResolved(skill);
 }
 
 export function passiveMatchesEvent(skill, event, context = {}) {
@@ -159,4 +197,4 @@ export function describePassiveTrigger(raw) {
     return text;
 }
 
-export { PASSIVE_EVENTS, PASSIVE_ATTACKS, PASSIVE_ACTIONS, PASSIVE_LIMITS };
+export { PASSIVE_EVENTS, PASSIVE_ATTACKS, PASSIVE_ACTIONS, PASSIVE_LIMITS, PASSIVE_EVENT_LIST, PASSIVE_ATTACK_LIST, PASSIVE_ACTION_LIST, PASSIVE_LIMIT_LIST };

@@ -56,4 +56,43 @@ describe('traditional combat markup', () => {
         expect(html).toContain('Encounter complete');
         expect(html).toContain('Return to narration');
     });
+
+    it('offers a click-to-compile retry for pending passives', () => {
+        const state = makeState();
+        state.units[0].skills.push({
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            effectTemplate: null,
+        });
+        const html = buildTraditionalCombatMarkup(state, { selectedUnitId: state.units[0].id, mode: 'attack' });
+        expect(html).toContain('data-trad-action="resolve-passive"');
+        expect(html).toContain(`data-trad-unit-id="${state.units[0].id}"`);
+        expect(html).toContain('data-trad-skill-id="noble-bearing"');
+        const busyHtml = buildTraditionalCombatMarkup(state, { selectedUnitId: state.units[0].id, mode: 'attack', busy: true });
+        expect(busyHtml).toMatch(/data-trad-action="resolve-passive"[^>]*disabled/);
+    });
+
+    it('shows a resolved flavour passive as inactive, not pending', () => {
+        const state = makeState();
+        state.units[0].skills.push({
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: { event: 'battle-start' },
+            effectTemplate: [],
+            registryStatus: 'resolved',
+        });
+        const html = buildTraditionalCombatMarkup(state, { selectedUnitId: state.units[0].id, mode: 'attack' });
+        expect(html).not.toContain('data-trad-action="resolve-passive"');
+        expect(html).toContain('flavour, no mechanical effect');
+    });
 });

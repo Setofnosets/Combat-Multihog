@@ -14,8 +14,13 @@ import {
     rememberSpecialResolution,
     upsertSkillRegistryEntry,
 } from '../src/features/skill-registry/skill-registry.js';
-import { resolvePassiveRecipeWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
-import { collectEncounterContext } from '../src/features/tactical-combat/tactical-combat-context.js';
+import { resolveAgentEncounterPassives, resolvePassiveRecipeWithAgent, resolvePassiveSkillWithAgent, resolveSpecialSource, normalizeEncounterPayload, runAgentTurn } from '../src/features/tactical-combat/tactical-combat-agent.js';
+import { isPassiveRecipePending, PASSIVE_ACTION_LIST, PASSIVE_ATTACK_LIST, PASSIVE_EVENTS, PASSIVE_EVENT_LIST, PASSIVE_LIMIT_LIST } from '../src/features/tactical-combat/tactical-combat-passives.js';
+import {
+    buildEncounterFromContext,
+    collectEncounterContext,
+    mergeAgentEncounterPassives,
+} from '../src/features/tactical-combat/tactical-combat-context.js';
 import {
     createEncounterState,
     getUnitById,
@@ -82,6 +87,248 @@ describe('passive compiler', () => {
         expect(remembered.entry.mechanics.trigger).toMatchObject({ event: 'hit', attack: 'melee' });
         expect(remembered.entry.mechanics.effectTemplate[0].type).toBe('drain');
         expect(findSkillRegistryEntry(settings, 'Blood Bank').status).toBe('resolved');
+    });
+
+    it('accepts an empty effect list as a resolved flavour passive (no recompile)', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'battle-start', limit: 'per-encounter' },
+            effects: [],
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Noble Bearing',
+            type: 'ability',
+            brief: 'Passive: the character carries themselves with quiet authority.',
+            owners: [{ type: 'character', name: 'Aria' }],
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, { mode: 'tactical' });
+        expect(compiled.ok).toBe(true);
+        expect(compiled.effects).toEqual([]);
+        expect(compiled.trigger).toMatchObject({ event: 'battle-start' });
+
+        const remembered = rememberPassiveResolution(settings, entry, compiled.trigger, compiled.effects);
+        expect(remembered.entry.status).toBe('resolved');
+        expect(remembered.entry.mechanics.effectTemplate).toEqual([]);
+        expect(isPassiveRecipePending({
+            passive: true,
+            registryStatus: 'resolved',
+            effectTemplate: [],
+        })).toBe(false);
+    });
+
+    it('rejects a response without an effects array instead of persisting a false no-op', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'hit', attack: 'melee' },
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Unclear Passive',
+            type: 'ability',
+            brief: 'Passive: something happens, somehow.',
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, { mode: 'tactical' });
+        expect(compiled.ok).toBe(false);
+    });
+
+    it('remaps targetId-only effects to role selectors instead of dropping them', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'round-start' },
+            effects: [
+                { type: 'status', targetId: 'aria-1', label: 'Shielded', rounds: 1, acBonus: 1 },
+                { type: 'damage', targetId: 'goblin-1', amount: '1d4', resource: 'hp' },
+            ],
+        }));
+        const settings = makeSettings();
+        const entry = {
+            name: 'Warded Stance',
+            type: 'ability',
+            brief: 'Passive: shields the owner and pricks an attacker each round.',
+            owners: [{ type: 'character', name: 'Aria' }],
+            mechanics: { kind: 'special', passive: true },
+        };
+        const compiled = await resolvePassiveRecipeWithAgent(entry, settings, {
+            mode: 'tactical',
+            casterId: 'aria-1',
+            casterName: 'Aria',
+        });
+        expect(compiled.ok).toBe(true);
+        expect(compiled.effects).toHaveLength(2);
+        expect(compiled.effects[0]).toMatchObject({ type: 'status', target: '$caster', label: 'Shielded' });
+        expect(compiled.effects[0].targetId).toBeUndefined();
+        expect(compiled.effects[1]).toMatchObject({ type: 'damage', target: '$target' });
+    });
+
+    it('advertises exactly the events the prompt documents and the engine implements', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({ trigger: { event: 'hit' }, effects: [] }));
+        const settings = makeSettings();
+        await resolvePassiveRecipeWithAgent({
+            name: 'Event Vocabulary Probe',
+            type: 'ability',
+            brief: 'Passive: probe.',
+            mechanics: { kind: 'special', passive: true },
+        }, settings, { mode: 'tactical' });
+        const userPrompt = sendStateRequest.mock.calls[0][2];
+        const systemPrompt = sendStateRequest.mock.calls[0][1];
+        const payloadMatch = userPrompt.match(/```json\n([\s\S]*?)\n```/);
+        expect(payloadMatch).toBeTruthy();
+        const payload = JSON.parse(payloadMatch[1]);
+        expect(payload.rules.supportedEvents).toEqual(PASSIVE_EVENT_LIST);
+        expect([...PASSIVE_EVENT_LIST].sort()).toEqual([...PASSIVE_EVENTS].sort());
+        for (const event of PASSIVE_EVENT_LIST) {
+            expect(userPrompt).toContain(`"${event}"`);
+            expect(systemPrompt).toContain(`"${event}"`);
+        }
+        expect(payload.rules.supportedAttackFilters).toEqual(PASSIVE_ATTACK_LIST);
+        expect(payload.rules.supportedActionFilters).toEqual(PASSIVE_ACTION_LIST);
+        expect(payload.rules.supportedLimits).toEqual(PASSIVE_LIMIT_LIST);
+    });
+
+    it('re-resolves a single pending passive on a running board (retry helper)', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'attacked' },
+            effects: [{ type: 'damage', target: '$target', amount: '1d4', resource: 'hp' }],
+        }));
+        const settings = makeSettings();
+        const state = makeState();
+        state.units[0].skills = [{
+            id: 'thorn-mail',
+            name: 'Thorn Mail',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: null,
+            effectTemplate: null,
+        }];
+        const result = await resolvePassiveSkillWithAgent(state, 'pc-1', 'thorn-mail', settings, { mode: 'tactical' });
+        expect(result.ok).toBe(true);
+        expect(result.changed).toBe(true);
+        expect(result.flavour).toBe(false);
+        const skill = state.units[0].skills[0];
+        expect(skill.registryStatus).toBe('resolved');
+        expect(skill.trigger).toMatchObject({ event: 'attacked' });
+        expect(skill.effectTemplate[0]).toMatchObject({ type: 'damage', target: '$target' });
+    });
+
+    it('retry helper is a no-op for an already resolved passive', async () => {
+        sendStateRequest.mockReset();
+        const settings = makeSettings();
+        const state = makeState();
+        state.units[0].skills = [{
+            id: 'noble-bearing',
+            name: 'Noble Bearing',
+            kind: 'special',
+            passive: true,
+            unlimited: true,
+            maxUses: 0,
+            uses: 0,
+            trigger: { event: 'battle-start' },
+            effectTemplate: [],
+            registryStatus: 'resolved',
+        }];
+        const result = await resolvePassiveSkillWithAgent(state, 'pc-1', 'noble-bearing', settings, { mode: 'tactical' });
+        expect(result).toMatchObject({ ok: true, alreadyResolved: true, changed: false });
+        expect(sendStateRequest).not.toHaveBeenCalled();
+    });
+
+    it('retry helper rejects unknown units or skills', async () => {
+        sendStateRequest.mockReset();
+        const settings = makeSettings();
+        const state = makeState();
+        await expect(resolvePassiveSkillWithAgent(state, 'nope', 'nope', settings)).resolves.toMatchObject({ ok: false });
+        await expect(resolvePassiveSkillWithAgent(state, 'pc-1', 'nope', settings)).resolves.toMatchObject({ ok: false });
+        expect(sendStateRequest).not.toHaveBeenCalled();
+    });
+
+    it('compiles an architect-authored enemy passive before the board is built', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockResolvedValue(JSON.stringify({
+            trigger: { event: 'round-start' },
+            effects: [{ type: 'heal', target: '$caster', amount: '1d4', resource: 'hp' }],
+        }));
+        const settings = makeSettings();
+        const normalized = normalizeEncounterPayload({
+            title: 'Rooftop Ambush',
+            enemies: [{
+                name: 'Goblin Archer',
+                maxHp: 12,
+                ac: 12,
+                attackBonus: 3,
+                damage: '1d6',
+                skills: [{ name: 'Steady Aim', passive: true, description: 'Passive: steadies the shot each round.' }],
+            }],
+        }, { skillRegistry: settings.skillRegistry });
+        expect(normalized.ok).toBe(true);
+        const agentEncounter = normalized.encounter;
+        const context = {
+            chatId: 'vitest-chat',
+            playerUnits: [{ id: 'pc-1', name: 'Aria', side: 'player', maxHp: 20, hp: 20, ac: 12, attackBonus: 3, damage: '1d6', skills: [] }],
+            allies: [],
+            enemies: [],
+            existingCombat: false,
+            movement: 6,
+            willpowerMaxPercent: 30,
+            theme: 'plain',
+        };
+        const compileSet = mergeAgentEncounterPassives(context, agentEncounter, { source: 'agent' });
+        expect(compileSet).not.toBe(context);
+        const compiled = await resolveAgentEncounterPassives(context, agentEncounter, settings, {
+            mode: 'tactical',
+            source: 'agent',
+            chatId: 'vitest-chat',
+        });
+        expect(compiled.warnings).toEqual([]);
+        expect(compiled.pending).toBe(false);
+        expect(compiled.changed).toBe(1);
+        expect(sendStateRequest).toHaveBeenCalledTimes(1);
+        const built = buildEncounterFromContext(compiled.context, settings, {
+            agentEncounter,
+            source: 'agent',
+            seed: 12,
+        });
+        expect(built.state.round).toBe(1);
+        const enemy = built.state.units.find(unit => unit.name === 'Goblin Archer');
+        const passive = enemy.skills.find(skill => skill.name === 'Steady Aim');
+        expect(passive).toMatchObject({ passive: true, registryStatus: 'resolved' });
+        expect(passive.trigger).toMatchObject({ event: 'round-start' });
+        expect(passive.effectTemplate[0]).toMatchObject({ type: 'heal', target: '$caster' });
+    });
+
+    it('reports pending agent passives when the resolver fails', async () => {
+        sendStateRequest.mockReset();
+        sendStateRequest.mockRejectedValue(new Error('offline'));
+        const settings = makeSettings();
+        const agentEncounter = {
+            enemies: [{
+                name: 'Goblin Archer',
+                side: 'enemy',
+                skills: [{ name: 'Steady Aim', passive: true, description: 'Passive: steady.' }],
+            }],
+        };
+        const context = {
+            chatId: 'vitest-chat',
+            playerUnits: [],
+            allies: [],
+            enemies: [],
+            existingCombat: false,
+        };
+        const compiled = await resolveAgentEncounterPassives(context, agentEncounter, settings, {
+            mode: 'tactical',
+            source: 'agent',
+            chatId: 'vitest-chat',
+        });
+        expect(compiled.pending).toBe(true);
+        expect(compiled.warnings).toHaveLength(1);
+        expect(compiled.warnings[0]).toContain('Steady Aim');
+        expect(compiled.warnings[0]).toContain('could not be compiled');
     });
 });
 

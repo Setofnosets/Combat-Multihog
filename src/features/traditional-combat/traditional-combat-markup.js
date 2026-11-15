@@ -9,7 +9,7 @@
 import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
 import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
-import { describePassiveTrigger } from '../tactical-combat/tactical-combat-passives.js';
+import { describePassiveTrigger, isPassiveFlavourOnly, isPassiveRecipePending } from '../tactical-combat/tactical-combat-passives.js';
 import { formatStatusCondition } from '../tactical-combat/tactical-combat-status.js';
 
 function pct(value, max) {
@@ -218,11 +218,21 @@ function renderSelectedPanel(state, view) {
     const passives = unitPassives.length ? `<div class="rt-tc-subpane">
         <div class="rt-tc-subtitle">Passives</div>
         <div class="rt-tc-skill-list">${unitPassives.map(skill => {
-            const resolved = Array.isArray(skill.effectTemplate) && skill.effectTemplate.length > 0;
+            const flavour = isPassiveFlavourOnly(skill);
+            const pending = isPassiveRecipePending(skill);
+            if (pending) {
+                const description = skill.description || skill.name;
+                return `
+            <button type="button" class="rt-tc-skill rt-tc-skill-passive is-pending" data-trad-action="resolve-passive" data-trad-unit-id="${escapeHtml(unit.id)}" data-trad-skill-id="${escapeHtml(skill.id)}" title="${escapeHtml(`${description} — click to compile this passive's recipe.`)}" ${state.status !== 'active' || view.busy ? 'disabled' : ''}>
+                <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
+                <span class="rt-tc-skill-meta">recipe pending · click to compile</span>
+                <span class="rt-tc-skill-uses">PASSIVE</span>
+            </button>`;
+            }
             return `
             <div class="rt-tc-skill rt-tc-skill-passive" title="${escapeHtml(skill.description || skill.name)}">
                 <span class="rt-tc-skill-name">${escapeHtml(skill.name)}</span>
-                <span class="rt-tc-skill-meta">${escapeHtml(`${describePassiveTrigger(skill.trigger)}${resolved ? '' : ' · recipe pending'}`)}</span>
+                <span class="rt-tc-skill-meta">${escapeHtml(`${describePassiveTrigger(skill.trigger)}${flavour ? ' · flavour, no mechanical effect' : ''}`)}</span>
                 <span class="rt-tc-skill-uses">PASSIVE</span>
             </div>`;
         }).join('')}</div>

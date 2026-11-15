@@ -13,6 +13,11 @@ import {
     normalizeSkillRegistryEntry,
     registryEntryToDefinition,
 } from '../src/features/skill-registry/skill-registry.js';
+import {
+    isPassiveFlavourOnly,
+    isPassiveRecipePending,
+    isPassiveRecipeResolved,
+} from '../src/features/tactical-combat/tactical-combat-passives.js';
 
 const BLOOD_BANK = {
     id: 'blood-bank',
@@ -303,6 +308,28 @@ Level: 7 | XP: 23,000/34,000
 [/XP]`;
         const [unit] = parsePlayerUnits(memo, { name1: 'Aria' });
         expect(unit.level).toBe(7);
+    });
+});
+
+describe('passive resolution predicate', () => {
+    it('treats a resolved empty template as a flavour passive, not pending', () => {
+        const skill = { passive: true, registryStatus: 'resolved', trigger: { event: 'battle-start' }, effectTemplate: [] };
+        expect(isPassiveRecipeResolved(skill)).toBe(true);
+        expect(isPassiveFlavourOnly(skill)).toBe(true);
+        expect(isPassiveRecipePending(skill)).toBe(false);
+    });
+
+    it('treats a legacy recipe without registryStatus as resolved', () => {
+        const skill = { passive: true, trigger: { event: 'hit' }, effectTemplate: [{ type: 'damage', target: '$target', amount: '1d4' }] };
+        expect(isPassiveRecipeResolved(skill)).toBe(true);
+        expect(isPassiveFlavourOnly(skill)).toBe(false);
+        expect(isPassiveRecipePending(skill)).toBe(false);
+    });
+
+    it('keeps a passive with neither a recipe nor resolved status pending', () => {
+        expect(isPassiveRecipePending({ passive: true, trigger: null, effectTemplate: null })).toBe(true);
+        expect(isPassiveRecipePending({ passive: true, registryStatus: 'confirmed', effectTemplate: [] })).toBe(true);
+        expect(isPassiveRecipePending({ passive: false, effectTemplate: null })).toBe(false);
     });
 });
 
