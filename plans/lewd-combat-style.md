@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U5 complete; next: U6 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`)
+- **Status:** in progress — U5 complete; next: U6 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`)
 - **Date:** 2026-11-14
 
 ## Summary
