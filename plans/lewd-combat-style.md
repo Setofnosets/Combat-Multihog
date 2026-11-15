@@ -356,7 +356,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): multi-partner pairings, stances, holds, and technique catalog`
 
 ### 5. User technique compendium and compile-once cache
-- **Status:** ✅ Done — `<hash>` (feat(lewd-combat): user technique compendium and compile-once cache)
+- **Status:** ✅ Done — `88c539e` (feat(lewd-combat): user technique compendium and compile-once cache)
 - **Files:** new `src/features/lewd-combat/lewd-combat-compendium.js`, `src/features/lewd-combat/lewd-combat-compiler.js`; modify `src/state/defaults.js`, `src/state/settings.js`, `settings.html`; tests `tests/lewd-combat-compendium.test.js`.
 - **Depends on:** Step 4
 - **Parallelizable:** yes (with Step 6 if the schema is frozen)
