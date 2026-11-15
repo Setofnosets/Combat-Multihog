@@ -95,6 +95,10 @@ import {
     onTraditionalCombatChatChanged,
 } from './src/features/traditional-combat/traditional-combat-ui.js';
 import {
+    installLewdCombatUi,
+    onLewdCombatChatChanged,
+} from './src/features/lewd-combat/lewd-combat-ui.js';
+import {
     bindTraditionalCombatSettings,
     syncTraditionalCombatSettingsUi,
 } from './src/features/traditional-combat/traditional-combat-settings.js';
@@ -2841,6 +2845,7 @@ async function onChatChanged(newChatId) {
     runtimeState.currentChatId = resolvedId;
     try { onTacticalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Tactical Combat chat switch skipped:', error); }
     try { onTraditionalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Traditional Combat chat switch skipped:', error); }
+    try { onLewdCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Lewd Combat chat switch skipped:', error); }
     try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
     const ownsChat = createChatCommitGuard(resolvedId, getActiveChatId);
     runtimeState.hasActiveDungeonMap = false;
@@ -6534,6 +6539,7 @@ function organizeConnectionSettingsUI() {
         initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });
         installTacticalCombatUi();
         installTraditionalCombatUi();
+        installLewdCombatUi();
         installCombatUiRouter();
         document.addEventListener('rt_open_settings_overlay', (event) => {
             openSettingsOverlay(event?.detail?.tab || 'combat');

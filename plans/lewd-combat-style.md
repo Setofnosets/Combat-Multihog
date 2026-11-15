@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U5 complete; next: U6 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`)
+- **Status:** in progress — U6 complete; next: U7 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -372,6 +372,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): user technique compendium and compile-once cache`
 
 ### 6. Context builder, participant resolution, and start flow
+- **Status:** ✅ Done — `HASH_SENTINEL_U6` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
 - **Files:** new `src/features/lewd-combat/lewd-combat-context.js`, `src/features/lewd-combat/lewd-combat-ui.js` (start/stop/reset/join portion); tests `tests/lewd-combat-context.test.js`.
 - **Depends on:** Steps 2, 4
 - **Parallelizable:** no
@@ -388,6 +389,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): participant resolution and multi-partner start flow`
 
 ### 7. Board UI and markup
+- **Status:** ✅ Done — `HASH_SENTINEL_U6` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
 - **Files:** new `src/features/lewd-combat/lewd-combat-markup.js`, `src/features/lewd-combat/lewd-combat-ui.js`, `style.css`; tests `tests/lewd-combat-markup.test.js`.
 - **Depends on:** Step 6
 - **Parallelizable:** no
