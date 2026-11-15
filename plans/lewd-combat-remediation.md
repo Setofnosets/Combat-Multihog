@@ -166,6 +166,7 @@
 - **Risk:** medium
 - **Model / Effort:** implementer model #medium
 - **Commit:** `feat(lewd-combat): add anatomy, skills, kinks, and trait profile foundation`
+- **Status:** ✅ Done — a706306
 
 ### A2. Explicit act catalog (penetration, oral, manual, bondage, masturbation)
 - **Files:** `src/features/lewd-combat/lewd-combat-techniques.js`, `lewd-combat-compendium.js`, `lewd-combat-compiler.js`; tests `tests/lewd-combat-techniques.test.js`, `tests/lewd-combat-compendium.test.js`.
