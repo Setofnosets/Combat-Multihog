@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U2 complete; next: U3 (U1/Step 1 `1d4767e`, U2/Step 2 pending hash)
+- **Status:** in progress — U2 complete; next: U3 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -303,7 +303,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): scaffold secondary board, settings toggle, and per-chat store`
 
 ### 2. `[LEWD]` block schema and profile parser
-- **Status:** ✅ Done — pending hash (feat(lewd-combat): add LEWD block schema and profile parser)
+- **Status:** ✅ Done — `010d4c9` (feat(lewd-combat): add LEWD block schema and profile parser)
 - **Files:** new `src/features/lewd-combat/lewd-combat-profile.js`; modify `constants.js` (`BLOCK_ORDER`, `NO_PAGINATE`), `src/state/defaults.js` (`blockOrder`, stock prompt/module text), `src/state/module-instructions.js` (LEWD module instruction), `src/state/schema-sections.js` (optional `sec_desires`); tests `tests/lewd-combat-profile.test.js`.
 - **Depends on:** Step 1
 - **Parallelizable:** yes (with Step 3 once the schema is frozen)
