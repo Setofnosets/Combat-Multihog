@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U4 complete; next: U5 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`)
+- **Status:** in progress — U5 complete; next: U6 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -356,6 +356,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): multi-partner pairings, stances, holds, and technique catalog`
 
 ### 5. User technique compendium and compile-once cache
+- **Status:** ✅ Done — `<hash>` (feat(lewd-combat): user technique compendium and compile-once cache)
 - **Files:** new `src/features/lewd-combat/lewd-combat-compendium.js`, `src/features/lewd-combat/lewd-combat-compiler.js`; modify `src/state/defaults.js`, `src/state/settings.js`, `settings.html`; tests `tests/lewd-combat-compendium.test.js`.
 - **Depends on:** Step 4
 - **Parallelizable:** yes (with Step 6 if the schema is frozen)

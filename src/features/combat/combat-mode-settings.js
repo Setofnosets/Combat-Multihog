@@ -31,6 +31,12 @@ import {
     getLewdEncounterForChat,
     removeLewdEncounterForChat,
 } from '../lewd-combat/lewd-combat-store.js';
+import {
+    DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
+    buildLewdTechniqueCatalog,
+    describeLewdCatalog,
+} from '../lewd-combat/lewd-combat-compendium.js';
+import { DEFAULT_LEWD_COMPILER_PROMPT } from '../lewd-combat/lewd-combat-compiler.js';
 
 let bound = false;
 let eventsInstalled = false;
@@ -260,6 +266,22 @@ export function syncLewdCombatSettingsUi(settings = depsRef?.settings) {
     const maxPartners = el('rpg_lewd_combat_max_partners');
     if (maxPartners) maxPartners.value = String(Number(settings.lewdCombatMaxPartners) || LEWD_COMBAT_DEFAULTS.maxPartners);
 
+    const compendium = el('rpg_lewd_combat_compendium');
+    if (compendium && document.activeElement !== compendium) {
+        compendium.value = String(settings.lewdCombatTechniqueCompendiumJson ?? DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON);
+    }
+    const compendiumStatus = el('rpg_lewd_combat_compendium_status');
+    if (compendiumStatus) {
+        const catalog = buildLewdTechniqueCatalog(settings);
+        compendiumStatus.textContent = describeLewdCatalog(catalog);
+        compendiumStatus.classList.toggle('rt-lc-error', !!catalog.error);
+        compendiumStatus.classList.toggle('rt-lc-warning', !catalog.error && catalog.diagnostics.length > 0);
+    }
+    const compilerPrompt = el('rpg_lewd_combat_compiler_prompt');
+    if (compilerPrompt && document.activeElement !== compilerPrompt) {
+        compilerPrompt.value = String(settings.lewdCombatCompilerPrompt || DEFAULT_LEWD_COMPILER_PROMPT);
+    }
+
     const status = el('rpg_lewd_combat_status');
     if (status) {
         const state = getLewdEncounterForChat(activeChatId(), settings);
@@ -336,6 +358,33 @@ function bindLewdCombatSettings(settings, saveSettings) {
         maxPartners.addEventListener('change', () => {
             settings.lewdCombatMaxPartners = clampInt(maxPartners.value, 1, 4, LEWD_COMBAT_DEFAULTS.maxPartners);
             syncLewdCombatSettingsUi(settings);
+            try { saveSettings?.(); } catch (_) { /* boot */ }
+        });
+    }
+
+    const compendium = el('rpg_lewd_combat_compendium');
+    if (compendium && !lewdBound) {
+        compendium.addEventListener('input', () => {
+            settings.lewdCombatTechniqueCompendiumJson = String(compendium.value || '');
+            syncLewdCombatSettingsUi(settings);
+            try { saveSettings?.(); } catch (_) { /* boot */ }
+        });
+        const reset = el('rpg_lewd_combat_compendium_reset');
+        if (reset) {
+            reset.addEventListener('click', (event) => {
+                event.preventDefault();
+                settings.lewdCombatTechniqueCompendiumJson = DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON;
+                compendium.value = DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON;
+                syncLewdCombatSettingsUi(settings);
+                try { saveSettings?.(); } catch (_) { /* boot */ }
+            });
+        }
+    }
+
+    const compilerPrompt = el('rpg_lewd_combat_compiler_prompt');
+    if (compilerPrompt && !lewdBound) {
+        compilerPrompt.addEventListener('input', () => {
+            settings.lewdCombatCompilerPrompt = String(compilerPrompt.value || DEFAULT_LEWD_COMPILER_PROMPT);
             try { saveSettings?.(); } catch (_) { /* boot */ }
         });
     }
