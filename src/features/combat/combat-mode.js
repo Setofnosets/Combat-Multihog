@@ -7,12 +7,17 @@
  * flag instead of treating the default as narrative.
  */
 
+import { LEWD_BY_CHAT_KEY, LEWD_COMBAT_STYLE } from '../lewd-combat/lewd-combat-constants.js';
+
 export const COMBAT_STYLES = ['narrative', 'tactical', 'traditional'];
 
 export const COMBAT_STYLE_LABELS = {
     narrative: 'Narration',
     tactical: 'Tactical grid',
     traditional: 'Traditional turn-based',
+    // Secondary module only: never selectable through COMBAT_STYLES, but the
+    // open-encounter list needs a human label for it.
+    lewd: 'Lewd',
 };
 
 /**
@@ -30,6 +35,10 @@ const FINALIZING_STALE_MS = 90 * 1000;
 const COMBAT_BOARD_MAPS = [
     { style: 'tactical', key: 'tacticalCombatByChat' },
     { style: 'traditional', key: 'traditionalCombatByChat' },
+    // Lewd Combat is a secondary board: it participates in the "open board"
+    // guard and list so a hidden lewd encounter cannot be silently overwritten,
+    // but it is not part of COMBAT_STYLES and cannot be selected as a style.
+    { style: LEWD_COMBAT_STYLE, key: LEWD_BY_CHAT_KEY },
 ];
 
 /**
@@ -126,7 +135,7 @@ export function combatBoardPhase(state, options = {}) {
  * chat instead of telling the user to hunt through them.
  * @param {Record<string, any>|null|undefined} settings
  * @param {{ now?: number, sessionStartedAt?: number }} [options]
- * @returns {{ chatId: string, style: 'tactical'|'traditional', phase: 'preparing'|'finalizing'|'active', status: string, title: string, round: number, updatedAt: number }[]}
+ * @returns {{ chatId: string, style: 'tactical'|'traditional'|'lewd', phase: 'preparing'|'finalizing'|'active', status: string, title: string, round: number, updatedAt: number }[]}
  */
 export function listActiveCombatBoards(settings, options = {}) {
     const boards = [];

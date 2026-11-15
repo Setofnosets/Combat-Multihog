@@ -306,6 +306,21 @@ QUEST: The Missing Sheep
 - Do not output the MOOD field — the engine calculates and injects it automatically.
 - When a quest completes or fails, set STATUS to completed or failed on that quest.
 - When the player clearly completes an objective, mark it as OBJ_COMPLETED.`,
+  lewd: `Intimate profile data for the optional Lewd Combat module. Maintain this block ONLY while Lewd Combat is enabled. Do not create it in ordinary play, and never write explicit acts here — it is a stat/profile block, not a scene log.
+
+One line per named participant (player, NPC, enemy, or party member). Only maintain entries for characters who take part in or are explicitly available for a Lewd Combat encounter. Update a line only when a profile genuinely changes (new lasting limit, sensitivity, or experience); otherwise omit the block entirely.
+
+[LEWD]
+- Name: role=dominant|submissive|switch | orientation=... | stamina=current/max | sensitivity=zone:high, zone:low | likes=tag, tag | dislikes=tag | limits=limit, limit | endurance=+N | experience=N | traits=trait+N
+[/LEWD]
+
+Rules:
+- \`stamina\` is the profile pool (1–6), not HP. Never copy HP here. \`endurance\` and \`experience\` are small integers; use +0 / 0 when neutral.
+- \`sensitivity\` zones: lips, neck, ears, chest, breasts, nipples, back, waist, hips, groin, thighs, hands, feet, full_body. Levels: low, medium, high. Numeric multipliers (e.g. neck:1.4) are also accepted.
+- \`likes\` / \`dislikes\` are short tags such as praise, teasing, being guided, pain.
+- \`limits\` are hard boundaries such as breath play, marking. \`none declared\` is valid; NEVER invent a hard limit that the story has not established — absent means unknown, and the engine treats unknown as neutral.
+- \`traits\` are optional modifiers: stamina+1, drain-1, maxArousal+2, poise+1, endurance+1, sensitivity:neck+1. Unknown traits are ignored by the engine.
+- Use the exact character name used elsewhere in the memo so the board can match participants. Do not include unnamed extras.`,
   time_24h: `Current time and day grabbed from the status footer. Also track time of the last rest (only on Long Rest, e.g. 'Last Rest: 22:00, Day 0'). Use this to track out-of-combat buff durations by comparing to the PRIOR MEMO's time.
 
 Format (24-hour clock, NO AM/PM):
@@ -465,6 +480,14 @@ When the player's immediately preceding message declared a concrete opening acti
 If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no traditional encounter is active, call StartTraditionalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, stay in Beat 1: continue the prelude and do not call the tool unless the player's current input initiates hostilities or the NPCs attack in response to this turn.
 After calling the tool, do not resolve the fight yourself. The traditional combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the result as authoritative and do not replay or restart the fight.
 </traditional_combat>
+
+<lewd_combat>
+LEWD COMBAT (SECONDARY)
+When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene.
+After calling, wait for the board's result and do not resolve or replay the scene.
+</lewd_combat>
 
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:
@@ -862,6 +885,14 @@ When the player's immediately preceding message declared a concrete opening acti
 If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no traditional encounter is active, call StartTraditionalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, stay in Beat 1: continue the prelude and do not call the tool unless the player's current input initiates hostilities or the NPCs attack in response to this turn.
 After calling the tool, do not resolve the fight yourself. The traditional combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the result as authoritative and do not replay or restart the fight.
 </traditional_combat>
+
+<lewd_combat>
+LEWD COMBAT (SECONDARY)
+When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene.
+After calling, wait for the board's result and do not resolve or replay the scene.
+</lewd_combat>
 
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:
@@ -1656,7 +1687,7 @@ Firearms (modern/realistic homebrew): when assigning damage on new characters/ge
 export const BLOCK_ICONS = {
   TIME: '🕒', XP: '🌟', CHARACTER: '🧙', PARTY: '👥', 'BENCHED PARTY': '⛺',
   COMBAT: '⚔️', INVENTORY: '🎒', ABILITIES: '✨', SPELLS: '📖',
-  QUESTS: '📋',
+  QUESTS: '📋', LEWD: '💗',
 };
 
 // NOTE: 'BENCHED PARTY' has its OWN enable toggle + editable prompt (settings.modules['benched
@@ -1666,9 +1697,9 @@ export const BLOCK_ICONS = {
 // (renderer.js), and [BENCHED PARTY] is intentionally never its own top-level tab/card — it
 // always renders folded into PARTY's own section as a compact roster sub-panel, since visually
 // it's a sub-state of party membership, not an independent trackable system.
-export const BLOCK_ORDER = ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME', 'QUESTS'];
+export const BLOCK_ORDER = ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME', 'QUESTS', 'LEWD'];
 
 export const PAGE_SIZE = 8;
 
 /** Sections that should NEVER be paginated — always show all entries. */
-export const NO_PAGINATE = new Set(['CHARACTER', 'ABILITIES']);
+export const NO_PAGINATE = new Set(['CHARACTER', 'ABILITIES', 'LEWD']);

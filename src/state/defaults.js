@@ -36,6 +36,13 @@ import {
 import { DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON } from '../features/traditional-combat/traditional-combat-constants.js';
 import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tactical-combat-classifiers.js';
 import { DEFAULT_SPELL_COMPENDIUM_JSON } from '../features/tactical-combat/tactical-combat-spell-compendium.js';
+import { DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON } from '../features/lewd-combat/lewd-combat-compendium.js';
+import { DEFAULT_LEWD_COMPILER_PROMPT } from '../features/lewd-combat/lewd-combat-compiler.js';
+import {
+    DEFAULT_LEWD_AGENT_PROMPT,
+    DEFAULT_LEWD_OUTCOME_PROMPT,
+    DEFAULT_LEWD_PROSE_PROMPT,
+} from '../features/lewd-combat/lewd-combat-prompts.js';
 import { createEmptySkillRegistry } from '../features/skill-registry/skill-registry.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
@@ -271,6 +278,33 @@ export function buildDefaultSettings() {
         traditionalCombatSpecialPrompt: DEFAULT_TRADITIONAL_SPECIAL_RESOLUTION_PROMPT,
         traditionalCombatActionCatalogJson: DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON,
         traditionalCombatByChat: {},
+
+        // ── Lewd Combat (secondary opt-in module) ─────────────────────────
+        // Independent of `combatStyle`: enabling it never changes the primary
+        // board selector. Off by default and inert until the feature is built.
+        lewdCombatEnabled: false,
+        lewdCombatExplicitness: "explicit",
+        lewdCombatDarkerThemes: false,
+        lewdCombatProseFrequency: "per-exchange",
+        lewdCombatRoundCap: 12,
+        lewdCombatMaxPartners: 2,
+        lewdCombatTechniqueCompendiumJson: DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
+        lewdCombatTechniqueCache: {},
+        lewdCombatCompilerPrompt: DEFAULT_LEWD_COMPILER_PROMPT,
+        lewdCombatAgentPrompt: DEFAULT_LEWD_AGENT_PROMPT,
+        lewdCombatProsePrompt: DEFAULT_LEWD_PROSE_PROMPT,
+        lewdCombatOutcomePrompt: DEFAULT_LEWD_OUTCOME_PROMPT,
+        lewdCombatAgentMaxTokens: 2000,
+        lewdCombatProseMaxTokens: 2000,
+        lewdCombatConnectionSource: "default",
+        lewdCombatConnectionProfileId: "",
+        lewdCombatCompletionPresetId: "",
+        lewdCombatOllamaUrl: "http://localhost:11434",
+        lewdCombatOllamaModel: "",
+        lewdCombatOpenaiUrl: "",
+        lewdCombatOpenaiKey: "",
+        lewdCombatOpenaiModel: "",
+        lewdCombatByChat: {},
 
         renderedViewActive: true,
 
@@ -584,6 +618,10 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
             quests: true,
 
+            // Lewd Combat profile module. Off by default and only meaningful
+            // while the opt-in Lewd Combat module is enabled.
+            lewd: false,
+
         },
 
         stockPrompts: { ...DEFAULT_STOCK_PROMPTS },
@@ -672,7 +710,7 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
         fullViewSections: [],
 
-        blockOrder: ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME'],
+        blockOrder: ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME', 'LEWD'],
 
         legacyDiceNaming: false,
 
@@ -757,6 +795,8 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
             tactical_combat: true,
 
             traditional_combat: true,
+
+            lewd_combat: true,
 
             dungeon_reality_and_hidden_mapping: true,
 

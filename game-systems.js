@@ -372,6 +372,7 @@ const KNOWN_TOGGLE_DEFAULTS = {
     CYOA_mode: false,
     tactical_combat: true,
     traditional_combat: true,
+    lewd_combat: true,
     dungeon_reality_and_hidden_mapping: true,
 };
 
@@ -386,6 +387,7 @@ const NARRATOR_TOGGLE_IDS = {
     relationship_tracking: 'rpg_sysprompt_mod_npc_rel_bars',
     tactical_combat: 'rpg_sysprompt_mod_tactical_combat',
     traditional_combat: 'rpg_sysprompt_mod_traditional_combat',
+    lewd_combat: 'rpg_sysprompt_mod_lewd_combat',
     dungeon_reality_and_hidden_mapping: 'rpg_sysprompt_mod_dungeon_reality_and_hidden_mapping',
 };
 
@@ -461,6 +463,10 @@ export function transformBaseSectionContent(tag, innerContent, settings) {
     }
 
     if (tag === 'traditional_combat' && !isTraditionalCombatMode(settings)) {
+        return '';
+    }
+
+    if (tag === 'lewd_combat' && !settings.lewdCombatEnabled) {
         return '';
     }
 
@@ -692,7 +698,9 @@ export function getSectionRowDescriptor(key, settings, baseSectionMap) {
                 ? 'Narrator instruction: call the StartTacticalCombat function tool once when a set-piece fight begins. Does not run a battle by itself.'
                 : tag === 'traditional_combat'
                     ? 'Narrator instruction: call the StartTraditionalCombat function tool once when a turn-based fight begins. Does not run a battle by itself.'
-                    : '',
+                    : tag === 'lewd_combat'
+                        ? 'Narrator instruction: call the StartLewdCombat function tool once when an intimate scene begins. Does not run the encounter by itself.'
+                        : '',
             enabled: isBaseSectionEnabled(tag, settings),
             content: baseSectionMap.get(tag) ?? '',
         };

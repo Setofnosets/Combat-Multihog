@@ -5,7 +5,7 @@ import { createEmptySkillRegistry } from './src/features/skill-registry/skill-re
 import { buildDirectPromptSystemPrompt, DIRECT_PROMPT_SYSTEM_MODES } from './src/state/direct-prompt-system.js';
 import { diffTextLines, diffHasChanges } from './prompt-diff.js';
 import { sendStateRequest, fetchOllamaModels, fetchOpenAIModels, testOpenAIConnection, getConnectionProfiles, getCurrentCompletionPreset, setCompletionPreset, syncCombatProfile, resetCombatProfileOverride, isCombatEngaged } from './llm-client.js';
-import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration, syncTraditionalCombatToolRegistration } from './narrative-hooks.js';
+import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration, syncTraditionalCombatToolRegistration, syncLewdCombatToolRegistration } from './narrative-hooks.js';
 import { deduplicateMemo, mergeMemo, computeDelta, escapeHtml, escapeRegex, highlightParens, cleanToolCallMessage, cleanMessageContent, getLastUserAction, buildLorebookContext, buildModulesInstructionText, buildModuleFormatInstruction, parseQuestsFromMemo, syncQuestsFromMemo, syncQuestsToMemo, writeQuestsToMemo, getQuestMood, extractCurrentTimeStr, stripArchivedQuestsFromMemo, stripCompletedQuestsFromMemo, applyQuestSyncAndStripMemo, isArchivedQuestStatus, removeArchivedQuest, parseInWorldTime, formatInWorldTime, sanitizeLorebookRecordContent, memoForTrackerContext, memoForGmContext } from './memo-processor.js';
 import { renderSubFieldByRule, tryRenderMarker, renderCustomBlockLine, stripMemoHtml, escapeHtmlWithColor, parseMemoBlocks, getPageSize, loadCollapsed, saveCollapsed, loadDetached, saveDetached, loadPartyCompact, savePartyCompact, blockToItems, renderMemoAsCards, renderTabModeView, renderBottomXpBar, renderQuestLog, renderLorebookTerminal, loadActiveTab, saveActiveTab, getTimeOfDayInfo, renderDayNightBadge, MARKER_TYPE_MAP, getMarkerLibraryKeys, loadBenchedExpanded, saveBenchedExpanded } from './renderer.js';
 import { unregisterLogQuestTool, checkQuestDeadlines, renderQuestsAsPlainText } from './quests.js';
@@ -95,10 +95,15 @@ import {
     onTraditionalCombatChatChanged,
 } from './src/features/traditional-combat/traditional-combat-ui.js';
 import {
+    installLewdCombatUi,
+    onLewdCombatChatChanged,
+} from './src/features/lewd-combat/lewd-combat-ui.js';
+import {
     bindTraditionalCombatSettings,
     syncTraditionalCombatSettingsUi,
 } from './src/features/traditional-combat/traditional-combat-settings.js';
 import { bindCombatModeSettings, syncCombatModeSettingsUi } from './src/features/combat/combat-mode-settings.js';
+import { syncLewdCombatSettingsUi } from './src/features/lewd-combat/lewd-combat-settings.js';
 import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
 import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
@@ -2757,6 +2762,7 @@ async function onChatChanged(newChatId) {
         try { syncTacticalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Tactical Combat settings refresh skipped:', error); }
         try { syncTraditionalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Traditional Combat settings refresh skipped:', error); }
         try { syncCombatModeSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Combat mode settings refresh skipped:', error); }
+        try { syncLewdCombatSettingsUi(s); } catch (error) { console.warn('[RPG Tracker] Lewd Combat settings refresh skipped:', error); }
         try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
         updateChatLinkUI();
         return;
@@ -2840,6 +2846,7 @@ async function onChatChanged(newChatId) {
     runtimeState.currentChatId = resolvedId;
     try { onTacticalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Tactical Combat chat switch skipped:', error); }
     try { onTraditionalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Traditional Combat chat switch skipped:', error); }
+    try { onLewdCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Lewd Combat chat switch skipped:', error); }
     try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
     const ownsChat = createChatCommitGuard(resolvedId, getActiveChatId);
     runtimeState.hasActiveDungeonMap = false;
@@ -6028,6 +6035,7 @@ export function buildSysprompt(rawText) {
         if (row.tag === 'CYOA_mode') return '';
         if (row.tag === 'tactical_combat' && !isTacticalCombatMode(s)) return '';
         if (row.tag === 'traditional_combat' && !isTraditionalCombatMode(s)) return '';
+        if (row.tag === 'lewd_combat' && !s.lewdCombatEnabled) return '';
         if (row.tag === 'combat') {
             if (isTacticalCombatMode(s)) {
                 return isEffectiveSectionEnabled('tactical_combat', s)
@@ -6306,6 +6314,7 @@ const CONNECTION_SETTINGS_UI = [
     { key: 'map_evolution', control: '#rpg_map_evolution_connection_source', slot: '#rpg_connection_slot_map_evolution', label: 'Map Evolution' },
     { key: 'world_progression', control: '#rpg_world_connection_source', slot: '#rpg_connection_slot_world_progression', label: 'World Progression' },
     { key: 'portraits', control: '#rpg_portrait_connection_source', slot: '#rpg_connection_slot_portraits', label: 'Portrait Generation', recommendation: 'A lightweight model should do fine.' },
+    { key: 'lewd_combat', control: '#rpg_lewd_combat_connection_source', slot: '#rpg_connection_slot_lewd_combat', label: 'Lewd Combat Agent', recommendation: 'Used only by the opt-in Lewd Combat module for the opponent agent and one-time technique compiler. Prose always uses Main API.' },
 ];
 
 function normalizeCentralConnectionDrawer(drawer, key, label, recommendation = '') {
@@ -6533,6 +6542,7 @@ function organizeConnectionSettingsUI() {
         initSettingsOverlay(settingsHtml, { folderName: FOLDER_NAME });
         installTacticalCombatUi();
         installTraditionalCombatUi();
+        installLewdCombatUi();
         installCombatUiRouter();
         document.addEventListener('rt_open_settings_overlay', (event) => {
             openSettingsOverlay(event?.detail?.tab || 'combat');
@@ -6631,6 +6641,12 @@ function organizeConnectionSettingsUI() {
         await bindFeatureConnectionSettings({
             uiPrefix: 'rpg_traditional_combat',
             keyPrefix: 'traditionalCombat',
+            settings,
+            presetManager: pm,
+        });
+        await bindFeatureConnectionSettings({
+            uiPrefix: 'rpg_lewd_combat',
+            keyPrefix: 'lewdCombat',
             settings,
             presetManager: pm,
         });
@@ -8263,6 +8279,7 @@ function organizeConnectionSettingsUI() {
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, onMapUpdaterUserMessage);
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTacticalCombatToolRegistration());
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTraditionalCombatToolRegistration());
+        if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncLewdCombatToolRegistration());
         if (event_types.MESSAGE_RECEIVED) eventSource.on(event_types.MESSAGE_RECEIVED, onMapArchitectAssistantMessage);
         const catchUpMapArchitectFence = () => {
             setTimeout(() => { void onMapArchitectAssistantMessage(undefined, 'normal'); }, 0);
@@ -8491,6 +8508,7 @@ function organizeConnectionSettingsUI() {
         syncTacticalCombatToolRegistration();
         syncTraditionalCombatToolRegistration();
         syncLocationMappingRuntime();
+        syncLewdCombatToolRegistration();
         registerDiceSlashCommand();
 
         // ─── Quest System ───
@@ -11156,6 +11174,7 @@ RULES:
             { key: 'CYOA_mode', id: 'rpg_sysprompt_mod_cyoa_mode' },
             { key: 'tactical_combat', id: 'rpg_sysprompt_mod_tactical_combat' },
             { key: 'traditional_combat', id: 'rpg_sysprompt_mod_traditional_combat' },
+            { key: 'lewd_combat', id: 'rpg_sysprompt_mod_lewd_combat' },
             { key: 'quests', id: 'rpg_sysprompt_mod_quests' },
         ];
         _syspromptModDefs.forEach(({ key, id }) => {
@@ -11196,6 +11215,9 @@ RULES:
                 }
                 if (key === 'traditional_combat') {
                     syncTraditionalCombatToolRegistration();
+                }
+                if (key === 'lewd_combat') {
+                    syncLewdCombatToolRegistration();
                 }
 
                 saveSettings();

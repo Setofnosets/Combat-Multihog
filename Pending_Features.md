@@ -129,3 +129,25 @@ Not yet implemented:
 - detecting a generated roster that is mathematically unwinnable;
 - per-encounter telemetry (rounds, resources spent, damage by source);
 - suggestions for the narrator when the party is likely to lose.
+
+## 11. Lewd Combat follow-ups
+
+Lewd Combat ships as an opt-in secondary board (see `docs/lewd-combat.md`). The
+following are intentionally not built yet and should be designed before coding:
+
+- **Multi-partner expansion** — the engine supports `duel`, `group`, and
+  `free-for-all` with a configurable partner cap, but the board UI is optimised
+  for 1–4 active participants. Larger scenes need a compact roster and a
+  scalable pairing matrix.
+- **AI director** — an optional director that chooses scene tone, pacing, and
+  encounter shape from the narrative context, strictly inside the existing
+  legal-action and consent contract.
+- **Relationship writeback** — optional affinity/relationship deltas after a
+  scene. It is deliberately not automatic and must never rewrite relationship
+  tiers on its own.
+- **`Seduce` bridge from regular combat** — a tactical/traditional action that
+  pauses a target and opens a linked Lewd sub-encounter, then returns statuses
+  (not HP damage) to the primary board. Open risks: two active boards, turn-order
+  interruption, consent gating, and outcome writeback.
+- **Profile visibility controls** — an option to inject `[LEWD]` profiles only
+  during Lewd encounters instead of whenever the module is enabled.

@@ -31,6 +31,8 @@ import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.j
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
 import { getPendingNarration, hasPendingNarration } from './src/features/tactical-combat/tactical-combat-store.js';
+import { LEWD_CHANGED_EVENT } from './src/features/lewd-combat/lewd-combat-constants.js';
+import { LEWD_COMBAT_RESULT_NOTICE } from './src/features/lewd-combat/lewd-combat-outcome.js';
 import { stripEndedCombatFromMemo } from './src/state/combat-persistence.js';
 import { isTacticalCombatMode, isTraditionalCombatMode } from './src/features/combat/combat-mode.js';
 import { isCyoaEnabled, isEffectiveSectionEnabled, isLorebookAgentRuntimeActive, isLocationMappingEnabled } from './src/state/section-enabled.js';
@@ -958,6 +960,160 @@ export function unregisterTraditionalCombatTool() {
     _traditionalCombatToolRegistered = false;
 }
 
+const LEWD_COMBAT_FAILURE_COOLDOWN_MS = 30 * 1000;
+const _lewdCombatToolFailureUntil = new Map();
+let _lewdCombatToolSyncBound = false;
+let _lewdCombatToolRegistered = false;
+
+function bindLewdCombatToolSync() {
+    if (_lewdCombatToolSyncBound || typeof document === 'undefined') return;
+    _lewdCombatToolSyncBound = true;
+    document.addEventListener(LEWD_CHANGED_EVENT, () => syncLewdCombatToolRegistration());
+}
+
+/** Lewd Combat is opt-in twice: module setting + Narrator Configuration section. */
+export function lewdCombatToolConfigured() {
+    try {
+        const s = getSettings();
+        return !!s.lewdCombatEnabled && isEffectiveSectionEnabled('lewd_combat', s);
+    } catch (_) {
+        return false;
+    }
+}
+
+function lewdCombatToolCoolingDown(chatId) {
+    const until = Number(_lewdCombatToolFailureUntil.get(String(chatId || '')) || 0);
+    return Date.now() < until;
+}
+
+function lewdCombatToolAvailable() {
+    try {
+        if (!lewdCombatToolConfigured()) return false;
+        const s = getSettings();
+        const chatId = getActiveChatId();
+        if (!chatId) return false;
+        const board = s.lewdCombatByChat?.[chatId];
+        if (board?.status === 'active' || board?.finalization?.finalizing) return false;
+        if (hasPendingNarration(s, chatId)) return false;
+        if (s.tacticalCombatByChat?.[chatId]?.status === 'active') return false;
+        if (s.traditionalCombatByChat?.[chatId]?.status === 'active') return false;
+        return !lewdCombatToolCoolingDown(chatId);
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * Keep StartLewdCombat registered exactly while the opt-in module and its
+ * narrator section are enabled and no board/result owns this chat.
+ */
+export function syncLewdCombatToolRegistration() {
+    bindLewdCombatToolSync();
+    try {
+        const s = getSettings();
+        const chatId = getActiveChatId();
+        const board = s.lewdCombatByChat?.[chatId];
+        const boardActive = board?.status === 'active' || !!board?.finalization?.finalizing;
+        const pendingResult = hasPendingNarration(s, chatId);
+        const coolingDown = lewdCombatToolCoolingDown(chatId);
+        const shouldExist = lewdCombatToolConfigured()
+            && !!chatId
+            && !boardActive
+            && !pendingResult
+            && s.tacticalCombatByChat?.[chatId]?.status !== 'active'
+            && s.traditionalCombatByChat?.[chatId]?.status !== 'active'
+            && !coolingDown;
+        if (shouldExist && !_lewdCombatToolRegistered) registerLewdCombatTool();
+        else if (!shouldExist) unregisterLewdCombatTool();
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not sync Lewd Combat tool registration:', error);
+    }
+}
+
+export function registerLewdCombatTool() {
+    try {
+        const ctx = SillyTavern.getContext();
+        const { registerFunctionTool, unregisterFunctionTool } = ctx;
+        if (!registerFunctionTool || !unregisterFunctionTool) return;
+        unregisterFunctionTool('StartLewdCombat');
+        registerFunctionTool({
+            name: 'StartLewdCombat',
+            displayName: 'Lewd Combat',
+            description: 'Open the Lewd Combat board for a player-initiated intimate scene. Call this once when the scene becomes intimate and the player initiates; do not call it for ordinary hostile combat, which stays on the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for this scene: the player\'s initiation is the trigger. Pass the participant names, any spectators, a short title, the location, a reason, the scene tone, and the mode. Pass openingTechnique/openingZone only when the player already declared a concrete opening act, and set mode to duel, group, or free-for-all. After calling, do not narrate or resolve the scene yourself; the board owns it and returns the authoritative aftermath.',
+            parameters: {
+                $schema: 'http://json-schema.org/draft-04/schema#',
+                type: 'object',
+                properties: {
+                    participantNames: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Exact names of the active participants in the intimate scene.',
+                    },
+                    spectatorNames: {
+                        type: 'array',
+                        items: { type: 'string' },
+                        description: 'Optional exact names of characters watching rather than participating.',
+                    },
+                    title: { type: 'string', description: 'Optional short scene title.' },
+                    location: { type: 'string', description: 'Optional exact current location, if the footer/memo is ambiguous.' },
+                    reason: { type: 'string', description: 'Optional short reason the scene began, used as extra context for the board.' },
+                    openingTechnique: { type: 'string', description: 'Only when the player already declared a concrete opening act; copy the act\'s name. Do not resolve it yourself.' },
+                    openingZone: { type: 'string', description: 'Optional body zone for the declared opening act.' },
+                    tone: { type: 'string', description: 'Optional tone/explicitness for this scene, e.g. explicit, suggestive, or fade-to-black.' },
+                    mode: { type: 'string', enum: ['duel', 'group', 'free-for-all'], description: 'Optional scene shape. Defaults to duel.' },
+                },
+                required: [],
+            },
+            shouldRegister: lewdCombatToolAvailable,
+            stealth: false,
+            action: async args => {
+                const chatId = getActiveChatId();
+                unregisterLewdCombatTool();
+                try {
+                    const { startLewdCombatFromNarrator } = await import('./src/features/lewd-combat/lewd-combat-ui.js');
+                    const result = await startLewdCombatFromNarrator(args || {});
+                    if (!result?.ok) {
+                        _lewdCombatToolFailureUntil.set(String(chatId || ''), Date.now() + LEWD_COMBAT_FAILURE_COOLDOWN_MS);
+                    } else {
+                        _lewdCombatToolFailureUntil.delete(String(chatId || ''));
+                    }
+                    return result.message;
+                } catch (error) {
+                    _lewdCombatToolFailureUntil.set(String(chatId || ''), Date.now() + LEWD_COMBAT_FAILURE_COOLDOWN_MS);
+                    return `Lewd Combat could not start: ${error?.message || error}`;
+                }
+            },
+            formatMessage: () => 'Lewd Combat: the board is open. Resolve the scene on the board; the result returns to the narrator when it ends.',
+        });
+        _lewdCombatToolRegistered = true;
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not register Lewd Combat tool:', error);
+    }
+}
+
+export function unregisterLewdCombatTool() {
+    try {
+        SillyTavern.getContext().unregisterFunctionTool?.('StartLewdCombat');
+    } catch (error) {
+        console.warn('[RPG Tracker] Could not unregister Lewd Combat tool:', error);
+    }
+    _lewdCombatToolRegistered = false;
+}
+
+/** Runtime prompt override while an intimate scene is being resolved on the board. */
+export function buildLewdCombatRuntimeOverride(settings) {
+    try {
+        if (!settings?.lewdCombatEnabled) return '';
+        const chatId = getActiveChatId();
+        const board = settings.lewdCombatByChat?.[chatId];
+        if (board?.status !== 'active') return '';
+        if (hasPendingNarration(settings, chatId)) return '';
+        return `[LEWD_COMBAT_OVERRIDE]\nLewd Combat is currently being resolved on the board. Do not narrate the intimate contest, exchanges, Arousal, Stamina, Poise, climaxes, or the outcome yourself. Do not call StartLewdCombat again. If the player writes in chat, acknowledge that the scene is paused on the Lewd Combat board and wait for its result. Ordinary hostile combat still uses the selected primary combat style.\n[/LEWD_COMBAT_OVERRIDE]\n\n`;
+    } catch (_) {
+        return '';
+    }
+}
+
 export function registerDiceFunctionTool() {
     try {
         const ctx = SillyTavern.getContext();
@@ -1766,7 +1922,10 @@ export function installInterceptor() {
             || hasPendingNarration(settings, activeCombatChatId)
             || settings.tacticalCombatByChat?.[activeCombatChatId]?.status === 'active'
             || settings.traditionalCombatByChat?.[activeCombatChatId]?.status === 'active';
-        if (!skipInjection && (settings.enabled || cyoaActive || pacingInject || hasTacticalWork)) {
+        const hasLewdWork = !!settings.lewdCombatEnabled
+            && (settings.lewdCombatByChat?.[activeCombatChatId]?.status === 'active'
+                || getPendingNarration(settings, activeCombatChatId)?.kind === 'lewd');
+        if (!skipInjection && (settings.enabled || cyoaActive || pacingInject || hasTacticalWork || hasLewdWork)) {
             // Hard override: while a board fight is active, or while [COMBAT]
             // exists and no board is running, the narrator must not resolve the
             // fight itself.
@@ -1774,17 +1933,21 @@ export function installInterceptor() {
             if (tacticalOverride) injections += tacticalOverride;
             const traditionalOverride = buildTraditionalCombatRuntimeOverride(settings);
             if (traditionalOverride) injections += traditionalOverride;
+            const lewdOverride = buildLewdCombatRuntimeOverride(settings);
+            if (lewdOverride) injections += lewdOverride;
 
             // [BOARD COMBAT RESULT] — authoritative aftermath from the board.
             // Injected as a dedicated system/narrator message below, not as part
             // of the player's own message. One-shot: onGenerationEnded clears it.
+            const pendingKind = getPendingNarration(settings, getActiveChatId())?.kind;
             const tacticalBlock = buildNarrationBlock(settings, getActiveChatId());
             if (tacticalBlock) {
                 tacticalNarrationBlock = tacticalBlock;
-                const traditionalResult = getPendingNarration(settings, getActiveChatId())?.kind === 'traditional';
-                injections += traditionalResult
-                    ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
-                    : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
+                injections += pendingKind === 'lewd'
+                    ? LEWD_COMBAT_RESULT_NOTICE
+                    : pendingKind === 'traditional'
+                        ? `[TRADITIONAL_COMBAT_RESULT_NOTICE]\nA traditional turn-based encounter triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TRADITIONAL_COMBAT_RESULT_NOTICE]\n\n`
+                        : `[TACTICAL_COMBAT_RESULT_NOTICE]\nA tactical combat triggered by the previous player action has just resolved. Combat is OVER; this turn is the post-combat aftermath. The full authoritative result is attached as a system note after this message. It is not a new player action; continue from its aftermath. The State Tracker must output [COMBAT]END_COMBAT[/COMBAT] (or omit [COMBAT]) and must never re-open [COMBAT] for defeated, fled, surrendered, or withdrawn enemies mentioned in the prose.\n[/TACTICAL_COMBAT_RESULT_NOTICE]\n\n`;
             }
 
             if (settings.enabled) {
@@ -2145,19 +2308,19 @@ export function installInterceptor() {
             const pending = getPendingNarration(settings, getActiveChatId());
             if (pending) {
                 const resultId = String(pending.stateId || '');
-                const isTraditional = pending.kind === 'traditional';
+                const resultKind = pending.kind;
                 const alreadyInjected = chat.some(message => message?.extra?.tcResultId
                     && String(message.extra.tcResultId) === resultId);
                 markNarrationInjected(settings, getActiveChatId());
                 if (!alreadyInjected) {
                     chat.push({
-                        name: isTraditional ? 'Traditional Combat' : 'Tactical Combat',
+                        name: resultKind === 'lewd' ? 'Lewd Combat' : resultKind === 'traditional' ? 'Traditional Combat' : 'Tactical Combat',
                         mes: tacticalNarrationBlock,
                         is_user: false,
                         extra: { type: 'narrator', tcResultId: resultId, tcResultAt: Date.now() },
                     });
                     if (settings.debugMode) {
-                        console.log(`[Multihog Framework] ${isTraditional ? 'Traditional' : 'Tactical'} Combat result injected as a narrator message.`);
+                        console.log(`[Multihog Framework] ${resultKind === 'lewd' ? 'Lewd' : resultKind === 'traditional' ? 'Traditional' : 'Tactical'} Combat result injected as a narrator message.`);
                     }
                 }
             }
@@ -3306,6 +3469,7 @@ export function isLatestAssistantFromActiveChar(chat, ctx) {
  */
 export function onGenerationStarted(type, _options, dryRun) {
     syncTacticalCombatToolRegistration();
+    syncLewdCombatToolRegistration();
     if (dryRun === true) {
         recordSchedulerEvent('generation_started_dry_run', { generationType: type ?? null });
         return;
@@ -3426,6 +3590,7 @@ function stripEndedCombatAftermath(settings) {
 
 export async function onGenerationEnded() {
     syncTacticalCombatToolRegistration();
+    syncLewdCombatToolRegistration();
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId);
     try {
         _rpgIsGenerating = false;

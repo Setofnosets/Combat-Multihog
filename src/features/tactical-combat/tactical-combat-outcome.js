@@ -20,6 +20,7 @@ import { buildOutcomeSummary, restoreCombatScopedState } from './tactical-combat
 import { syncCombatResultToMemo } from './tactical-combat-memo.js';
 import { buildResourceLedger, formatResourceLedger } from './tactical-combat-resources.js';
 import { clearPendingNarration, getPendingNarration, hasPendingNarration, setPendingNarration } from './tactical-combat-store.js';
+import { buildLewdNarrationBlock } from '../lewd-combat/lewd-combat-outcome.js';
 
 function defaultPersist() {
     try { saveSettings(); } catch (error) { console.warn('[RPG Tracker] Tactical Combat outcome save deferred:', error); }
@@ -167,7 +168,9 @@ function describeFinalUnits(outcome) {
 export function buildNarrationBlock(settings, chatId = getActiveChatId()) {
     if (!settings) return '';
     const pending = getPendingNarration(settings, chatId || null);
-    if (!pending || !pending.outcome) return '';
+    if (!pending) return '';
+    if (pending.kind === 'lewd') return buildLewdNarrationBlock(settings, chatId);
+    if (!pending.outcome) return '';
     if (chatId && pending.chatId && String(pending.chatId) !== String(chatId)) return '';
     const outcome = pending.outcome;
     const isTraditional = pending.kind === 'traditional' || outcome.mode === 'traditional';

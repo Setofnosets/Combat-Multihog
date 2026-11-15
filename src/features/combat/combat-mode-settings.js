@@ -19,6 +19,13 @@ import {
     setCombatStyle,
 } from './combat-mode.js';
 import { clearActiveCombatEncounters } from './combat-board-reset.js';
+import { LEWD_CHANGED_EVENT } from '../lewd-combat/lewd-combat-constants.js';
+import {
+    bindLewdCombatSettings,
+    syncLewdCombatSettingsUi,
+} from '../lewd-combat/lewd-combat-settings.js';
+
+export { syncLewdCombatSettingsUi };
 
 let bound = false;
 let eventsInstalled = false;
@@ -207,6 +214,7 @@ export function syncCombatModeSettingsUi(deps = depsRef) {
     if (select) select.value = resolved;
     syncPanes(resolved);
     refreshCombatEncountersUi(settings);
+    syncLewdCombatSettingsUi(settings);
 }
 
 /**
@@ -236,10 +244,15 @@ export function bindCombatModeSettings(deps) {
     }
     if (!bound) bindClearButton(settings);
     bound = true;
+    bindLewdCombatSettings(settings, deps.saveSettings);
     if (!eventsInstalled) {
         eventsInstalled = true;
         document.addEventListener('rt_tactical_combat_changed', () => refreshCombatEncountersUi());
         document.addEventListener('rt_traditional_combat_changed', () => refreshCombatEncountersUi());
+        document.addEventListener(LEWD_CHANGED_EVENT, () => {
+            refreshCombatEncountersUi();
+            syncLewdCombatSettingsUi(depsRef?.settings);
+        });
     }
     const wasExplicit = COMBAT_STYLES.includes(String(settings.combatStyle || ''));
     syncCombatModeSettingsUi({ settings, saveSettings: deps.saveSettings });
