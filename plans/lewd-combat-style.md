@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U8 complete; next: U9 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`, U6/Steps 6+7 `30463df`, U7/Steps 8+9 `ff1a7f1`, U8/Step 10 `8a3d05f` + Step 11 `051a8a7`)
+- **Status:** complete — U9 done; all 13 steps shipped (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`, U6/Steps 6+7 `30463df`, U7/Steps 8+9 `ff1a7f1`, U8/Step 10 `8a3d05f` + Step 11 `051a8a7`, U9/Steps 12+13 `faf3045`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -471,6 +471,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): narrator tool, sysprompt section, and runtime override`
 
 ### 12. Settings pane, prompts, and connections
+- **Status:** ✅ Done — `faf3045`
 - **Files:** `settings.html`, new `src/features/lewd-combat/lewd-combat-settings.js`, `src/state/connection-setups.js`, `index.js`, `src/features/lewd-combat/lewd-combat-prompts.js`; tests `tests/lewd-combat-settings.test.js`.
 - **Depends on:** Steps 5, 9, 11
 - **Parallelizable:** no
@@ -484,6 +485,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): settings pane, prompts, and connections`
 
 ### 13. Consent rails, docs, and integration tests
+- **Status:** ✅ Done — `faf3045`
 - **Files:** `src/features/lewd-combat/lewd-combat-profile.js`, `lewd-combat-engine.js`, `lewd-combat-ui.js`, `lewd-combat-prose.js`, `docs/lewd-combat.md`, `CHANGELOG.md`, `Pending_Features.md`; tests `tests/lewd-combat-consent.test.js`, `tests/lewd-combat-integration.test.js`.
 - **Depends on:** Steps 3, 4, 7, 9, 12
 - **Parallelizable:** yes (per suite)
