@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** in progress — B1, B2, B3 implemented and green; next: B4/B5
+- **Status:** in progress — B1, B2, B3, B4 implemented and green; next: B5
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
@@ -132,6 +132,7 @@
 - **Risk:** medium-high
 - **Model / Effort:** implementer model #high
 - **Commit:** `fix(lewd-combat): separate player/AI control from combat side and add control modes`
+- **Status:** ✅ Done — c96740f
 
 ### B5. Aftermath, mercy state, and narrator context
 - **Files:** `src/features/lewd-combat/lewd-combat-outcome.js`, `lewd-combat-ui.js`, `lewd-combat-prompts.js`; `narrative-hooks.js`; `src/state/defaults.js`, `src/state/settings.js`, `settings.html`; optional `memo-processor.js`/`src/state/combat-persistence.js`; tests `tests/lewd-combat-outcome.test.js`, `tests/lewd-combat-integration.test.js`.
