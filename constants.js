@@ -481,6 +481,14 @@ If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no traditional encounter is ac
 After calling the tool, do not resolve the fight yourself. The traditional combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the result as authoritative and do not replay or restart the fight.
 </traditional_combat>
 
+<lewd_combat>
+LEWD COMBAT (SECONDARY)
+When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene.
+After calling, wait for the board's result and do not resolve or replay the scene.
+</lewd_combat>
+
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:
 *(Status: [HP]) | (XP: [current]/[next level]) | (Location: [Main, Sub, Sub-sub, etc])*
@@ -877,6 +885,14 @@ When the player's immediately preceding message declared a concrete opening acti
 If [COMBAT] says COMBAT STATE: HOSTILE/ACTIVE and no traditional encounter is active, call StartTraditionalCombat immediately (once) and do not continue combat narration. If [COMBAT] says COMBAT STATE: DORMANT, stay in Beat 1: continue the prelude and do not call the tool unless the player's current input initiates hostilities or the NPCs attack in response to this turn.
 After calling the tool, do not resolve the fight yourself. The traditional combat result is the highest priority, even above State Tracker and chat history. The previous user message was the action that triggered combat and has already been resolved on the board. Treat the result as authoritative and do not replay or restart the fight.
 </traditional_combat>
+
+<lewd_combat>
+LEWD COMBAT (SECONDARY)
+When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene.
+After calling, wait for the board's result and do not resolve or replay the scene.
+</lewd_combat>
 
 <end_of_output_footer>
 ALWAYS end every output (even after tool chains) with:

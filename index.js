@@ -5,7 +5,7 @@ import { createEmptySkillRegistry } from './src/features/skill-registry/skill-re
 import { buildDirectPromptSystemPrompt, DIRECT_PROMPT_SYSTEM_MODES } from './src/state/direct-prompt-system.js';
 import { diffTextLines, diffHasChanges } from './prompt-diff.js';
 import { sendStateRequest, fetchOllamaModels, fetchOpenAIModels, testOpenAIConnection, getConnectionProfiles, getCurrentCompletionPreset, setCompletionPreset, syncCombatProfile, resetCombatProfileOverride, isCombatEngaged } from './llm-client.js';
-import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration, syncTraditionalCombatToolRegistration } from './narrative-hooks.js';
+import { getDiceToolName, getDiceCommandName, getDiceCommandAliases, doDiceRoll, registerDiceFunctionTool, syncLocationMappingRuntime, syncDiceFunctionToolForRngContext, registerDiceSlashCommand, installInterceptor, getNarrativeBlocks, onGenerationStarted, onGenerationEnded, onMapArchitectAssistantMessage, handleRelationshipSwipeChange, applyStateTrackerRelationshipCommands, resetRouterTick, getRouterTick, getMapUpdaterTick, resetRouterAutoTick, getRouterSchedulerInternals, makeRngQueue, buildRngBlock, RNG_QUEUE_LEN, syncTacticalCombatToolRegistration, syncTraditionalCombatToolRegistration, syncLewdCombatToolRegistration } from './narrative-hooks.js';
 import { deduplicateMemo, mergeMemo, computeDelta, escapeHtml, escapeRegex, highlightParens, cleanToolCallMessage, cleanMessageContent, getLastUserAction, buildLorebookContext, buildModulesInstructionText, buildModuleFormatInstruction, parseQuestsFromMemo, syncQuestsFromMemo, syncQuestsToMemo, writeQuestsToMemo, getQuestMood, extractCurrentTimeStr, stripArchivedQuestsFromMemo, stripCompletedQuestsFromMemo, applyQuestSyncAndStripMemo, isArchivedQuestStatus, removeArchivedQuest, parseInWorldTime, formatInWorldTime, sanitizeLorebookRecordContent, memoForTrackerContext, memoForGmContext } from './memo-processor.js';
 import { renderSubFieldByRule, tryRenderMarker, renderCustomBlockLine, stripMemoHtml, escapeHtmlWithColor, parseMemoBlocks, getPageSize, loadCollapsed, saveCollapsed, loadDetached, saveDetached, loadPartyCompact, savePartyCompact, blockToItems, renderMemoAsCards, renderTabModeView, renderBottomXpBar, renderQuestLog, renderLorebookTerminal, loadActiveTab, saveActiveTab, getTimeOfDayInfo, renderDayNightBadge, MARKER_TYPE_MAP, getMarkerLibraryKeys, loadBenchedExpanded, saveBenchedExpanded } from './renderer.js';
 import { unregisterLogQuestTool, checkQuestDeadlines, renderQuestsAsPlainText } from './quests.js';
@@ -6034,6 +6034,7 @@ export function buildSysprompt(rawText) {
         if (row.tag === 'CYOA_mode') return '';
         if (row.tag === 'tactical_combat' && !isTacticalCombatMode(s)) return '';
         if (row.tag === 'traditional_combat' && !isTraditionalCombatMode(s)) return '';
+        if (row.tag === 'lewd_combat' && !s.lewdCombatEnabled) return '';
         if (row.tag === 'combat') {
             if (isTacticalCombatMode(s)) {
                 return isEffectiveSectionEnabled('tactical_combat', s)
@@ -8270,6 +8271,7 @@ function organizeConnectionSettingsUI() {
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, onMapUpdaterUserMessage);
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTacticalCombatToolRegistration());
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTraditionalCombatToolRegistration());
+        if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncLewdCombatToolRegistration());
         if (event_types.MESSAGE_RECEIVED) eventSource.on(event_types.MESSAGE_RECEIVED, onMapArchitectAssistantMessage);
         const catchUpMapArchitectFence = () => {
             setTimeout(() => { void onMapArchitectAssistantMessage(undefined, 'normal'); }, 0);
@@ -8498,6 +8500,7 @@ function organizeConnectionSettingsUI() {
         syncTacticalCombatToolRegistration();
         syncTraditionalCombatToolRegistration();
         syncLocationMappingRuntime();
+        syncLewdCombatToolRegistration();
         registerDiceSlashCommand();
 
         // ─── Quest System ───
@@ -11163,6 +11166,7 @@ RULES:
             { key: 'CYOA_mode', id: 'rpg_sysprompt_mod_cyoa_mode' },
             { key: 'tactical_combat', id: 'rpg_sysprompt_mod_tactical_combat' },
             { key: 'traditional_combat', id: 'rpg_sysprompt_mod_traditional_combat' },
+            { key: 'lewd_combat', id: 'rpg_sysprompt_mod_lewd_combat' },
             { key: 'quests', id: 'rpg_sysprompt_mod_quests' },
         ];
         _syspromptModDefs.forEach(({ key, id }) => {
@@ -11203,6 +11207,9 @@ RULES:
                 }
                 if (key === 'traditional_combat') {
                     syncTraditionalCombatToolRegistration();
+                }
+                if (key === 'lewd_combat') {
+                    syncLewdCombatToolRegistration();
                 }
 
                 saveSettings();

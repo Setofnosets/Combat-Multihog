@@ -778,6 +778,8 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
             traditional_combat: true,
 
+            lewd_combat: true,
+
             dungeon_reality_and_hidden_mapping: true,
 
         },
