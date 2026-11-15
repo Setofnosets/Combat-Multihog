@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U7 complete; next: U8 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`, U6/Steps 6+7 `30463df`, U7/Steps 8+9 `ff1a7f1`)
+- **Status:** in progress — U8 complete; next: U9 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`, U6/Steps 6+7 `30463df`, U7/Steps 8+9 `ff1a7f1`, U8/Step 10 `8a3d05f` + Step 11 `051a8a7`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -439,6 +439,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): main-connection prose pass with beat sheets`
 
 ### 10. Outcome payload and narrator handoff
+- **Status:** ✅ Done — `8a3d05f` (feat(lewd-combat): lewd outcome payload and narrator context handoff)
 - **Files:** new `src/features/lewd-combat/lewd-combat-outcome.js`; modify `src/features/tactical-combat/tactical-combat-outcome.js` (add `kind:'lewd'` branch), `narrative-hooks.js` (result notice + `[LEWD_COMBAT_CONTEXT]`), `src/features/lewd-combat/lewd-combat-prompts.js`; tests `tests/lewd-combat-outcome.test.js`.
 - **Depends on:** Steps 8, 9
 - **Parallelizable:** no
@@ -454,6 +455,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): lewd outcome payload and narrator context handoff`
 
 ### 11. Narrator tool, sysprompt section, and runtime override
+- **Status:** ✅ Done — `051a8a7` (feat(lewd-combat): narrator tool, sysprompt section, and runtime override)
 - **Files:** `narrative-hooks.js`, `constants.js` (`RT_PROMPTS` + stock sysprompt), `index.js` (buildSysprompt gating), `game-systems.js` (toggle registry), `src/state/defaults.js` (`syspromptModules.lewd_combat`), `settings.html` (Narrator Configuration checkbox), `src/state/section-enabled.js` if needed; tests `tests/lewd-combat-tool.test.js`.
 - **Depends on:** Steps 1, 6, 10
 - **Parallelizable:** no
