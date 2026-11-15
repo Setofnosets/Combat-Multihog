@@ -71,9 +71,10 @@ describe('Lewd Combat narrator function tool', () => {
         expect(tool.parameters.type).toBe('object');
         expect(tool.parameters.required).toEqual([]);
         expect(Object.keys(tool.parameters.properties).sort()).toEqual([
-            'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
+            'controlMode', 'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
         ]);
         expect(tool.parameters.properties.mode.enum).toEqual(['duel', 'group', 'free-for-all']);
+        expect(tool.parameters.properties.controlMode.enum).toEqual(['auto', 'player-all', 'ai-others']);
         expect(tool.stealth).toBe(false);
         expect(typeof tool.action).toBe('function');
         expect(tool.formatMessage()).toMatch(/board is open/i);

@@ -17,6 +17,7 @@ import { LEWD_COMBAT_LABEL } from './lewd-combat-constants.js';
 import {
     applyLewdAction,
     createLewdEncounterState,
+    lewdParticipantControl,
     listLegalActions,
 } from './lewd-combat-engine.js';
 import {
@@ -58,6 +59,56 @@ export function resolveLewdStartMode(value) {
     return 'duel';
 }
 
+/**
+ * Normalize a participant-control policy. Unknown/missing values fall back to
+ * `auto`, so a stale or hand-edited setting can never break a start.
+ * @param {unknown} value
+ * @returns {'auto'|'player-all'|'ai-others'}
+ */
+export function resolveLewdControlMode(value) {
+    const key = text(value).toLowerCase().replace(/[_\s]+/g, '-');
+    if (key === 'player-all' || key === 'playerall' || key === 'all-player') return 'player-all';
+    if (key === 'ai-others' || key === 'aiothers' || key === 'others-ai') return 'ai-others';
+    return 'auto';
+}
+
+function normalizePlayerKeys(playerNames) {
+    // Callers that already hold a normalized set pass it straight through so a
+    // per-candidate resolve loop does not rebuild it for every candidate.
+    if (playerNames instanceof Set) return playerNames;
+    const keys = new Set();
+    for (const name of Array.isArray(playerNames) ? playerNames : []) {
+        const key = normalizeLewdName(name);
+        if (key) keys.add(key);
+    }
+    return keys;
+}
+
+/**
+ * Resolve who controls one roster candidate. Control is independent of `side`:
+ * `player-all` makes every participant player-controlled; `auto`/`ai-others`
+ * keep only party/player-persona names on the player side and hand every
+ * `[COMBAT]`, `[LEWD]`-only, session, or scene NPC to the AI. An explicit
+ * `control` on the candidate always wins. Never inferred from names alone.
+ *
+ * @param {object} entry
+ * @param {{ controlMode?: string, playerNames?: Iterable<string> }} [options]
+ * @returns {'player'|'ai'}
+ */
+export function resolveLewdParticipantControl(entry = {}, options = {}) {
+    if (entry?.control === 'player' || entry?.control === 'ai') return entry.control;
+    if (resolveLewdControlMode(options.controlMode) === 'player-all') return 'player';
+
+    const key = text(entry?.normalizedName) || normalizeLewdName(entry?.name);
+    const playerKeys = normalizePlayerKeys(options.playerNames);
+    if (key && playerKeys.has(key)) return 'player';
+
+    const sources = Array.isArray(entry?.sources) ? entry.sources : [];
+    if (sources.includes('party')) return 'player';
+    if (text(entry?.unit?.side).toLowerCase() === 'player') return 'player';
+    return 'ai';
+}
+
 function resolveChatId(collected, ctx, options) {
     const candidates = [
         options?.chatId,
@@ -83,6 +134,8 @@ function resolveChatId(collected, ctx, options) {
  *   memo: string,
  *   location: string,
  *   sceneExcerpt: string,
+ *   controlMode: 'auto'|'player-all'|'ai-others',
+ *   playerNames: string[],
  *   profiles: Record<string, object>,
  *   units: object[],
  *   candidates: object[],
@@ -92,6 +145,11 @@ function resolveChatId(collected, ctx, options) {
 export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const warnings = [];
     const memo = String(settings?.currentMemo || '');
+    const controlMode = resolveLewdControlMode(options.controlMode ?? settings?.lewdCombatControlMode);
+    const playerNames = new Set();
+    const personaKey = normalizeLewdName(ctx?.name1);
+    if (personaKey) playerNames.add(personaKey);
+    for (const key of normalizePlayerKeys(options.playerNames)) playerNames.add(key);
     let collected = null;
     try {
         collected = collectEncounterContext(settings, ctx, options);
@@ -135,6 +193,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const addCandidate = (entry) => {
         const key = entry.normalizedName;
         if (!key) return;
+        if (entry.control === 'player' || entry.control === 'ai') entry.controlExplicit = true;
         const existing = byKey.get(key);
         if (!existing) {
             byKey.set(key, entry);
@@ -151,6 +210,10 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
             existing.profile = entry.profile;
             existing.inferred = false;
             existing.roleSuggestion = entry.roleSuggestion;
+        }
+        if (entry.controlExplicit && !existing.controlExplicit) {
+            existing.control = entry.control;
+            existing.controlExplicit = true;
         }
         if (existing.unit?.side) existing.side = existing.unit.side;
         else if (entry.unit?.side) existing.side = entry.unit.side;
@@ -222,11 +285,24 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
         }
     }
 
+    // Control is resolved once the merged sources/units are final. An explicit
+    // control survives the merge; everything else follows the selected mode.
+    for (const candidate of candidates) {
+        candidate.control = candidate.controlExplicit
+            ? candidate.control
+            : resolveLewdParticipantControl(
+                { ...candidate, control: undefined },
+                { controlMode, playerNames },
+            );
+    }
+
     return {
         chatId,
         memo: sourceMemo,
         location,
         sceneExcerpt,
+        controlMode,
+        playerNames: [...playerNames],
         profiles,
         units,
         candidates,
@@ -240,15 +316,49 @@ function findCandidate(context, name) {
     return (context?.candidates || []).find(candidate => candidate.normalizedName === key) || null;
 }
 
-function seedForName(name, context, settings, spectator) {
+function seedControlFor(name, candidate, controlMode, playerNames, options = {}) {
+    if (candidate?.controlExplicit && (candidate.control === 'player' || candidate.control === 'ai')) {
+        return candidate.control;
+    }
+    // A candidate already carries the control resolved by `collectLewdContext`.
+    // Re-resolve only when the caller asks for a different mode or player list.
+    if (candidate
+        && (candidate.control === 'player' || candidate.control === 'ai')
+        && !options.playerNamesProvided
+        && resolveLewdControlMode(controlMode) === resolveLewdControlMode(options.contextControlMode)) {
+        return candidate.control;
+    }
+    if (candidate) {
+        return resolveLewdParticipantControl(
+            { ...candidate, control: undefined },
+            { controlMode, playerNames },
+        );
+    }
+    if (resolveLewdControlMode(controlMode) === 'player-all') return 'player';
+    const key = normalizeLewdName(name);
+    if (key && normalizePlayerKeys(playerNames).has(key)) return 'player';
+    // Unknown, session-only names belong to the AI unless the player list or
+    // the mode says otherwise. Never guess from the name itself.
+    return 'ai';
+}
+
+function seedForName(name, context, settings, spectator, options = {}) {
     const clean = text(name);
     if (!clean) return null;
+    const controlMode = options.controlMode ?? context?.controlMode ?? settings?.lewdCombatControlMode;
+    const playerNames = options.playerNames || context?.playerNames || [];
     const candidate = findCandidate(context, clean);
+    const control = seedControlFor(clean, candidate, controlMode, playerNames, {
+        contextControlMode: context?.controlMode,
+        playerNamesProvided: options.playerNamesProvided === true,
+    });
     if (candidate) {
         const unit = candidate.unit || null;
         return {
             name: candidate.name || clean,
             side: candidate.side || unit?.side || 'player',
+            control,
+            ai: control === 'ai',
             spectator: !!spectator,
             stats: unit?.stats || {},
             proficiency: Number(unit?.proficiency) || 0,
@@ -259,6 +369,8 @@ function seedForName(name, context, settings, spectator) {
     return {
         name: clean,
         side: 'player',
+        control,
+        ai: control === 'ai',
         spectator: !!spectator,
         stats: {},
         proficiency: 0,
@@ -269,22 +381,33 @@ function seedForName(name, context, settings, spectator) {
 /**
  * Build engine participant seeds from a collected context.
  *
- * Unknown names are allowed: they become inferred, unit-less players. The
+ * Unknown names are allowed: they become inferred, unit-less participants.
+ * Control follows `controlMode`/`playerNames`; unknown names are AI-controlled
+ * unless the mode is `player-all` or the name is explicitly a player. The
  * function throws when fewer than two non-spectator participants are selected —
  * that is a programming/selection error the caller must surface, not a board.
  *
  * @param {object} context
- * @param {{ participantNames?: string[], spectatorNames?: string[], mode?: string, settings?: object }} [options]
+ * @param {{ participantNames?: string[], spectatorNames?: string[], mode?: string, settings?: object, controlMode?: string, playerNames?: string[] }} [options]
  * @returns {object[]}
  */
 export function buildLewdParticipantSeeds(context, options = {}) {
     const settings = options.settings || {};
+    const controlMode = options.controlMode ?? context?.controlMode ?? settings.lewdCombatControlMode;
+    const explicitPlayerNames = Array.isArray(options.playerNames) ? options.playerNames : [];
+    const contextPlayerNames = Array.isArray(context?.playerNames) ? context.playerNames : [];
+    const playerNames = [...new Set([...explicitPlayerNames, ...contextPlayerNames])];
+    const seedOptions = {
+        controlMode,
+        playerNames,
+        playerNamesProvided: explicitPlayerNames.length > 0,
+    };
     const participants = [];
     const spectators = [];
     const seen = new Set();
 
     for (const name of options.participantNames || []) {
-        const seed = seedForName(name, context, settings, false);
+        const seed = seedForName(name, context, settings, false, seedOptions);
         if (!seed) continue;
         const key = normalizeLewdName(seed.name);
         if (!key || seen.has(key)) continue;
@@ -292,7 +415,7 @@ export function buildLewdParticipantSeeds(context, options = {}) {
         participants.push(seed);
     }
     for (const name of options.spectatorNames || []) {
-        const seed = seedForName(name, context, settings, true);
+        const seed = seedForName(name, context, settings, true, seedOptions);
         if (!seed) continue;
         const key = normalizeLewdName(seed.name);
         if (!key || seen.has(key)) continue;
@@ -484,12 +607,16 @@ export function canStartLewdEncounter(settings, chatId) {
  * @returns {{ state: object, context: object, warnings: string[], opening?: object }}
  */
 export function createLewdEncounterFromContext(settings = {}, ctx = {}, options = {}) {
-    const context = collectLewdContext(settings, ctx, options);
+    const controlMode = resolveLewdControlMode(options.controlMode ?? settings.lewdCombatControlMode);
+    const playerNames = Array.isArray(options.playerNames) ? options.playerNames : [];
+    const context = collectLewdContext(settings, ctx, { ...options, controlMode, playerNames });
     const seeds = buildLewdParticipantSeeds(context, {
         participantNames: options.participantNames,
         spectatorNames: options.spectatorNames,
         mode: options.mode,
         settings,
+        controlMode,
+        playerNames,
     });
     const seed = options.seed != null && options.seed !== ''
         ? String(options.seed)
@@ -499,6 +626,7 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
         seed,
         settings,
         mode: resolveLewdStartMode(options.mode),
+        controlMode,
         id: options.id != null ? String(options.id) : `lewd-${seed}`,
         techniques: options.techniques,
     });
@@ -524,13 +652,15 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
 }
 
 function openingActor(state) {
-    return (state?.participants || []).find(participant =>
-        !participant.spectator
-        && !participant.ai
-        && participant.side !== 'enemy'
-        && participant.side !== 'opponent'
+    const participants = state?.participants || [];
+    const eligible = participant => !participant.spectator
         && !participant.atMercy
-        && !participant.surrendered) || null;
+        && !participant.surrendered;
+    // Only a player-controlled participant may open the narrator-declared
+    // exchange. A legacy board without a control field is resolved through
+    // `ai`/side inside `lewdParticipantControl`.
+    return participants.find(participant =>
+        eligible(participant) && lewdParticipantControl(participant) === 'player') || null;
 }
 
 /**

@@ -1666,6 +1666,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'lewdCombatExplicitness',
     'lewdCombatDarkerThemes',
     'lewdCombatProseFrequency',
+    'lewdCombatControlMode',
     'lewdCombatRoundCap',
     'lewdCombatMaxPartners',
     'lewdCombatPostEncounterLatch',

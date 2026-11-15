@@ -9,10 +9,11 @@
 
 import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
-import { LEWD_POSTURES } from './lewd-combat-engine.js';
+import { LEWD_POSTURES, lewdParticipantControl } from './lewd-combat-engine.js';
 import { LEWD_ZONES } from './lewd-combat-profile.js';
 import { buildPairingMatrix, holdsOn } from './lewd-combat-pairing.js';
 import { LEWD_TECHNIQUE_CATEGORIES, listLegalActions } from './lewd-combat-techniques.js';
+import { resolveLewdControlMode } from './lewd-combat-context.js';
 
 const POSTURE_KEYS = ['lead', 'follow', 'switch'];
 const POSTURE_LABELS = { lead: 'Lead', follow: 'Follow', switch: 'Switch' };
@@ -36,6 +37,17 @@ function isOut(participant) {
 
 function isActive(participant) {
     return !!participant && !participant.spectator && !isOut(participant);
+}
+
+function candidateControl(candidate, controlMode) {
+    if (resolveLewdControlMode(controlMode) === 'player-all') return 'player';
+    if (candidate?.control === 'player' || candidate?.control === 'ai') return candidate.control;
+    if (candidate?.ai === true || candidate?.side === 'enemy' || candidate?.side === 'opponent') return 'ai';
+    return 'player';
+}
+
+function controlLabel(control) {
+    return control === 'ai' ? 'AI' : 'Player';
 }
 
 function pct(value, max) {
@@ -163,6 +175,7 @@ function renderStartScreen(view = {}, context = null) {
     const selected = arr(view.startSelected);
     const spectators = arr(view.spectatorSelected);
     const mode = text(view.startMode) || 'duel';
+    const controlMode = text(view.startControlMode) || 'auto';
     const error = text(view.error)
         ? `<p class="rt-lc-error" role="alert">${escapeHtml(view.error)}</p>`
         : '';
@@ -179,11 +192,13 @@ function renderStartScreen(view = {}, context = null) {
             ? '<span class="rt-lc-badge rt-lc-badge-inferred" title="No [LEWD] profile; pools inferred from stats">Inferred</span>'
             : '<span class="rt-lc-badge rt-lc-badge-profile" title="Explicit [LEWD] profile">Profile</span>';
         const side = text(candidate?.side) || 'player';
+        const control = candidateControl(candidate, controlMode);
+        const controlBadge = `<span class="rt-lc-badge rt-lc-badge-control" data-lc-control="${escapeHtml(control)}" title="${control === 'ai' ? 'Controlled by the local policy' : 'Controlled by the player'}">${controlLabel(control)}</span>`;
         return `<li class="rt-lc-start-row" data-lc-candidate="${escapeHtml(key)}">
             <span class="rt-lc-start-name" style="--rt-lc-side:${escapeHtml(sideColor(side))}">
                 ${escapeHtml(name)} <span class="rt-lc-start-side">${escapeHtml(sideLabel(side))}</span>
             </span>
-            <span class="rt-lc-start-badges">${profileNote}${source ? `<span class="rt-lc-badge">${escapeHtml(source)}</span>` : ''}</span>
+            <span class="rt-lc-start-badges">${controlBadge}${profileNote}${source ? `<span class="rt-lc-badge">${escapeHtml(source)}</span>` : ''}</span>
             <span class="rt-lc-start-picks">
                 <label class="rt-lc-check" title="Active participant">
                     <input type="checkbox" data-lc-start-participant value="${escapeHtml(name)}"${isParticipant ? ' checked' : ''} aria-label="Add ${escapeHtml(name)} as an active participant">
@@ -223,6 +238,13 @@ function renderStartScreen(view = {}, context = null) {
                         `<option value="${key}"${mode === key ? ' selected' : ''}>${escapeHtml(MODE_LABELS[key])}</option>`).join('')}
                 </select>
             </label>
+            <label class="rt-lc-field">Control
+                <select data-lc-start-control-mode aria-label="Who controls the participants">
+                    <option value="auto"${controlMode === 'auto' ? ' selected' : ''}>Auto (you and your party vs. AI for everyone else)</option>
+                    <option value="player-all"${controlMode === 'player-all' ? ' selected' : ''}>Player controls all participants</option>
+                    <option value="ai-others"${controlMode === 'ai-others' ? ' selected' : ''}>AI controls every non-party participant</option>
+                </select>
+            </label>
             <p class="rt-lc-tone">Tone: ${escapeHtml(tone)}${darker === undefined ? '' : ` · Darker themes ${darker ? 'on' : 'off'}`}. Change these in Settings → Combat.</p>
         </div>
         <div class="rt-lc-start-actions">
@@ -258,9 +280,10 @@ function renderCard(state, participant) {
     const inferred = profile.inferred
         ? '<span class="rt-lc-badge rt-lc-badge-inferred" title="No [LEWD] profile; pools inferred from stats">Inferred</span>'
         : '';
-    const ai = participant?.ai
+    const control = lewdParticipantControl(participant);
+    const controlChip = control === 'ai'
         ? '<span class="rt-lc-chip rt-lc-chip-ai" title="Controlled by the local policy">AI</span>'
-        : '';
+        : '<span class="rt-lc-chip rt-lc-chip-player" title="Controlled by the player">Player</span>';
 
     const stamina = Number(participant?.stamina) || 0;
     const maxStamina = Number(participant?.maxStamina) || 0;
@@ -273,7 +296,7 @@ function renderCard(state, participant) {
         <div class="rt-lc-card-head">
             <span class="rt-lc-name">${escapeHtml(participant?.name)}</span>
             <span class="rt-lc-card-side">${escapeHtml(sideLabel(side))}</span>
-            ${ai}${role}${inferred}${limits}
+            ${controlChip}${role}${inferred}${limits}
         </div>
         <div class="rt-lc-pools">
             <span class="rt-lc-stamina" title="Stamina ${stamina}/${maxStamina}">
@@ -306,7 +329,7 @@ function renderRail(state, participants) {
 function renderSpectatorRail(state, participants, view) {
     const spectators = participants.filter(participant => participant.spectator);
     const activePlayers = participants.filter(participant =>
-        !participant.spectator && !participant.ai && !isOut(participant));
+        lewdParticipantControl(participant) === 'player' && !participant.spectator && !isOut(participant));
     const rows = spectators.map(participant => `<li class="rt-lc-spectator-row">
         <span class="rt-lc-spectator-name">${escapeHtml(participant.name)}</span>
         <button type="button" class="rt-lc-btn rt-lc-join" data-lc-action="join" data-lc-unit-id="${escapeHtml(participant.id)}"
@@ -365,17 +388,18 @@ function renderMatrix(state) {
 
 function actorCandidates(state) {
     return (state?.participants || []).filter(participant =>
-        !participant.ai && !participant.spectator && !isOut(participant));
+        lewdParticipantControl(participant) === 'player' && !participant.spectator && !isOut(participant));
 }
 
 function pickActor(state, view) {
     const participants = state?.participants || [];
     const explicit = text(view?.actorId);
     const chosen = participants.find(participant => participant.id === explicit);
-    if (chosen && isActive(chosen) && !chosen.acted) return chosen;
+    const chosenEligible = chosen && lewdParticipantControl(chosen) === 'player' && isActive(chosen);
+    if (chosenEligible && !chosen.acted) return chosen;
     const eligible = actorCandidates(state);
     return eligible.find(participant => !participant.acted)
-        || (chosen && isActive(chosen) ? chosen : null)
+        || (chosenEligible ? chosen : null)
         || eligible[0]
         || null;
 }

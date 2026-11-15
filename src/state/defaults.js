@@ -286,6 +286,7 @@ export function buildDefaultSettings() {
         lewdCombatExplicitness: "explicit",
         lewdCombatDarkerThemes: false,
         lewdCombatProseFrequency: "per-exchange",
+        lewdCombatControlMode: "auto",
         lewdCombatRoundCap: 12,
         lewdCombatMaxPartners: 2,
         lewdCombatPostEncounterLatch: true,

@@ -68,6 +68,30 @@ const LOG_LIMIT = 100;
 const DEFAULT_ROUND_CAP = 12;
 const DEFAULT_MAX_PARTNERS = 2;
 
+function normalizeControlMode(value) {
+    const key = textValue(value).toLowerCase().replace(/[_\s]+/g, '-');
+    if (key === 'player-all' || key === 'playerall' || key === 'all-player') return 'player-all';
+    if (key === 'ai-others' || key === 'aiothers' || key === 'others-ai') return 'ai-others';
+    return 'auto';
+}
+
+/**
+ * Resolve a participant's control. `control` is authoritative; a legacy board
+ * that only carries `ai` (and maybe `side`) is read through those fields so the
+ * board, UI, and agent can never disagree. Exported because this is the single
+ * canonical fallback used by every consumer.
+ *
+ * @param {object} participant
+ * @returns {'player'|'ai'}
+ */
+export function lewdParticipantControl(participant) {
+    if (participant?.control === 'player' || participant?.control === 'ai') return participant.control;
+    if (participant?.ai === true) return 'ai';
+    if (participant?.ai === false) return 'player';
+    if (participant?.side === 'enemy' || participant?.side === 'opponent') return 'ai';
+    return 'player';
+}
+
 function clamp(value, min, max, fallback = min) {
     const number = Number(value);
     if (!Number.isFinite(number)) return fallback;
@@ -211,7 +235,7 @@ function normalizeProfile(raw, unit) {
     return normalizeLewdProfile(raw, { unit });
 }
 
-function buildParticipant(raw = {}, state, index) {
+function buildParticipant(raw = {}, state, index, controlMode = 'auto') {
     const name = String(raw.name || `Participant ${index + 1}`).trim().slice(0, 80);
     const profile = normalizeProfile(raw.profile, raw) || inferProfile(raw, {});
     const maxStamina = maxStaminaFromProfile(profile);
@@ -219,10 +243,16 @@ function buildParticipant(raw = {}, state, index) {
     const maxPoise = clamp(profile.maxPoise, 4, 16, 6);
     const spectator = raw.spectator === true;
     const stamina = clamp(raw.stamina ?? maxStamina, 0, maxStamina, maxStamina);
+    const mode = normalizeControlMode(controlMode);
+    let control;
+    if (raw.control === 'player' || raw.control === 'ai') control = raw.control;
+    else if (mode === 'player-all') control = 'player';
+    else control = raw.side === 'opponent' || raw.side === 'enemy' ? 'ai' : 'player';
     return {
         id: uniqueId(state, raw.id, name),
         name,
         side: String(raw.side || 'player'),
+        control,
         spectator,
         active: !spectator && stamina > 0,
         stats: raw.stats || raw.unit?.stats || {},
@@ -230,7 +260,7 @@ function buildParticipant(raw = {}, state, index) {
         initiativeBonus: Number(raw.initiativeBonus ?? raw.unit?.initiativeBonus ?? statModifier(raw, 'dex')) || 0,
         initiative: 0,
         tieBreak: 0,
-        ai: raw.ai === true || raw.side === 'opponent' || raw.side === 'enemy',
+        ai: control === 'ai',
         profile,
         stamina,
         maxStamina,
@@ -619,11 +649,13 @@ export function checkLewdEncounterEnd(state) {
 export function createLewdEncounterState(options = {}) {
     const settings = options.settings || {};
     const seed = String(options.seed ?? settings.lewdCombatSeed ?? 'lewd-combat');
+    const controlMode = normalizeControlMode(options.controlMode);
     const state = {
         format: LEWD_STATE_FORMAT,
         schemaVersion: LEWD_STATE_VERSION,
         id: String(options.id || ''),
         mode: LEWD_MODES.includes(options.mode) ? options.mode : 'duel',
+        controlMode,
         status: 'active',
         round: 1,
         roundCap: clamp(settings.lewdCombatRoundCap, 1, 60, DEFAULT_ROUND_CAP),
@@ -656,7 +688,7 @@ export function createLewdEncounterState(options = {}) {
 
     const input = Array.isArray(options.participants) ? options.participants : [];
     input.forEach((raw, index) => {
-        state.participants.push(buildParticipant(raw, state, index));
+        state.participants.push(buildParticipant(raw, state, index, controlMode));
     });
 
     for (const participant of state.participants) {
@@ -1106,7 +1138,7 @@ export function joinParticipant(state, raw = {}) {
     }
     // `state.maxPartners` caps how many partners a technique may engage (U4
     // pairing); the roster itself may hold additional spectators.
-    const participant = buildParticipant(raw, state, state.participants.length);
+    const participant = buildParticipant(raw, state, state.participants.length, state.controlMode);
     participant.joinRound = state.round;
     participant.acted = true;
     if (!participant.spectator) {
@@ -1153,7 +1185,7 @@ export function canLewdParticipantAct(state, unit) {
 
 function nextOpponentActor(state) {
     const pool = state.participants.filter(participant =>
-        isActive(participant) && (participant.ai || participant.side === 'opponent' || participant.side === 'enemy'));
+        isActive(participant) && lewdParticipantControl(participant) === 'ai');
     return pool.find(participant => !participant.acted) || null;
 }
 
@@ -1424,6 +1456,7 @@ export function hydrateLewdState(raw) {
     state.round = Math.max(1, Number(state.round) || 1);
     state.roundCap = Math.max(1, Number(state.roundCap) || DEFAULT_ROUND_CAP);
     state.maxPartners = Math.max(1, Number(state.maxPartners) || DEFAULT_MAX_PARTNERS);
+    state.controlMode = normalizeControlMode(state.controlMode);
     state.seed = String(state.seed ?? 'lewd-combat');
     state.rollCount = Math.max(0, Number(state.rollCount) || 0);
     state.techniques = Array.isArray(state.techniques) && state.techniques.length
@@ -1456,6 +1489,15 @@ export function hydrateLewdState(raw) {
         participant.atMercy = !!participant.atMercy || Number(participant.stamina) <= 0;
         participant.surrendered = !!participant.surrendered;
         participant.spectator = !!participant.spectator;
+        // Control is persisted, but a legacy board may only carry `ai`. Backfill
+        // from `ai` (then side) and re-mirror so the two never disagree.
+        if (participant.control !== 'player' && participant.control !== 'ai') {
+            if (participant.ai === true) participant.control = 'ai';
+            else if (participant.ai === false) participant.control = 'player';
+            else if (participant.side === 'enemy' || participant.side === 'opponent') participant.control = 'ai';
+            else participant.control = 'player';
+        }
+        participant.ai = participant.control === 'ai';
         participant.active = !participant.spectator && !participant.atMercy && !participant.surrendered;
         participant.maxStamina = clamp(participant.maxStamina, 1, 6, 2);
         participant.stamina = clamp(participant.stamina, 0, participant.maxStamina, participant.maxStamina);

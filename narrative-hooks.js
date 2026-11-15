@@ -1081,7 +1081,7 @@ export function registerLewdCombatTool() {
         registerFunctionTool({
             name: 'StartLewdCombat',
             displayName: 'Lewd Combat',
-            description: 'Open the Lewd Combat board for a player-initiated intimate scene. Call this once when the scene becomes intimate and the player initiates; do not call it for ordinary hostile combat, which stays on the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for this scene: the player\'s initiation is the trigger. Pass the participant names, any spectators, a short title, the location, a reason, the scene tone, and the mode. Pass openingTechnique/openingZone only when the player already declared a concrete opening act, and set mode to duel, group, or free-for-all. After calling, do not narrate or resolve the scene yourself; the board owns it and returns the authoritative aftermath.',
+            description: 'Open the Lewd Combat board for a player-initiated intimate scene. Call this once when the scene becomes intimate and the player initiates; do not call it for ordinary hostile combat, which stays on the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for this scene: the player\'s initiation is the trigger. Pass the participant names, any spectators, a short title, the location, a reason, the scene tone, and the mode. Pass openingTechnique/openingZone only when the player already declared a concrete opening act, and set mode to duel, group, or free-for-all. Pass controlMode only when the player stated who should be AI-controlled. After calling, do not narrate or resolve the scene yourself; the board owns it and returns the authoritative aftermath.',
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -1103,6 +1103,7 @@ export function registerLewdCombatTool() {
                     openingZone: { type: 'string', description: 'Optional body zone for the declared opening act.' },
                     tone: { type: 'string', description: 'Optional tone/explicitness for this scene, e.g. explicit, suggestive, or fade-to-black.' },
                     mode: { type: 'string', enum: ['duel', 'group', 'free-for-all'], description: 'Optional scene shape. Defaults to duel.' },
+                    controlMode: { type: 'string', enum: ['auto', 'player-all', 'ai-others'], description: 'Optional control policy. auto keeps the player and party on the player side and hands everyone else to the AI; player-all lets the player control every participant; ai-others hands every non-party participant to the AI.' },
                 },
                 required: [],
             },

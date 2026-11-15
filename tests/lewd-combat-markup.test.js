@@ -62,6 +62,10 @@ describe('lewd-combat-markup', () => {
         expect(html).toContain('data-lc-start-participant');
         expect(html).toContain('data-lc-start-spectator');
         expect(html).toContain('data-lc-start-mode');
+        expect(html).toContain('data-lc-start-control-mode');
+        expect(html).toContain('value="auto"');
+        expect(html).toContain('value="player-all"');
+        expect(html).toContain('value="ai-others"');
         expect(html).toContain('data-lc-action="start"');
         expect(html).toContain('value="Aria"');
         expect(html).not.toContain('data-tc-cell');
@@ -200,6 +204,57 @@ describe('lewd-combat-markup', () => {
         expect(html).toContain('data-lc-prose-source="fallback"');
         expect(html.indexOf('Beat number 1.')).toBeLessThan(html.indexOf('Beat number 3.'));
         expect(html).toContain('rt-lc-log');
+    });
+
+    it('renders the control chip from control with a legacy ai fallback', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', profile: profile('Bran') },
+        ]);
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+
+        const aria = state.participants.find(participant => participant.name === 'Aria');
+        const bran = state.participants.find(participant => participant.name === 'Bran');
+        expect(aria.control).toBe('player');
+        expect(bran.control).toBe('ai');
+        expect(html).toContain('rt-lc-chip-player');
+        expect(html).toContain('rt-lc-chip-ai');
+
+        // A participant whose control is player must never be labelled AI even
+        // when its legacy side is hostile.
+        const overridden = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', control: 'player', profile: profile('Bran') },
+        ]);
+        const card = buildLewdCombatMarkup(overridden, {})
+            .split('data-lc-unit-id=')
+            .find(chunk => chunk.includes('Bran'));
+        expect(card).toBeTruthy();
+        expect(card).toContain('rt-lc-chip-player');
+        expect(card).not.toContain('rt-lc-chip-ai');
+    });
+
+    it('previews the start control badges and shows Player for every row under player-all', () => {
+        const candidates = [
+            { name: 'Aria', normalizedName: 'aria', side: 'player', sources: ['party'], control: 'player', profile: profile('Aria') },
+            { name: 'Nyx', normalizedName: 'nyx', side: 'player', sources: ['lewd'], control: 'ai', profile: profile('Nyx') },
+        ];
+
+        const auto = buildLewdCombatMarkup(null, {
+            startOpen: true,
+            startCandidates: candidates,
+            startControlMode: 'auto',
+        });
+        expect(auto).toContain('data-lc-control="player"');
+        expect(auto).toContain('data-lc-control="ai"');
+
+        const playerAll = buildLewdCombatMarkup(null, {
+            startOpen: true,
+            startCandidates: candidates,
+            startControlMode: 'player-all',
+        });
+        expect(playerAll).toContain('data-lc-control="player"');
+        expect(playerAll).not.toContain('data-lc-control="ai"');
     });
 
     it('exports the UI lifecycle functions without touching the DOM at import', () => {

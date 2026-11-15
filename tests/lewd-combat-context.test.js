@@ -9,6 +9,7 @@ import {
     createLewdEncounterFromContext,
     isLewdStartLatched,
     markLewdResolutionDelivered,
+    resolveLewdControlMode,
     resolveLewdStartMode,
 } from '../src/features/lewd-combat/lewd-combat-context.js';
 import {
@@ -35,6 +36,23 @@ Enemies:
 
 [LEWD]
 - Aria: role=switch | stamina=4/4 | sensitivity=neck:high | likes=praise | limits=marking
+- Nyx: role=dominant | stamina=3/3 | limits=breath play
+[/LEWD]`;
+
+// A scene with no `[COMBAT]`: `[COMBAT]` is the only hostile roster source, so
+// the only hostile-ish name here is a `[LEWD]`-only NPC.
+const MEMO_NO_COMBAT = `[CHARACTER]
+Aria: 24/24 HP | AC 14
+Attr: STR 10 DEX 14 CON 12 INT 10 WIS 12 CHA 16
+[/CHARACTER]
+
+[PARTY]
+- Bran: 18/18 HP | AC 13
+Attr: STR 10 DEX 12 CON 10 INT 10 WIS 14 CHA 10
+[/PARTY]
+
+[LEWD]
+- Aria: role=switch | stamina=4/4 | limits=marking
 - Nyx: role=dominant | stamina=3/3 | limits=breath play
 [/LEWD]`;
 
@@ -105,6 +123,7 @@ describe('lewd-combat-context', () => {
         expect(goblin).toBeTruthy();
         expect(goblin.side).toBe('enemy');
         expect(goblin.sources).toContain('combat');
+        expect(goblin.control).toBe('ai');
 
         // A profile that is absent from [PARTY]/[COMBAT] is still a candidate.
         const nyx = candidate(context, 'Nyx');
@@ -113,6 +132,149 @@ describe('lewd-combat-context', () => {
         expect(nyx.side).toBe('player');
         expect(nyx.sources).toContain('lewd');
         expect(nyx.profile.inferred).toBe(false);
+        // A `[LEWD]`-only NPC is AI-controlled even though its side is player.
+        expect(nyx.control).toBe('ai');
+
+        // Party/character names stay player-controlled.
+        expect(aria.control).toBe('player');
+        expect(bran.control).toBe('player');
+    });
+
+    it('resolves control modes without [COMBAT] and never infers control from gender', () => {
+        expect(resolveLewdControlMode('player-all')).toBe('player-all');
+        expect(resolveLewdControlMode('ai-others')).toBe('ai-others');
+        expect(resolveLewdControlMode('AUTO')).toBe('auto');
+        expect(resolveLewdControlMode('nonsense')).toBe('auto');
+        expect(resolveLewdControlMode()).toBe('auto');
+
+        const settings = makeSettings({ currentMemo: MEMO_NO_COMBAT });
+        const ctx = { chatId: 'no-combat-chat' };
+
+        const auto = collectLewdContext(settings, ctx);
+        expect(candidate(auto, 'Aria').control).toBe('player');
+        expect(candidate(auto, 'Bran').control).toBe('player');
+        expect(candidate(auto, 'Nyx').control).toBe('ai');
+
+        const playerAll = collectLewdContext(settings, ctx, { controlMode: 'player-all' });
+        expect(candidate(playerAll, 'Aria').control).toBe('player');
+        expect(candidate(playerAll, 'Bran').control).toBe('player');
+        expect(candidate(playerAll, 'Nyx').control).toBe('player');
+
+        const aiOthers = collectLewdContext(settings, ctx, { controlMode: 'ai-others' });
+        expect(candidate(aiOthers, 'Aria').control).toBe('player');
+        expect(candidate(aiOthers, 'Bran').control).toBe('player');
+        expect(candidate(aiOthers, 'Nyx').control).toBe('ai');
+
+        // A `[COMBAT]` enemy is AI-controlled under auto; `player-all` puts every
+        // participant, including that enemy, under the player's control.
+        const combat = collectLewdContext(makeSettings(), ctx);
+        expect(candidate(combat, 'Goblin').control).toBe('ai');
+        const combatAll = collectLewdContext(makeSettings(), ctx, { controlMode: 'player-all' });
+        expect(candidate(combatAll, 'Goblin').control).toBe('player');
+    });
+
+    it('keeps the player persona on the player side and treats unknown session names as AI', () => {
+        const settings = makeSettings({ currentMemo: MEMO_NO_COMBAT });
+        const context = collectLewdContext(settings, { chatId: 'session-chat', name1: 'Aria' });
+        expect(candidate(context, 'Aria').control).toBe('player');
+
+        const auto = buildLewdParticipantSeeds(context, {
+            participantNames: ['Aria', 'Stranger'],
+            settings,
+        });
+        const stranger = auto.find(seed => seed.name === 'Stranger');
+        expect(stranger.control).toBe('ai');
+        expect(stranger.ai).toBe(true);
+
+        const aiOthers = buildLewdParticipantSeeds(context, {
+            participantNames: ['Aria', 'Stranger'],
+            settings,
+            controlMode: 'ai-others',
+        });
+        expect(aiOthers.find(seed => seed.name === 'Stranger').control).toBe('ai');
+
+        const playerAll = buildLewdParticipantSeeds(context, {
+            participantNames: ['Aria', 'Stranger'],
+            settings,
+            controlMode: 'player-all',
+        });
+        expect(playerAll.find(seed => seed.name === 'Stranger').control).toBe('player');
+        expect(playerAll.find(seed => seed.name === 'Stranger').ai).toBe(false);
+
+        // A narrator-supplied explicit player list keeps a known name on the
+        // player side even when the memo has no party sheet for it.
+        const explicitPlayers = buildLewdParticipantSeeds(context, {
+            participantNames: ['Aria', 'Stranger'],
+            settings,
+            playerNames: ['Stranger'],
+        });
+        expect(explicitPlayers.find(seed => seed.name === 'Stranger').control).toBe('player');
+    });
+
+    it('stores the control mode on the board and keeps a combat enemy AI-controlled', () => {
+        const result = createLewdEncounterFromContext(
+            makeSettings(),
+            { chatId: 'mode-chat' },
+            { participantNames: ['Aria', 'Nyx'], seed: 'mode-seed', controlMode: 'auto' },
+        );
+        expect(result.state.controlMode).toBe('auto');
+        const aria = result.state.participants.find(participant => participant.name === 'Aria');
+        const nyx = result.state.participants.find(participant => participant.name === 'Nyx');
+        expect(aria.control).toBe('player');
+        expect(aria.ai).toBe(false);
+        expect(nyx.control).toBe('ai');
+        expect(nyx.ai).toBe(true);
+
+        const all = createLewdEncounterFromContext(
+            makeSettings(),
+            { chatId: 'mode-chat-2' },
+            { participantNames: ['Aria', 'Nyx'], seed: 'mode-seed-2', controlMode: 'player-all' },
+        );
+        expect(all.state.controlMode).toBe('player-all');
+        expect(all.state.participants.every(participant => participant.control === 'player')).toBe(true);
+
+        // A settings-level default is honoured when no explicit mode is passed.
+        const fromSettings = createLewdEncounterFromContext(
+            makeSettings({ lewdCombatControlMode: 'ai-others' }),
+            { chatId: 'mode-chat-3' },
+            { participantNames: ['Aria', 'Nyx'], seed: 'mode-seed-3' },
+        );
+        expect(fromSettings.state.controlMode).toBe('ai-others');
+    });
+
+    it('lets only a player-controlled participant open a narrator-declared exchange', () => {
+        // Under `auto` both Goblin ([COMBAT]) and Nyx ([LEWD]-only) are AI, so
+        // there is no player-controlled actor to open the exchange.
+        const auto = createLewdEncounterFromContext(
+            makeSettings(),
+            { chatId: 'opening-chat' },
+            {
+                participantNames: ['Goblin', 'Nyx'],
+                seed: 'opening-seed',
+                techniques: OPEN_TECHNIQUES,
+            },
+        );
+        const blocked = applyLewdOpeningExchange(auto.state, { openingTechnique: 'sure-kiss' });
+        expect(blocked.ok).toBe(false);
+        expect(blocked.reason).toMatch(/no player participant/i);
+        expect(auto.state.log).toHaveLength(0);
+
+        // `player-all` puts everyone under player control, so the same opening
+        // is legal and resolved by a player-controlled participant.
+        const all = createLewdEncounterFromContext(
+            makeSettings(),
+            { chatId: 'opening-chat-2' },
+            {
+                participantNames: ['Goblin', 'Nyx'],
+                seed: 'opening-seed-2',
+                controlMode: 'player-all',
+                techniques: OPEN_TECHNIQUES,
+            },
+        );
+        const opened = applyLewdOpeningExchange(all.state, { openingTechnique: 'sure-kiss' });
+        expect(opened.ok).toBe(true);
+        const opener = all.state.participants.find(participant => participant.id === opened.beat?.actor?.id);
+        expect(opener?.control).toBe('player');
     });
 
     it('starts with two named participants and puts a spectator off the acting roster', () => {

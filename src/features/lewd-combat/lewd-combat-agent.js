@@ -31,6 +31,9 @@ import {
 import {
     isOverwhelmed,
 } from './lewd-combat-states.js';
+import {
+    lewdParticipantControl,
+} from './lewd-combat-engine.js';
 
 export const LEWD_AGENT_MAX_ATTEMPTS = 2;
 
@@ -213,6 +216,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             id: actor?.id || '',
             name: actor?.name || '',
             side: actor?.side || '',
+            control: lewdParticipantControl(actor),
             role: actor?.profile?.role || 'switch',
             stance: actor?.stance?.label || actor?.stance?.id || null,
             stamina: actor?.stamina ?? 0,
@@ -227,6 +231,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             id: participant.id,
             name: participant.name,
             side: participant.side,
+            control: lewdParticipantControl(participant),
             spectator: !!participant.spectator,
             atMercy: !!participant.atMercy,
             surrendered: !!participant.surrendered,

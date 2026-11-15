@@ -17,6 +17,7 @@ import {
     applyLewdAction,
     hydrateLewdState,
     lewdBeatId,
+    lewdParticipantControl,
     listLegalActions,
     markLewdBeatsNarrated,
     resolveLewdOpponentTurn,
@@ -32,6 +33,7 @@ import {
     canStartLewdEncounter,
     collectLewdContext,
     createLewdEncounterFromContext,
+    resolveLewdControlMode,
     resolveLewdStartMode,
 } from './lewd-combat-context.js';
 import {
@@ -72,6 +74,7 @@ const ui = {
         startSelected: [],
         spectatorSelected: [],
         startMode: 'duel',
+        startControlMode: 'auto',
         tone: '',
         darkerThemes: false,
         actorId: '',
@@ -152,9 +155,17 @@ function isOut(participant) {
     return !!participant?.atMercy || !!participant?.surrendered;
 }
 
+function isPlayerControlled(participant) {
+    return lewdParticipantControl(participant) === 'player';
+}
+
+function isAiControlled(participant) {
+    return lewdParticipantControl(participant) === 'ai';
+}
+
 function activePlayers(state) {
     return (state?.participants || []).filter(participant =>
-        !participant.ai && !participant.spectator && !isOut(participant));
+        isPlayerControlled(participant) && !participant.spectator && !isOut(participant));
 }
 
 function currentActor(state) {
@@ -163,10 +174,10 @@ function currentActor(state) {
     // Prefer an actor that still owes this round a turn. An explicit selection
     // is honoured only while it can actually act, so the board never dead-ends
     // on the participant who just resolved an exchange.
-    if (chosen && !chosen.spectator && !isOut(chosen) && !chosen.acted) return chosen;
+    if (chosen && isPlayerControlled(chosen) && !chosen.spectator && !isOut(chosen) && !chosen.acted) return chosen;
     const eligible = activePlayers(state);
     return eligible.find(participant => !participant.acted)
-        || (chosen && !chosen.spectator && !isOut(chosen) ? chosen : null)
+        || (chosen && isPlayerControlled(chosen) && !chosen.spectator && !isOut(chosen) ? chosen : null)
         || eligible[0]
         || null;
 }
@@ -208,7 +219,7 @@ async function runAiTurns() {
     try {
         while (state.status === 'active' && iterations < MAX_AI_ITERATIONS) {
             const actor = (state.participants || []).find(participant =>
-                participant.ai && !participant.acted && !participant.spectator && !isOut(participant));
+                isAiControlled(participant) && !participant.acted && !participant.spectator && !isOut(participant));
             if (!actor) break;
             const techniqueCount = arr(state.techniques).length;
             let result = null;
@@ -533,6 +544,7 @@ export async function startLewdCombatFromNarrator(args = {}) {
             openingZone: args.openingZone,
             tone: args.tone || settings.lewdCombatExplicitness,
             mode: args.mode,
+            controlMode: resolveLewdControlMode(args.controlMode ?? settings.lewdCombatControlMode),
         });
 
         resetProseQueue();
@@ -541,6 +553,7 @@ export async function startLewdCombatFromNarrator(args = {}) {
         ui.view.startCandidates = null;
         ui.view.startSelected = [];
         ui.view.spectatorSelected = [];
+        ui.view.startControlMode = resolveLewdControlMode(settings.lewdCombatControlMode);
         ui.view.actorId = '';
         ui.view.techniqueId = '';
         ui.view.posture = 'switch';
@@ -565,7 +578,14 @@ export async function startLewdCombatFromNarrator(args = {}) {
 function loadStartCandidates() {
     try {
         const settings = getSettings() || {};
-        const context = collectLewdContext(settings, safeContext(), {});
+        if (!ui.view.startCandidates) {
+            // First load of the dialog follows the saved default; a user's later
+            // selection in the dialog is preserved across a re-collect.
+            ui.view.startControlMode = resolveLewdControlMode(settings.lewdCombatControlMode);
+        }
+        const context = collectLewdContext(settings, safeContext(), {
+            controlMode: resolveLewdControlMode(ui.view.startControlMode),
+        });
         ui.view.startCandidates = context.candidates || [];
         ui.view.tone = text(settings.lewdCombatExplicitness) || 'explicit';
         ui.view.darkerThemes = !!settings.lewdCombatDarkerThemes;
@@ -668,6 +688,9 @@ async function startFromOverlay() {
     const participantNames = checkedValues(ui.overlay, 'data-lc-start-participant');
     const spectatorNames = checkedValues(ui.overlay, 'data-lc-start-spectator');
     const mode = ui.overlay?.querySelector('[data-lc-start-mode]')?.value || ui.view.startMode;
+    const controlMode = resolveLewdControlMode(
+        ui.overlay?.querySelector('[data-lc-start-control-mode]')?.value || ui.view.startControlMode,
+    );
     ui.starting = true;
     resetProseQueue();
     try {
@@ -675,6 +698,7 @@ async function startFromOverlay() {
             participantNames,
             spectatorNames,
             mode,
+            controlMode,
             tone: settings.lewdCombatExplicitness,
         });
         ui.view.startOpen = false;
@@ -775,10 +799,11 @@ async function simpleAction(type) {
     }
     const previousRound = state.round;
     const actor = currentActor(state)
-        || state.participants.find(participant => !participant.spectator)
-        || state.participants[0];
+        || state.participants.find(participant =>
+            isPlayerControlled(participant) && !participant.spectator && !isOut(participant))
+        || null;
     if (!actor) {
-        setError('No participant can act.');
+        setError('No player participant can act.');
         render();
         return;
     }
@@ -815,7 +840,9 @@ function stopEncounter() {
     ui.view.busy = true;
     try {
         const actor = state.participants?.find(participant =>
-            !participant.spectator && !isOut(participant)) || state.participants?.[0];
+            isPlayerControlled(participant) && !participant.spectator && !isOut(participant))
+            || state.participants?.find(participant => !participant.spectator && !isOut(participant))
+            || state.participants?.[0];
         let result = null;
         if (actor) result = applyLewdAction(state, { type: 'stop', unitId: actor.id });
         if (!result?.ok) {
@@ -996,6 +1023,13 @@ function onOverlayChange(event) {
             ui.view.startMode = resolveLewdStartMode(target.value);
             return;
         }
+        if (target.matches('[data-lc-start-control-mode]')) {
+            ui.view.startControlMode = resolveLewdControlMode(target.value);
+            // Re-collect so the per-candidate Player/AI preview follows the mode.
+            loadStartCandidates();
+            render();
+            return;
+        }
         if (target.matches('[data-lc-start-participant], [data-lc-start-spectator]')) {
             // Keep the draft in sync so a validation re-render (fewer than two
             // participants, gate failure) does not silently clear the boxes.
@@ -1100,6 +1134,7 @@ export function resetLewdCombatEncounter() {
     ui.view.showDebug = false;
     ui.view.error = '';
     ui.view.outcomeDismissed = false;
+    ui.view.startControlMode = resolveLewdControlMode(settings?.lewdCombatControlMode);
     ui.view.startOpen = true;
     notifyChanged();
     if (!ui.view.startCandidates) loadStartCandidates();

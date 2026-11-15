@@ -729,6 +729,119 @@ describe('opponent turn resolution', () => {
     });
 });
 
+describe('participant control', () => {
+    it('honours an explicit control and mirrors it into the legacy ai flag', () => {
+        const state = createLewdEncounterState({
+            seed: 'control-seed',
+            participants: [
+                { id: 'aria', name: 'Aria', side: 'player', control: 'ai', profile: profile('Aria') },
+                { id: 'bran', name: 'Bran', side: 'enemy', control: 'player', profile: profile('Bran') },
+            ],
+        });
+
+        const aria = state.participants.find(participant => participant.id === 'aria');
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        expect(aria.control).toBe('ai');
+        expect(aria.ai).toBe(true);
+        expect(bran.control).toBe('player');
+        expect(bran.ai).toBe(false);
+    });
+
+    it('derives the default from side under auto and lets player-all override it', () => {
+        const participants = [
+            { id: 'aria', name: 'Aria', side: 'player', profile: profile('Aria') },
+            { id: 'goblin', name: 'Goblin', side: 'enemy', profile: profile('Goblin') },
+        ];
+
+        const auto = createLewdEncounterState({ seed: 'control-auto', participants });
+        expect(auto.controlMode).toBe('auto');
+        expect(auto.participants.find(p => p.id === 'aria').control).toBe('player');
+        expect(auto.participants.find(p => p.id === 'goblin').control).toBe('ai');
+
+        const playerAll = createLewdEncounterState({
+            seed: 'control-all',
+            controlMode: 'player-all',
+            participants,
+        });
+        expect(playerAll.controlMode).toBe('player-all');
+        expect(playerAll.participants.every(participant => participant.control === 'player')).toBe(true);
+        expect(playerAll.participants.every(participant => participant.ai === false)).toBe(true);
+
+        // Unknown/missing mode falls back to auto rather than throwing.
+        const garbage = createLewdEncounterState({ seed: 'control-garbage', controlMode: 'nonsense', participants });
+        expect(garbage.controlMode).toBe('auto');
+    });
+
+    it('lets joinParticipant take an explicit control and honour the board mode', () => {
+        const state = fixture();
+        const explicit = joinParticipant(state, {
+            name: 'Cora',
+            side: 'player',
+            control: 'ai',
+            profile: profile('Cora', { maxStamina: 2 }),
+        });
+        expect(explicit.ok).toBe(true);
+        expect(explicit.participant.control).toBe('ai');
+        expect(explicit.participant.ai).toBe(true);
+
+        const derived = joinParticipant(state, {
+            name: 'Dax',
+            side: 'enemy',
+            profile: profile('Dax', { maxStamina: 2 }),
+        });
+        expect(derived.participant.control).toBe('ai');
+        expect(derived.participant.ai).toBe(true);
+    });
+
+    it('refuses to run an AI turn for a player-controlled participant', () => {
+        const state = fixture({
+            bran: { participant: { control: 'player' } },
+        });
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        expect(bran.control).toBe('player');
+        expect(bran.ai).toBe(false);
+
+        const result = resolveLewdOpponentTurn(state, [{
+            unitId: 'bran',
+            type: 'technique',
+            techniqueId: 'neck-kiss',
+            targetIds: ['aria'],
+            zone: 'neck',
+        }], { techniques: TECHNIQUES });
+
+        expect(result.ok).toBe(false);
+        expect(result.reason).toMatch(/no opponent/i);
+        expect(state.actionLog).toHaveLength(0);
+        expect(state.log).toHaveLength(0);
+
+        // Making the same participant AI-controlled restores the AI turn.
+        const aiState = fixture({ bran: { participant: { control: 'ai' } } });
+        const aiResult = resolveLewdOpponentTurn(aiState, [], { techniques: TECHNIQUES });
+        expect(aiResult.ok).toBe(true);
+        expect(aiState.actionLog.at(-1).source).toBe('ai');
+    });
+
+    it('preserves control on hydrate and backfills a legacy ai-only board', () => {
+        const state = fixture();
+        const hydrated = hydrateLewdState(serializeLewdState(state));
+        expect(hydrated.controlMode).toBe('auto');
+        expect(hydrated.participants.find(p => p.id === 'aria').control).toBe('player');
+        expect(hydrated.participants.find(p => p.id === 'bran').control).toBe('ai');
+
+        // A pre-control board carries only `ai`; hydrate must mirror it.
+        const legacy = serializeLewdState(state);
+        legacy.controlMode = undefined;
+        for (const participant of legacy.participants) delete participant.control;
+        legacy.participants.find(p => p.id === 'aria').ai = false;
+        legacy.participants.find(p => p.id === 'bran').ai = true;
+        const restored = hydrateLewdState(legacy);
+        expect(restored.controlMode).toBe('auto');
+        expect(restored.participants.find(p => p.id === 'aria').control).toBe('player');
+        expect(restored.participants.find(p => p.id === 'bran').control).toBe('ai');
+        expect(restored.participants.find(p => p.id === 'bran').ai).toBe(true);
+    });
+});
+
 describe('storage', () => {
     it('round-trips seed, roll count, profiles, holds, stances, and logs', () => {
         const state = fixture();
