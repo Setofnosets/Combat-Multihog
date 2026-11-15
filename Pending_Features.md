@@ -137,11 +137,14 @@ following are intentionally not built yet and should be designed before coding:
 
 - **Multi-partner expansion** — the engine supports `duel`, `group`, and
   `free-for-all` with a configurable partner cap, but the board UI is optimised
-  for 1–4 active participants. Larger scenes need a compact roster and a
+  for 1–4 active participants. Scenes beyond four need a compact roster and a
   scalable pairing matrix.
 - **AI director** — an optional director that chooses scene tone, pacing, and
   encounter shape from the narrative context, strictly inside the existing
   legal-action and consent contract.
+- **Action-catalog follow-ups** — richer act transitions (position changes
+  authored as data, multi-step bondage progressions), a curated per-system act
+  pack, and UI grouping/filters beyond category + pair follow-ups.
 - **Relationship writeback** — optional affinity/relationship deltas after a
   scene. It is deliberately not automatic and must never rewrite relationship
   tiers on its own.
