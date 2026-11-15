@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** in progress — Phase 1 (B1-B5) and Phase 2 (A1-A4) implemented and green; next: A5
+- **Status:** in progress — Phase 1 (B1-B5) and A1-A5 implemented and green; next: A6
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
@@ -233,6 +233,7 @@
 - **Risk:** high (AI + catalog + cache)
 - **Model / Effort:** implementer model #high
 - **Commit:** `feat(lewd-combat): infer anatomy-aware actions at encounter start and cache them`
+- **Status:** ✅ Done — fbe349e
 
 ### A6. Documentation, prompt polish, and integration coverage
 - **Files:** `docs/lewd-combat.md`, `constants.js` stock prompts, `CHANGELOG.md`, `Pending_Features.md`; tests `tests/lewd-combat-integration.test.js`, `tests/lewd-combat-consent.test.js`.
