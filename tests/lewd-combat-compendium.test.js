@@ -108,6 +108,67 @@ describe('technique compendium', () => {
         expect(grip.check.stat).toBe('str');
     });
 
+    it('parses explicit act fields and drops only the invalid line', () => {
+        const memo = `
+            [LEWD_TECHNIQUES]
+            - Press | technique | lead | zones: genitals | acttype: penetration | actrole: give | requiresact: penetration | appliesact: penetration | appliesintensity: 2
+            - Receive | technique | follow | zones: genitals | acttype: oral | actrole: receive | requiresanatomy: bondage-gear | requiresskill: Bondage | appliesact: none
+            - Broken Line | technique | lead | zones: genitals | acttype: nonsense
+            [/LEWD_TECHNIQUES]
+        `;
+        const parsed = parseLewdTechniqueBlock(memo);
+        expect(parsed.entries).toHaveLength(2);
+        expect(parsed.diagnostics).toHaveLength(1);
+        expect(parsed.diagnostics[0]).toContain('Unknown actType');
+        const press = parsed.entries.find(entry => entry.id === 'press');
+        expect(press).toMatchObject({ actType: 'penetration', actRole: 'give' });
+        expect(press.requires).toMatchObject({ act: 'penetration' });
+        expect(press.applies.act).toMatchObject({
+            id: 'penetration', type: 'penetration', role: 'give', intensity: 2,
+        });
+        const receive = parsed.entries.find(entry => entry.id === 'receive');
+        expect(receive.applies.act).toBeNull();
+        expect(receive.requires).toMatchObject({
+            anatomy: { all: ['bondage-gear'], any: [] },
+            skill: ['bondage'],
+        });
+    });
+
+    it('ignores a bare appliesact flag and rejects a non-numeric intensity', () => {
+        const memo = `
+            [LEWD_TECHNIQUES]
+            - Flagged | technique | lead | zones: genitals | appliesact
+            - Bad Intensity | technique | lead | zones: genitals | appliesact: penetration | appliesintensity: strong
+            [/LEWD_TECHNIQUES]
+        `;
+        const parsed = parseLewdTechniqueBlock(memo);
+        expect(parsed.entries).toHaveLength(1);
+        expect(parsed.entries[0].id).toBe('flagged');
+        expect(parsed.entries[0].applies.act).toBeUndefined();
+        expect(parsed.diagnostics).toHaveLength(1);
+        expect(parsed.diagnostics[0]).toContain('Invalid act intensity');
+    });
+
+    it('keeps explicit acts through the catalog and cache round-trips', () => {
+        const catalog = buildLewdTechniqueCatalog({});
+        expect(catalog.diagnostics).toEqual([]);
+        expect(catalog.byId.withdraw.applies.act).toBeNull();
+        expect(catalog.byId['thrust-harder'].requires.act).toBe('penetration');
+        expect(catalog.byId['penetration-start'].applies.act).toMatchObject({
+            id: 'penetration', type: 'penetration', role: 'give',
+        });
+
+        const settings = {};
+        writeTechniqueCache(settings, compiledPayload({
+            actType: 'penetration',
+            applies: { act: { id: 'penetration' } },
+        }));
+        const cached = buildLewdTechniqueCatalog(settings);
+        expect(cached.byId['moonlit-kiss'].applies.act).toMatchObject({
+            id: 'penetration', type: 'penetration',
+        });
+    });
+
     it('applies the documented merge order (shipped → cache → JSON → block)', () => {
         const settings = {};
         writeTechniqueCache(settings, {
@@ -194,6 +255,25 @@ describe('one-time technique compiler', () => {
         });
         expect(result.ok).toBe(false);
         expect(result.error).toContain('offline');
+    });
+
+    it('accepts a valid explicit act payload and still rejects an invalid zone', () => {
+        const payload = compiledPayload({
+            actType: 'penetration',
+            actRole: 'give',
+            requires: { actType: 'penetration', anatomy: { any: ['penis'] } },
+            applies: { act: { id: 'penetration', intensity: 1 } },
+        });
+        const parsed = parseLewdCompilerResponse(payload);
+        expect(parsed.ok).toBe(true);
+        expect(parsed.technique).toMatchObject({ actType: 'penetration', actRole: 'give' });
+        expect(parsed.technique.applies.act).toMatchObject({
+            id: 'penetration', type: 'penetration', role: 'give', intensity: 1,
+        });
+
+        const rejected = parseLewdCompilerResponse(compiledPayload({ zones: ['flipper'] }));
+        expect(rejected.ok).toBe(false);
+        expect(rejected.error).toContain('Unknown zone');
     });
 
     it('parses fenced and prose-wrapped JSON responses', () => {

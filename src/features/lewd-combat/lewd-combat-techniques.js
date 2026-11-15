@@ -15,8 +15,18 @@
  *   check: { stat: 'cha'|..., accuracy: number },
  *   arousal: dice expression, poise: dice expression,
  *   staminaDrain: number,
- *   requires: { hold: string|null, stance: string|null, overwhelmed: boolean },
- *   applies: { status?: object, stance?: object },
+ *   actType: 'penetration'|'oral'|'manual'|'bondage'|'masturbation'|'other'|null,
+ *   actRole: 'give'|'receive'|'mutual'|null,
+ *   requires: {
+ *     hold: string|true|null, stance: string|null, overwhelmed: boolean,
+ *     act: string|null, actType: string|null, actRole: string|null,
+ *     anatomy: { all: string[], any: string[] }|null,
+ *     skill: string[]|null, trait: string[]|null, kink: string[]|null,
+ *   },
+ *   applies: {
+ *     status?: object, stance?: object,
+ *     act?: { id, type, role, intensity? }|null, // null clears the pair's act
+ *   },
  *   hold: { id, label, poiseBonus, accuracyBonus, escapeDC } | null,
  *   stance: { poiseBonus, accuracyBonus },
  *   uses: { max: number|null, recharge: string },
@@ -33,6 +43,7 @@
 import {
     DEFAULT_ZONE_SENSITIVITY,
     isBlockedByLimits,
+    normalizeLewdAnatomy,
     normalizeLewdName,
     normalizeLewdZone,
 } from './lewd-combat-profile.js';
@@ -48,6 +59,14 @@ export const LEWD_TECHNIQUE_POSTURES = Object.freeze(['lead', 'follow', 'switch'
 
 export const LEWD_TECHNIQUE_CHECK_STATS = Object.freeze(['str', 'dex', 'con', 'int', 'wis', 'cha']);
 
+/** Explicit act families. `other` covers acts that fit none of the rest. */
+export const LEWD_ACT_TYPES = Object.freeze([
+    'penetration', 'oral', 'manual', 'bondage', 'masturbation', 'other',
+]);
+
+/** Which side of an act the technique represents. */
+export const LEWD_ACT_ROLES = Object.freeze(['give', 'receive', 'mutual']);
+
 export const LEWD_TECHNIQUE_SCHEMA_VERSION = 1;
 
 export const DEFAULT_LEWD_TECHNIQUE = Object.freeze({
@@ -59,6 +78,8 @@ export const DEFAULT_LEWD_TECHNIQUE = Object.freeze({
     arousal: '0',
     poise: '0',
     staminaDrain: 0,
+    actType: null,
+    actRole: null,
     requires: { hold: null, stance: null, overwhelmed: false },
     applies: {},
     hold: null,
@@ -96,6 +117,74 @@ function splitList(value) {
         .split(/[,;]/)
         .map(item => item.trim())
         .filter(Boolean);
+}
+
+const REQUIREMENT_KEYS = [
+    'hold', 'stance', 'overwhelmed',
+    'act', 'actType', 'actRole', 'anatomy', 'skill', 'trait', 'kink',
+];
+const APPLICATION_KEYS = ['status', 'stance', 'act'];
+
+function lowerOrNull(value) {
+    const text = String(value ?? '').trim().toLowerCase();
+    return text || null;
+}
+
+/** Accept a string id/type or `{ id, type }` and return the lower-case key. */
+function actReference(value) {
+    if (value == null) return null;
+    if (typeof value === 'object') {
+        return lowerOrNull(value.id ?? value.type ?? '');
+    }
+    return lowerOrNull(value);
+}
+
+/**
+ * Normalize `requires.skill`/`trait`/`kink` to unique lower-case tokens.
+ * Returns null when nothing was supplied so the canonical shape stays stable.
+ */
+function requirementTokens(value) {
+    if (value == null || value === '') return null;
+    const tokens = [];
+    for (const item of asArray(value)) {
+        const parts = Array.isArray(item) ? item : String(item ?? '').split(/[,;]/);
+        for (const part of parts) {
+            const token = lowerOrNull(part);
+            if (token && !tokens.includes(token)) tokens.push(token);
+        }
+    }
+    return tokens.length ? tokens : null;
+}
+
+/**
+ * Normalize `requires.anatomy`: a string, a string array (all-of), or
+ * `{ all, any }`. Every tag must be a canonical anatomy tag.
+ */
+function requirementAnatomy(value, errors) {
+    if (value == null || value === '') return null;
+    const all = [];
+    const any = [];
+    const addTag = (tag, bucket) => {
+        const normalized = normalizeLewdAnatomy(tag);
+        if (!normalized) {
+            errors.push(`Unknown anatomy tag "${String(tag ?? '').trim()}".`);
+            return;
+        }
+        if (!bucket.includes(normalized)) bucket.push(normalized);
+    };
+    if (typeof value === 'string' || Array.isArray(value)) {
+        for (const tag of asArray(value)) addTag(tag, all);
+    } else if (typeof value === 'object') {
+        for (const key of Object.keys(value)) {
+            if (!['all', 'any'].includes(key)) errors.push(`Unknown anatomy requirement "${key}".`);
+        }
+        for (const tag of asArray(value.all)) addTag(tag, all);
+        for (const tag of asArray(value.any)) addTag(tag, any);
+    } else {
+        errors.push('requires.anatomy must be a string, a string array, or { all, any }.');
+    }
+    if (!all.length && !any.length) return null;
+    return { all, any };
 }
 
 function diceExpression(value, fallback = '0') {
@@ -189,11 +278,20 @@ export function validateLewdTechnique(raw) {
         errors.push(`staminaDrain must be a number (got "${raw.staminaDrain}").`);
     }
 
+    const actType = lowerOrNull(raw.actType);
+    if (actType && !LEWD_ACT_TYPES.includes(actType)) {
+        errors.push(`Unknown actType "${raw.actType}".`);
+    }
+    const actRole = lowerOrNull(raw.actRole);
+    if (actRole && !LEWD_ACT_ROLES.includes(actRole)) {
+        errors.push(`Unknown actRole "${raw.actRole}".`);
+    }
+
     const rawRequires = raw.requires && typeof raw.requires === 'object' && !Array.isArray(raw.requires)
         ? raw.requires
         : {};
     for (const key of Object.keys(rawRequires)) {
-        if (!['hold', 'stance', 'overwhelmed'].includes(key)) {
+        if (!REQUIREMENT_KEYS.includes(key)) {
             errors.push(`Unknown requirement "${key}".`);
         }
     }
@@ -205,12 +303,25 @@ export function validateLewdTechnique(raw) {
     const requiresStance = rawRequires.stance == null || rawRequires.stance === ''
         ? null
         : String(rawRequires.stance).trim();
+    const requiresAct = actReference(rawRequires.act);
+    const requiresActType = lowerOrNull(rawRequires.actType);
+    if (requiresActType && !LEWD_ACT_TYPES.includes(requiresActType)) {
+        errors.push(`Unknown actType "${rawRequires.actType}".`);
+    }
+    const requiresActRole = lowerOrNull(rawRequires.actRole);
+    if (requiresActRole && !LEWD_ACT_ROLES.includes(requiresActRole)) {
+        errors.push(`Unknown actRole "${rawRequires.actRole}".`);
+    }
+    const requiresAnatomy = requirementAnatomy(rawRequires.anatomy, errors);
+    const requiresSkill = requirementTokens(rawRequires.skill);
+    const requiresTrait = requirementTokens(rawRequires.trait);
+    const requiresKink = requirementTokens(rawRequires.kink);
 
     const rawApplies = raw.applies && typeof raw.applies === 'object' && !Array.isArray(raw.applies)
         ? raw.applies
         : {};
     for (const key of Object.keys(rawApplies)) {
-        if (!['status', 'stance'].includes(key)) {
+        if (!APPLICATION_KEYS.includes(key)) {
             errors.push(`Unknown application "${key}".`);
         }
     }
@@ -238,6 +349,33 @@ export function validateLewdTechnique(raw) {
             accuracyBonus: Number(stanceSource?.accuracyBonus) || 0,
             roundsLeft: clamp(stanceSource?.roundsLeft ?? stanceSource?.rounds ?? 3, 1, 99, 3),
         };
+    }
+    if ('act' in rawApplies) {
+        if (rawApplies.act == null) {
+            // Explicit null is meaningful: the technique clears the pair's act.
+            applies.act = null;
+        } else {
+            const actSource = typeof rawApplies.act === 'object' ? rawApplies.act : { id: rawApplies.act };
+            const id = lowerOrNull(actSource?.id ?? actSource?.type ?? '');
+            if (!id) errors.push('Applied act needs an id.');
+            const type = lowerOrNull(actSource?.type ?? actType);
+            if (type && !LEWD_ACT_TYPES.includes(type)) {
+                errors.push(`Unknown actType "${actSource?.type}".`);
+            }
+            const role = lowerOrNull(actSource?.role ?? actRole);
+            if (role && !LEWD_ACT_ROLES.includes(role)) {
+                errors.push(`Unknown actRole "${actSource?.role}".`);
+            }
+            const intensity = actSource?.intensity == null ? null : Number(actSource.intensity);
+            if (actSource?.intensity != null && !Number.isFinite(intensity)) {
+                errors.push(`Invalid act intensity "${actSource.intensity}".`);
+            }
+            if (id) {
+                const applied = { id, type: type && LEWD_ACT_TYPES.includes(type) ? type : null, role: role && LEWD_ACT_ROLES.includes(role) ? role : null };
+                if (Number.isFinite(intensity)) applied.intensity = intensity;
+                applies.act = applied;
+            }
+        }
     }
 
     let hold = null;
@@ -313,10 +451,19 @@ export function validateLewdTechnique(raw) {
             arousal,
             poise,
             staminaDrain,
+            actType,
+            actRole,
             requires: {
                 hold: requiresHold,
                 stance: requiresStance,
                 overwhelmed: rawRequires.overwhelmed === true,
+                act: requiresAct,
+                actType: requiresActType,
+                actRole: requiresActRole,
+                anatomy: requiresAnatomy,
+                skill: requiresSkill,
+                trait: requiresTrait,
+                kink: requiresKink,
             },
             applies,
             hold,
@@ -609,6 +756,254 @@ export const LEWD_TECHNIQUES = Object.freeze([
         applies: { stance: { id: 'devoted', label: 'Devoted', poiseBonus: 1 } },
         ai: { priority: 2 },
     }),
+
+    // ── explicit acts: penetration ────────────────────────────────────────
+    technique({
+        id: 'penetration-start', name: 'Penetration', category: 'technique', posture: 'lead',
+        description: 'Commit to the first deep contact and set the pace.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'intimacy'],
+        actType: 'penetration', actRole: 'give',
+        check: { stat: 'cha', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
+        requires: { anatomy: { any: ['penis', 'vagina', 'tail'] } },
+        applies: { act: { id: 'penetration' } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'penetration-receive', name: 'Take It', category: 'technique', posture: 'follow',
+        description: 'Open up and take the contact at your own pace.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'submission'],
+        actType: 'penetration', actRole: 'receive',
+        arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
+        requires: { anatomy: { any: ['vagina', 'anus'] } },
+        applies: { act: { id: 'penetration', role: 'receive' } },
+        ai: { priority: 2, conditions: ['role:submissive'] },
+    }),
+    technique({
+        id: 'thrust', name: 'Thrust', category: 'technique', posture: 'lead',
+        description: 'Set a steady rhythm and keep it.',
+        zones: ['genitals', 'hips'], targetMode: 'single', tags: ['penetration'],
+        actType: 'penetration', actRole: 'give',
+        arousal: '1d8+2', poise: '1d4', staminaDrain: 1,
+        requires: { act: 'penetration' },
+        applies: { act: { id: 'penetration', intensity: 1 } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'thrust-harder', name: 'Thrust Harder', category: 'technique', posture: 'lead',
+        description: 'Push the rhythm harder than before.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'dominance'],
+        actType: 'penetration', actRole: 'give',
+        check: { stat: 'str', accuracy: 1 }, arousal: '2d6+3', poise: '1d6', staminaDrain: 2,
+        requires: { act: 'penetration' },
+        applies: { act: { id: 'penetration', intensity: 2 } },
+        ai: { priority: 4 },
+    }),
+    technique({
+        id: 'slow-down', name: 'Slow Down', category: 'technique', posture: 'lead',
+        description: 'Ease the pace back and make them wait for it.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'teasing'],
+        actType: 'penetration', actRole: 'give',
+        arousal: '1d6+1', poise: '1d4',
+        requires: { act: 'penetration' },
+        applies: { act: { id: 'penetration', intensity: 1 } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'deepen', name: 'Deeper', category: 'technique', posture: 'lead',
+        description: 'Press in as far as the angle allows.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'dominance'],
+        actType: 'penetration', actRole: 'give',
+        check: { stat: 'str', accuracy: 2 }, arousal: '2d8+4', poise: '1d6', staminaDrain: 2,
+        requires: { act: 'penetration' },
+        applies: { act: { id: 'penetration', intensity: 3 } },
+        ai: { priority: 4, conditions: ['overwhelmed'] },
+    }),
+    technique({
+        id: 'withdraw', name: 'Withdraw', category: 'technique', posture: 'lead',
+        description: 'Pull back and leave the contact open.',
+        zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'teasing'],
+        actType: 'penetration', actRole: 'give',
+        arousal: '1d4', poise: '1d4',
+        requires: { act: 'penetration' },
+        applies: { act: null },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'change-position', name: 'Change Position', category: 'technique', posture: 'either',
+        description: 'Shift the angle without breaking the rhythm.',
+        zones: ['genitals', 'full_body'], targetMode: 'single', tags: ['penetration', 'intimacy'],
+        actType: 'penetration', actRole: 'mutual',
+        arousal: '1d6', poise: '1d4',
+        requires: { act: 'penetration' },
+        applies: { stance: { id: 'entwined', label: 'Entwined', poiseBonus: 1 } },
+        ai: { priority: 2 },
+    }),
+
+    // ── explicit acts: oral ───────────────────────────────────────────────
+    technique({
+        id: 'oral-give', name: 'Go Down', category: 'technique', posture: 'lead',
+        description: 'Kneel and use the mouth with deliberate patience.',
+        zones: ['mouth', 'genitals'], targetMode: 'single', tags: ['oral', 'intimacy'],
+        actType: 'oral', actRole: 'give',
+        check: { stat: 'cha', accuracy: 1 }, arousal: '1d8+2', poise: '1d4',
+        applies: { act: { id: 'oral' } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'oral-receive', name: 'Receive Oral', category: 'technique', posture: 'follow',
+        description: 'Let them work and guide with small shifts.',
+        zones: ['mouth', 'genitals'], targetMode: 'single', tags: ['oral', 'submission'],
+        actType: 'oral', actRole: 'receive',
+        arousal: '1d8+2', poise: '1d4',
+        requires: { anatomy: { any: ['penis', 'vagina', 'vulva'] } },
+        applies: { act: { id: 'oral', role: 'receive' } },
+        ai: { priority: 2, conditions: ['role:submissive'] },
+    }),
+    technique({
+        id: 'oral-deepen', name: 'Take It Deeper', category: 'technique', posture: 'lead',
+        description: 'Press the pace and see how much they can take.',
+        zones: ['throat', 'mouth'], targetMode: 'single', tags: ['oral', 'dominance'],
+        actType: 'oral', actRole: 'give',
+        check: { stat: 'str', accuracy: 1 }, arousal: '1d10+3', poise: '1d6', staminaDrain: 1,
+        requires: { actType: 'oral' },
+        applies: { act: { id: 'oral', intensity: 2 } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'sixty-nine', name: 'Sixty-Nine', category: 'technique', posture: 'either',
+        description: 'Both mouths busy, both pace honest.',
+        zones: ['mouth', 'genitals'], targetMode: 'pair', tags: ['oral', 'intimacy'],
+        actType: 'oral', actRole: 'mutual',
+        arousal: '1d8+2', poise: '1d4',
+        requires: { anatomy: { any: ['penis', 'vagina', 'vulva', 'anus'] } },
+        applies: { act: { id: 'oral', role: 'mutual', intensity: 2 } },
+        ai: { priority: 3 },
+    }),
+
+    // ── explicit acts: manual / masturbation ──────────────────────────────
+    technique({
+        id: 'manual-stroke', name: 'Stroke', category: 'technique', posture: 'lead',
+        description: 'A firm, steady hand and a rhythm that builds.',
+        zones: ['genitals'], targetMode: 'single', tags: ['manual'],
+        actType: 'manual', actRole: 'give',
+        arousal: '1d6+2', poise: '1d4',
+        requires: { anatomy: { any: ['penis', 'vagina'] } },
+        applies: { act: { id: 'manual' } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'manual-tease', name: 'Light Fingers', category: 'technique', posture: 'either',
+        description: 'Barely-there touches that keep them guessing.',
+        zones: ['genitals', 'thighs'], targetMode: 'single', tags: ['manual', 'teasing'],
+        actType: 'manual', actRole: 'give',
+        arousal: '1d6+1', poise: '1d4',
+        requires: { actType: 'manual' },
+        applies: { act: { id: 'manual', intensity: 1 } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'mutual-masturbation', name: 'Mutual Masturbation', category: 'technique', posture: 'either',
+        description: 'Hands on each other, matching pace.',
+        zones: ['genitals'], targetMode: 'pair', tags: ['masturbation', 'intimacy'],
+        actType: 'masturbation', actRole: 'mutual',
+        arousal: '1d8+2', poise: '1d4',
+        applies: { act: { id: 'masturbation', role: 'mutual' } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'paizuri', name: 'Paizuri', category: 'technique', posture: 'either',
+        description: 'Use the chest to build a slow, warm rhythm.',
+        zones: ['breasts'], targetMode: 'single', tags: ['manual', 'intimacy'],
+        actType: 'manual', actRole: 'give',
+        arousal: '1d8+2', poise: '1d4',
+        requires: { anatomy: 'breasts' },
+        applies: { act: { id: 'paizuri', type: 'manual' } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'intercrural', name: 'Between the Thighs', category: 'technique', posture: 'lead',
+        description: 'Work the contact between closed thighs.',
+        zones: ['thighs', 'genitals'], targetMode: 'single', tags: ['manual', 'intimacy'],
+        actType: 'manual', actRole: 'give',
+        arousal: '1d6+2', poise: '1d4',
+        applies: { act: { id: 'intercrural', type: 'manual' } },
+        ai: { priority: 2 },
+    }),
+
+    // ── explicit acts: bondage ────────────────────────────────────────────
+    technique({
+        id: 'tie-bindings', name: 'Tie Bindings', category: 'hold', posture: 'lead',
+        description: 'Wrap the wrists and settle the knots.',
+        zones: ['hands'], targetMode: 'single', tags: ['bondage', 'restraint'],
+        actType: 'bondage', actRole: 'give',
+        check: { stat: 'dex', accuracy: 1 }, arousal: '1d4', poise: '1d6',
+        requires: { anatomy: 'bondage-gear' },
+        hold: { id: 'bound', label: 'Bound', poiseBonus: 3, escapeDC: 14 },
+        applies: { act: { id: 'bondage' } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'tighten-bindings', name: 'Tighten Bindings', category: 'technique', posture: 'lead',
+        description: 'Pull the knots tighter and take away another inch.',
+        zones: ['hands'], targetMode: 'single', tags: ['bondage', 'dominance'],
+        actType: 'bondage', actRole: 'give',
+        arousal: '1d4', poise: '1d6',
+        requires: { act: 'bondage', skill: 'bondage' },
+        applies: { act: { id: 'bondage', intensity: 2 } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'loosen-bindings', name: 'Loosen Bindings', category: 'technique', posture: 'either',
+        description: 'Ease the knots and give a little room back.',
+        zones: ['hands'], targetMode: 'single', tags: ['bondage'],
+        actType: 'bondage', actRole: 'receive',
+        arousal: '1d4', poise: '1d4',
+        requires: { act: 'bondage' },
+        applies: { act: { id: 'bondage', intensity: 1 } },
+        ai: { priority: 1 },
+    }),
+    technique({
+        id: 'tease-bound', name: 'Tease the Bound', category: 'tease', posture: 'lead',
+        description: 'Let them wait, unable to reach back.',
+        zones: ['full_body', 'neck'], targetMode: 'single', tags: ['bondage', 'teasing'],
+        actType: 'bondage', actRole: 'give',
+        arousal: '1d6+2', poise: '1d4',
+        requires: { act: 'bondage' },
+        applies: { status: { label: 'Bound', rounds: 2, sensitivityBonus: 0.1 } },
+        ai: { priority: 3 },
+    }),
+    technique({
+        id: 'release-bindings', name: 'Release Bindings', category: 'technique', posture: 'either',
+        description: 'Undo the last knot and set them free.',
+        zones: ['hands'], targetMode: 'single', tags: ['bondage'],
+        actType: 'bondage', actRole: 'give',
+        arousal: '0', poise: '1d4',
+        requires: { act: 'bondage' },
+        applies: { act: null },
+        ai: { priority: 1 },
+    }),
+
+    // ── explicit acts: tail ───────────────────────────────────────────────
+    technique({
+        id: 'tail-wrap', name: 'Tail Wrap', category: 'technique', posture: 'either',
+        description: 'Curl the tail around a thigh and hold it there.',
+        zones: ['tail', 'thighs'], targetMode: 'single', tags: ['tail', 'restraint'],
+        actType: 'other', actRole: 'give',
+        arousal: '1d4', poise: '1d4',
+        requires: { anatomy: 'tail' },
+        applies: { act: { id: 'tail-wrap', type: 'other' } },
+        ai: { priority: 2 },
+    }),
+    technique({
+        id: 'tail-penetration', name: 'Tail Penetration', category: 'technique', posture: 'lead',
+        description: 'Use the tail to press in and take the angle.',
+        zones: ['tail', 'genitals'], targetMode: 'single', tags: ['tail', 'penetration'],
+        actType: 'penetration', actRole: 'give',
+        check: { stat: 'dex', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
+        requires: { anatomy: 'tail', act: 'penetration' },
+        applies: { act: { id: 'tail-penetration', type: 'penetration' } },
+        ai: { priority: 3 },
+    }),
 ]);
 
 const TECHNIQUE_BY_ID = new Map(LEWD_TECHNIQUES.map(entry => [entry.id, entry]));
@@ -716,6 +1111,59 @@ function holdMatches(state, actor, target, technique) {
     return edge.hold.id === key || String(edge.hold.label || '').toLowerCase() === key;
 }
 
+/** Read an engagement edge's act as `{ id, type, role }` (empty when absent). */
+function engagementAct(edge) {
+    const source = edge?.act;
+    const act = typeof source === 'string'
+        ? { id: source }
+        : source && typeof source === 'object'
+            ? source
+            : {};
+    return {
+        id: String(act.id ?? '').trim().toLowerCase(),
+        type: String(act.type ?? edge?.actType ?? '').trim().toLowerCase(),
+        role: String(act.role ?? edge?.actRole ?? '').trim().toLowerCase(),
+    };
+}
+
+/**
+ * Declarative act gating for one target: an edge must exist between actor and
+ * target carrying a matching act/actType/actRole. Pure; never mutates state.
+ */
+function actRequirementReason(state, actor, target, technique) {
+    const required = technique?.requires || {};
+    const act = required.act;
+    const actType = required.actType;
+    const role = required.actRole;
+    if ((!act && !actType && !role) || target?.id === actor?.id) return '';
+    const edge = (state?.engagements || []).find(candidate =>
+        (candidate.a === actor.id && candidate.b === target.id)
+        || (candidate.a === target.id && candidate.b === actor.id)) || null;
+    if (!edge) {
+        return act || actType
+            ? `Requires active act: ${act || actType}.`
+            : `Requires act role: ${role}.`;
+    }
+    const current = engagementAct(edge);
+    // `act` matches the edge act id or type, and `actType` matches either, so a
+    // catalog id (`penetration`) and a family (`penetration`) are interchangeable.
+    if (act && current.id !== act && current.type !== act) {
+        return `Requires active act: ${act}.`;
+    }
+    if (actType && current.type !== actType && current.id !== actType) {
+        return `Requires active act: ${actType}.`;
+    }
+    // `mutual` accepts any role, but only once an actual act exists on the edge;
+    // a bare pairing with no act never satisfies an act-role requirement.
+    if (role && !current.id && !current.type) {
+        return `Requires act role: ${role}.`;
+    }
+    if (role && role !== 'mutual' && current.role !== role) {
+        return `Requires act role: ${role}.`;
+    }
+    return '';
+}
+
 function targetEntriesFor(state, actor, technique) {
     const mode = technique.targetMode || 'single';
     if (mode === 'self') {
@@ -747,6 +1195,8 @@ function targetEntriesFor(state, actor, technique) {
         if (!holdMatches(state, actor, target, technique)) {
             reasons.push(`Requires hold: ${technique.requires.hold === true ? 'any hold' : technique.requires.hold}.`);
         }
+        const actReason = actRequirementReason(state, actor, target, technique);
+        if (actReason) reasons.push(actReason);
         if (technique.requires?.overwhelmed && !(Number(target.overwhelmedUntilRound) >= Number(state.round))) {
             reasons.push('Requires an overwhelmed target.');
         }
@@ -806,6 +1256,8 @@ export function listLegalActions(state, unit, options = {}) {
             name: technique.name,
             category: technique.category,
             technique,
+            actType: technique.actType ?? null,
+            actRole: technique.actRole ?? null,
             disabled: reasons.length > 0,
             reasons,
             posture: defaultPosture(technique),

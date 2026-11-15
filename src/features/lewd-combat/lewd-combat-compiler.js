@@ -14,6 +14,8 @@
 
 import {
     DEFAULT_LEWD_TECHNIQUE,
+    LEWD_ACT_ROLES,
+    LEWD_ACT_TYPES,
     LEWD_TECHNIQUE_CATEGORIES,
     LEWD_TARGET_MODES,
     validateLewdTechnique,
@@ -27,14 +29,18 @@ export const DEFAULT_LEWD_COMPILER_PROMPT = `You are the Lewd Combat technique c
 
 Rules:
 - Return only a single JSON object. No prose, no markdown fence.
-- Never invent a body zone outside: lips, neck, ears, chest, breasts, nipples, back, waist, hips, groin, thighs, hands, feet, full_body.
+- Never invent a body zone outside: lips, neck, ears, chest, breasts, nipples, back, waist, hips, groin, genitals, thighs, hands, feet, throat, mouth, tail, full_body.
 - Category must be one of: stance, hold, technique, counter, finisher, tease, command, recover, submit.
 - targetMode must be one of: self, single, pair, group, aura.
 - check.stat must be one of: str, dex, con, int, wis, cha.
+- actType must be one of: penetration, oral, manual, bondage, masturbation, other, or null.
+- actRole must be one of: give, receive, mutual, or null.
 - arousal and poise are dice expressions such as "1d6+2" or "0".
 - Keep the numbers modest and comparable to the shipped catalog.
 - Do not write explicit prose; describe the mechanic in one short sentence.
 - Respect the requested tone but never add limits, participants, or outcomes.
+- requires may only use: hold, stance, overwhelmed, act, actType, actRole, anatomy, skill, trait, kink.
+- applies may only use: status, stance, act. Use applies.act with an act id to set the pair's act; null clears it.
 
 Schema:
 {
@@ -46,11 +52,17 @@ Schema:
   "zones": ["neck"],
   "targetMode": "single",
   "tags": ["teasing"],
+  "actType": null,
+  "actRole": null,
   "check": { "stat": "cha", "accuracy": 1 },
   "arousal": "1d6+2",
   "poise": "1d4",
   "staminaDrain": 0,
-  "requires": { "hold": null, "stance": null, "overwhelmed": false },
+  "requires": {
+    "hold": null, "stance": null, "overwhelmed": false,
+    "act": null, "actType": null, "actRole": null,
+    "anatomy": null, "skill": null, "trait": null, "kink": null
+  },
   "applies": {},
   "hold": null,
   "uses": { "max": null, "recharge": "at-will" },
@@ -79,6 +91,18 @@ export const LEWD_COMPILER_JSON_SCHEMA = Object.freeze({
                 stat: { type: 'string', enum: ['str', 'dex', 'con', 'int', 'wis', 'cha'] },
                 accuracy: { type: 'number' },
             },
+        },
+        actType: {
+            anyOf: [
+                { type: 'string', enum: [...LEWD_ACT_TYPES] },
+                { type: 'null' },
+            ],
+        },
+        actRole: {
+            anyOf: [
+                { type: 'string', enum: [...LEWD_ACT_ROLES] },
+                { type: 'null' },
+            ],
         },
         arousal: { type: ['string', 'number'] },
         poise: { type: ['string', 'number'] },

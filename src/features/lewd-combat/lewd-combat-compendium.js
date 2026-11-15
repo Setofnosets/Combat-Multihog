@@ -186,6 +186,8 @@ function parseTechniqueLine(line, index) {
         arousal: fields.arousal || '0',
         poise: fields.poise || '0',
         staminaDrain: numberOf(fields.staminadrain ?? fields.stamina ?? fields.drain, 0),
+        actType: fields.acttype || null,
+        actRole: fields.actrole || null,
         requires: {},
         applies: {},
         ai: { priority: numberOf(fields.priority, 1) },
@@ -195,6 +197,13 @@ function parseTechniqueLine(line, index) {
     if (fields.overwhelmed === true || /^(?:yes|true|1)$/i.test(String(fields.overwhelmed || ''))) {
         raw.requires.overwhelmed = true;
     }
+    if (fields.requiresact) raw.requires.act = fields.requiresact;
+    if (fields.requiresacttype) raw.requires.actType = fields.requiresacttype;
+    if (fields.requiresactrole) raw.requires.actRole = fields.requiresactrole;
+    if (fields.requiresanatomy) raw.requires.anatomy = splitList(fields.requiresanatomy);
+    if (fields.requiresskill) raw.requires.skill = splitList(fields.requiresskill);
+    if (fields.requirestrait) raw.requires.trait = splitList(fields.requirestrait);
+    if (fields.requireskink) raw.requires.kink = splitList(fields.requireskink);
     if (fields.hold) {
         raw.hold = {
             id: slug(fields.hold),
@@ -221,6 +230,24 @@ function parseTechniqueLine(line, index) {
             label: fields.stance,
             poiseBonus: numberOf(fields.stancebonus, 0),
         };
+    }
+    // A bare `| appliesact |` flag is ambiguous and intentionally ignored; only
+    // an explicit value (or `none`/`null`/`clear`/empty) defines the field.
+    if (fields.appliesact != null && fields.appliesact !== true) {
+        const value = String(fields.appliesact).trim();
+        if (!value || /^(?:none|null|clear)$/i.test(value)) {
+            raw.applies.act = null;
+        } else {
+            raw.applies.act = { id: value };
+            if (fields.appliesintensity != null) {
+                const intensity = Number(fields.appliesintensity);
+                // Pass a non-numeric value through so the validator reports it
+                // instead of silently coercing to a level.
+                raw.applies.act.intensity = Number.isFinite(intensity)
+                    ? intensity
+                    : fields.appliesintensity;
+            }
+        }
     }
     if (fields.uses === 'at-will' || fields['at-will'] === true || fields.atwill === true) {
         raw.uses = { max: null, recharge: 'at-will' };

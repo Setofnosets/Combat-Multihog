@@ -72,9 +72,9 @@ function fixture({
 }
 
 describe('shipped technique catalog', () => {
-    it('ships 25–35 valid techniques covering every category', () => {
-        expect(LEWD_TECHNIQUES.length).toBeGreaterThanOrEqual(25);
-        expect(LEWD_TECHNIQUES.length).toBeLessThanOrEqual(35);
+    it('ships 45–70 valid techniques covering every category', () => {
+        expect(LEWD_TECHNIQUES.length).toBeGreaterThanOrEqual(45);
+        expect(LEWD_TECHNIQUES.length).toBeLessThanOrEqual(70);
         const ids = new Set();
         for (const technique of LEWD_TECHNIQUES) {
             expect(validateLewdTechnique(technique).ok, technique.id).toBe(true);
@@ -123,6 +123,135 @@ describe('shipped technique catalog', () => {
         });
         expect(result.ok).toBe(true);
         expect(result.beat.technique.id).toBe('neck-kiss');
+    });
+});
+
+describe('explicit act catalog', () => {
+    const byId = id => LEWD_TECHNIQUES.find(entry => entry.id === id);
+    const base = () => ({
+        id: 'act-test',
+        name: 'Act Test',
+        category: 'technique',
+        zones: ['genitals'],
+        targetMode: 'single',
+        arousal: '1',
+        poise: '0',
+    });
+
+    it('accepts actType/actRole and rejects unknown enum values', () => {
+        expect(validateLewdTechnique({ ...base(), actType: 'penetration', actRole: 'give' }).ok).toBe(true);
+        expect(validateLewdTechnique({ ...base(), actType: 'nonsense' }).errors.join(' ')).toContain('Unknown actType');
+        expect(validateLewdTechnique({ ...base(), actRole: 'both' }).errors.join(' ')).toContain('Unknown actRole');
+        expect(validateLewdTechnique({ ...base(), requires: { actType: 'nonsense' } }).errors.join(' '))
+            .toContain('Unknown actType');
+        expect(validateLewdTechnique({ ...base(), requires: { actRole: 'both' } }).errors.join(' '))
+            .toContain('Unknown actRole');
+    });
+
+    it('gates a follow-up act on an active engagement act', () => {
+        const state = fixture();
+        const before = listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder');
+        expect(before.disabled).toBe(true);
+        expect(before.targets.find(target => target.id === 'bran').reasons.join(' '))
+            .toContain('Requires active act: penetration.');
+
+        upsertEngagement(state, 'aria', 'bran');
+        state.engagements[0].act = 'penetration';
+        const afterString = listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder');
+        expect(afterString.disabled).toBe(false);
+
+        state.engagements[0].act = { id: 'penetration', type: 'penetration' };
+        expect(listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder').disabled).toBe(false);
+    });
+
+    it('matches requires.actRole exactly except for mutual', () => {
+        const custom = {
+            ...base(),
+            id: 'role-gate',
+            name: 'Role Gate',
+            requires: { actType: 'penetration', actRole: 'give' },
+        };
+        const state = fixture({ techniques: [custom] });
+        upsertEngagement(state, 'aria', 'bran');
+        state.engagements[0].act = { id: 'penetration', type: 'penetration', role: 'receive' };
+        const denied = listLegalActions(state, 'aria', { techniques: [custom] })[0];
+        expect(denied.disabled).toBe(true);
+        expect(denied.targets[0].reasons.join(' ')).toContain('Requires act role: give.');
+
+        state.engagements[0].act.role = 'give';
+        expect(listLegalActions(state, 'aria', { techniques: [custom] })[0].disabled).toBe(false);
+
+        const mutual = { ...custom, id: 'mutual-gate', requires: { actRole: 'mutual' } };
+        state.engagements[0].act.role = 'receive';
+        expect(listLegalActions(state, 'aria', { techniques: [mutual] })[0].disabled).toBe(false);
+
+        // A bare pairing edge with no act never satisfies an act-role gate.
+        state.engagements[0].act = null;
+        const bare = listLegalActions(state, 'aria', { techniques: [mutual] })[0];
+        expect(bare.disabled).toBe(true);
+        expect(bare.targets[0].reasons.join(' ')).toContain('Requires act role: mutual.');
+    });
+
+    it('normalizes act-adjacent requirements and rejects unknown anatomy', () => {
+        const result = validateLewdTechnique({
+            ...base(),
+            requires: {
+                anatomy: 'tail',
+                skill: 'Bondage',
+                trait: ['Tail'],
+                kink: 'Praise, Ropes',
+                actType: 'bondage',
+            },
+        });
+        expect(result.ok).toBe(true);
+        expect(result.technique.requires).toMatchObject({
+            anatomy: { all: ['tail'], any: [] },
+            skill: ['bondage'],
+            trait: ['tail'],
+            kink: ['praise', 'ropes'],
+            actType: 'bondage',
+        });
+        expect(validateLewdTechnique({ ...base(), requires: { anatomy: { any: ['penis', 'wings'] } } }).ok).toBe(true);
+        expect(validateLewdTechnique({ ...base(), requires: { anatomy: 'flipper' } }).errors.join(' '))
+            .toContain('Unknown anatomy tag');
+    });
+
+    it('keeps applies.act normalized and preserves null clears', () => {
+        expect(byId('withdraw').applies.act).toBeNull();
+        expect(byId('release-bindings').applies.act).toBeNull();
+        expect(byId('penetration-start').applies.act).toMatchObject({
+            id: 'penetration', type: 'penetration', role: 'give',
+        });
+        expect(byId('thrust-harder').applies.act).toMatchObject({ id: 'penetration', intensity: 2 });
+    });
+
+    it('lists act metadata and gates bondage follow-ups on the act', () => {
+        const state = fixture();
+        const entry = listLegalActions(state, 'aria').find(candidate => candidate.id === 'penetration-start');
+        expect(entry.actType).toBe('penetration');
+        expect(entry.actRole).toBe('give');
+
+        const before = listLegalActions(state, 'aria').find(candidate => candidate.id === 'tighten-bindings');
+        expect(before.actType).toBe('bondage');
+        expect(before.disabled).toBe(true);
+        expect(before.targets[0].reasons.join(' ')).toContain('Requires active act: bondage.');
+
+        upsertEngagement(state, 'aria', 'bran');
+        state.engagements[0].act = { id: 'bondage', type: 'bondage', role: 'give' };
+        expect(listLegalActions(state, 'aria').find(candidate => candidate.id === 'tighten-bindings').disabled)
+            .toBe(false);
+    });
+
+    it('ships the bondage acts with explicit zones and a real hold', () => {
+        for (const id of ['tie-bindings', 'tighten-bindings', 'loosen-bindings', 'tease-bound', 'release-bindings']) {
+            const entry = byId(id);
+            expect(entry, id).toBeTruthy();
+            expect(entry.actType).toBe('bondage');
+            expect(entry.zones.length).toBeGreaterThan(0);
+        }
+        expect(byId('tie-bindings').hold).toMatchObject({ id: 'bound' });
+        expect(byId('tighten-bindings').requires.act).toBe('bondage');
+        expect(byId('tie-bindings').requires.anatomy).toMatchObject({ all: ['bondage-gear'] });
     });
 });
 
