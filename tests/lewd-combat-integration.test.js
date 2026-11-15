@@ -11,6 +11,7 @@ import {
     applyProfileTraits,
 } from '../src/features/lewd-combat/lewd-combat-profile.js';
 import {
+    buildLewdCombatCleanup,
     buildLewdNarrationBlock,
     queueLewdOutcome,
 } from '../src/features/lewd-combat/lewd-combat-outcome.js';
@@ -21,7 +22,11 @@ import {
 } from '../src/features/lewd-combat/lewd-combat-store.js';
 import { clearPendingNarration, getPendingNarration } from '../src/features/tactical-combat/tactical-combat-store.js';
 import { buildDefaultSettings } from '../src/state/defaults.js';
-import { resetLewdCombatEncounter } from '../src/features/lewd-combat/lewd-combat-ui.js';
+import {
+    finishEncounterIfEnded,
+    resetLewdCombatEncounter,
+    returnLewdCombatToStory,
+} from '../src/features/lewd-combat/lewd-combat-ui.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -234,6 +239,63 @@ describe('Lewd Combat end-to-end integration', () => {
         const settings = buildDefaultSettings();
         expect(settings.lewdCombatEnabled).toBe(false);
         expect(settings.lewdCombatByChat).toEqual({});
+        expect(getLewdEncounterForChat('chat-A', settings)).toBeNull();
+    });
+
+    it('cleans a combat-sourced scene once and only opts into [COMBAT] writes explicitly', async () => {
+        const settings = prepareSettings();
+        const memo = '[COMBAT]\nENEMIES:\nBran: 3/3 HP\nWolf: 2/2 HP\n[/COMBAT]';
+        settings.currentMemo = memo;
+        const state = createState(settings);
+        state.chatId = 'chat-A';
+        state.status = 'ended';
+        state.outcome = 'surrendered';
+        state.participants.find(participant => participant.id === 'bran').surrendered = true;
+        setLewdEncounterForChat('chat-A', state, settings, { persist: false });
+
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: { rpg_tracker: settings },
+            chatId: 'chat-A',
+        });
+
+        const result = await finishEncounterIfEnded(state, { autoNarrate: false });
+        expect(result.ok).toBe(true);
+        expect(settings.currentMemo).toContain('Bran: 3/3 HP\nStatus: At Mercy');
+        expect(settings.currentMemo).toMatch(/Wolf: 2\/2 HP\n(?!Status)/);
+        expect(settings.currentMemo).toContain('[/COMBAT]');
+        expect(state.resolution.cleanup.marked).toEqual([{ name: 'Bran', status: 'At Mercy' }]);
+
+        const block = buildLewdNarrationBlock(settings, 'chat-A');
+        expect(block).toMatch(/At Mercy/);
+        expect(block).toMatch(/not new hostiles/i);
+        expect(block).toMatch(/no new sexual encounter/i);
+
+        // Explicit opt-out leaves [COMBAT] byte-identical.
+        const off = buildLewdCombatCleanup(state, { ...settings, currentMemo: memo, lewdCombatCombatCleanup: 'off' });
+        expect(off.memo).toBe(memo);
+        expect(off.changed).toBe(false);
+    });
+
+    it('returns to the story by removing the board and clearing only the lewd handoff', () => {
+        const settings = prepareSettings();
+        const state = createState(settings);
+        state.chatId = 'chat-A';
+        state.status = 'ended';
+        state.outcome = 'surrendered';
+        state.participants.find(participant => participant.id === 'bran').surrendered = true;
+        setLewdEncounterForChat('chat-A', state, settings, { persist: false });
+        queueLewdOutcome(state, settings, { persist: false });
+        expect(getPendingNarration(settings, 'chat-A')?.kind).toBe('lewd');
+
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: { rpg_tracker: settings },
+            chatId: 'chat-A',
+        });
+
+        expect(returnLewdCombatToStory()).toBe(true);
+        expect(getLewdEncounterForChat('chat-A', settings)).toBeNull();
+        expect(getPendingNarration(settings, 'chat-A')).toBeNull();
+        // No new encounter was opened as a side effect.
         expect(getLewdEncounterForChat('chat-A', settings)).toBeNull();
     });
 });

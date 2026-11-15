@@ -37,6 +37,7 @@ import {
     startLewdCombatFlow,
     stopLewdCombatEncounter,
 } from './lewd-combat-ui.js';
+import { resolveLewdCombatCleanupMode } from './lewd-combat-outcome.js';
 
 let lewdBound = false;
 
@@ -116,6 +117,8 @@ export function normalizeLewdCombatSettings(settings = {}) {
             600000,
             LEWD_COMBAT_DEFAULTS.postEncounterCooldownMs,
         ),
+        lewdCombatCombatCleanup: resolveLewdCombatCleanupMode(settings.lewdCombatCombatCleanup),
+        lewdCombatMercyStatusWriteback: settings.lewdCombatMercyStatusWriteback !== false,
     };
 }
 
@@ -165,6 +168,10 @@ export function syncLewdCombatSettingsUi(settings) {
     if (latch) latch.checked = normalized.lewdCombatPostEncounterLatch;
     const cooldown = el('rpg_lewd_combat_post_encounter_cooldown');
     if (cooldown) cooldown.value = String(Math.round(normalized.lewdCombatPostEncounterCooldownMs / 1000));
+    const combatCleanup = el('rpg_lewd_combat_combat_cleanup');
+    if (combatCleanup) combatCleanup.value = normalized.lewdCombatCombatCleanup;
+    const mercyWriteback = el('rpg_lewd_combat_mercy_status_writeback');
+    if (mercyWriteback) mercyWriteback.checked = normalized.lewdCombatMercyStatusWriteback;
 
     const compendium = el('rpg_lewd_combat_compendium');
     if (compendium && document.activeElement !== compendium) {
@@ -294,6 +301,19 @@ export function bindLewdCombatSettings(settings, saveSettings) {
         );
         save(settings, saveSettings);
         syncLewdCombatSettingsUi(settings);
+    });
+
+    const combatCleanup = el('rpg_lewd_combat_combat_cleanup');
+    combatCleanup?.addEventListener('change', () => {
+        settings.lewdCombatCombatCleanup = resolveLewdCombatCleanupMode(combatCleanup.value);
+        save(settings, saveSettings);
+        syncLewdCombatSettingsUi(settings);
+    });
+
+    const mercyWriteback = el('rpg_lewd_combat_mercy_status_writeback');
+    mercyWriteback?.addEventListener('change', () => {
+        settings.lewdCombatMercyStatusWriteback = !!mercyWriteback.checked;
+        save(settings, saveSettings);
     });
 
     const compendium = el('rpg_lewd_combat_compendium');

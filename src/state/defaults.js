@@ -291,6 +291,8 @@ export function buildDefaultSettings() {
         lewdCombatMaxPartners: 2,
         lewdCombatPostEncounterLatch: true,
         lewdCombatPostEncounterCooldownMs: 60000,
+        lewdCombatCombatCleanup: "mark",
+        lewdCombatMercyStatusWriteback: true,
         lewdCombatTechniqueCompendiumJson: DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
         lewdCombatTechniqueCache: {},
         lewdCombatCompilerPrompt: DEFAULT_LEWD_COMPILER_PROMPT,

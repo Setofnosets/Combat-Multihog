@@ -1,16 +1,24 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
     applyLewdAction,
     createLewdEncounterState,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
 import { finishEncounterIfEnded } from '../src/features/lewd-combat/lewd-combat-ui.js';
 import {
+    applyLewdCombatCleanup,
+    buildLewdCombatCleanup,
+    buildLewdMercy,
     buildLewdNarrationBlock,
     buildLewdOutcomePayload,
+    buildLewdResolution,
+    buildMercyText,
     describeLewdOutcome,
+    ensureLewdResolution,
     LEWD_COMBAT_CONTEXT_LABEL,
     LEWD_COMBAT_RESULT_NOTICE,
     queueLewdOutcome,
+    resolveLewdCombatCleanupMode,
 } from '../src/features/lewd-combat/lewd-combat-outcome.js';
 import { DEFAULT_LEWD_OUTCOME_PROMPT } from '../src/features/lewd-combat/lewd-combat-prompts.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from '../src/features/tactical-combat/tactical-combat-outcome.js';
@@ -39,6 +47,8 @@ function profile(name, overrides = {}) {
         ...overrides,
     };
 }
+
+const hooksSource = readFileSync(new URL('../narrative-hooks.js', import.meta.url), 'utf8');
 
 const TECHNIQUES = {
     'neck-kiss': {
@@ -312,5 +322,258 @@ describe('lewd combat outcome payload', () => {
         expect(block).toContain('{{unknown}}');
         expect(buildLewdNarrationBlock(settings, 'chat-B')).toBe('');
         expect(buildLewdNarrationBlock(null, 'chat-A')).toBe('');
+    });
+});
+
+function mercyScene({ outcome = 'atMercy', participants, winnerIds = ['aria'] } = {}) {
+    return {
+        status: 'ended',
+        id: 'lewd-cleanup-test',
+        outcome,
+        winnerIds,
+        participants: participants || [
+            { id: 'aria', name: 'Aria', side: 'player' },
+            { id: 'goblin', name: 'Goblin', side: 'enemy', atMercy: true },
+        ],
+    };
+}
+
+const COMBAT_MEMO = '[COMBAT]\nENEMIES:\nGoblin: 3/3 HP\nWolf: 2/2 HP\n[/COMBAT]';
+
+function cleanupSettings(overrides = {}) {
+    return {
+        currentMemo: COMBAT_MEMO,
+        lewdCombatCombatCleanup: 'mark',
+        lewdCombatMercyStatusWriteback: true,
+        ...overrides,
+    };
+}
+
+describe('lewd combat mercy state and extended handoff', () => {
+    it('includes atMercyIds, surrenderedIds, mercy, finalProse, and highlights in payload and resolution', () => {
+        const state = endedState();
+        const payload = buildLewdOutcomePayload(state);
+        expect(payload.atMercyIds).toEqual([]);
+        expect(payload.surrenderedIds).toEqual(['bran']);
+        expect(payload.mercy).toEqual([{
+            holderIds: ['aria'],
+            holderNames: ['Aria'],
+            targetIds: ['bran'],
+            targetNames: ['Bran'],
+            status: 'surrendered',
+        }]);
+        expect(payload.finalProse).toBe('Aria eases back and lets Bran breathe.');
+        expect(payload.highlights).toHaveLength(1);
+
+        const resolution = buildLewdResolution(state);
+        expect(resolution).toMatchObject({
+            atMercyIds: [],
+            surrenderedIds: ['bran'],
+            winnerIds: ['aria'],
+            finalProse: 'Aria eases back and lets Bran breathe.',
+        });
+        expect(resolution.mercy[0].status).toBe('surrendered');
+        expect(resolution.highlights).toHaveLength(1);
+
+        const atMercyState = mercyScene();
+        expect(buildLewdMercy(atMercyState)).toEqual([{
+            holderIds: ['aria'],
+            holderNames: ['Aria'],
+            targetIds: ['goblin'],
+            targetNames: ['Goblin'],
+            status: 'at-mercy',
+        }]);
+        expect(buildMercyText(atMercyState)).toBe('Goblin is at the mercy of Aria.');
+        expect(buildMercyText({ participants: [] })).toBe('None recorded.');
+    });
+
+    it('backfills a legacy resolution without replacing it or resetting consumed fields', () => {
+        const state = mercyScene();
+        const legacy = {
+            stateId: 'lewd-cleanup-test',
+            endedAt: 11,
+            consumedAt: 42,
+            consumedFor: 'manual',
+            deliveredAt: 7,
+            outcome: 'atMercy',
+            source: 'lewd',
+        };
+        state.resolution = legacy;
+
+        const returned = ensureLewdResolution(state);
+
+        expect(returned).toBe(legacy);
+        expect(state.resolution).toBe(legacy);
+        expect(legacy.atMercyIds).toEqual(['goblin']);
+        expect(legacy.surrenderedIds).toEqual([]);
+        expect(legacy.mercy[0].status).toBe('at-mercy');
+        expect(legacy.highlights).toEqual([]);
+        expect(legacy.finalProse).toBe('');
+        expect(legacy.consumedAt).toBe(42);
+        expect(legacy.consumedFor).toBe('manual');
+        expect(legacy.deliveredAt).toBe(7);
+    });
+
+    it('ships the no-resume, At Mercy, not-a-new-hostile, and no-new-encounter directives', () => {
+        const narration = buildLewdNarrationBlock(
+            (() => {
+                const settings = {};
+                const state = endedState();
+                queueLewdOutcome(state, settings, { persist: false });
+                return settings;
+            })(),
+            'chat-A',
+        );
+
+        for (const text of [LEWD_COMBAT_RESULT_NOTICE, narration, DEFAULT_LEWD_OUTCOME_PROMPT, hooksSource]) {
+            expect(text).toMatch(/do not resume or restart/i);
+            expect(text).toMatch(/At Mercy/);
+            expect(text).toMatch(/not new hostiles/i);
+            expect(text).toMatch(/no new sexual encounter unless the player explicitly starts one/i);
+        }
+        expect(LEWD_COMBAT_RESULT_NOTICE).toMatch(/do not call StartLewdCombat/i);
+        expect(DEFAULT_LEWD_OUTCOME_PROMPT).toContain('{{mercy}}');
+        expect(narration).toMatch(/Bran surrendered to Aria\./);
+    });
+});
+
+describe('lewd combat [COMBAT] cleanup', () => {
+    it('defaults unknown modes to mark', () => {
+        expect(resolveLewdCombatCleanupMode(undefined)).toBe('mark');
+        expect(resolveLewdCombatCleanupMode('nonsense')).toBe('mark');
+        expect(resolveLewdCombatCleanupMode('close')).toBe('close');
+    });
+
+    it('returns the memo unchanged when cleanup is off', () => {
+        const summary = buildLewdCombatCleanup(mercyScene(), cleanupSettings({ lewdCombatCombatCleanup: 'off' }));
+        expect(summary.memo).toBe(COMBAT_MEMO);
+        expect(summary.changed).toBe(false);
+    });
+
+    it('never writes [COMBAT] for a [LEWD]-only scene', () => {
+        const memo = '[LEWD]\nAria\n[/LEWD]';
+        for (const mode of ['off', 'mark', 'close']) {
+            const summary = buildLewdCombatCleanup(
+                mercyScene({ participants: [{ id: 'aria', name: 'Aria', side: 'player' }] }),
+                cleanupSettings({ currentMemo: memo, lewdCombatCombatCleanup: mode }),
+            );
+            expect(summary.memo).toBe(memo);
+            expect(summary.changed).toBe(false);
+        }
+    });
+
+    it('marks only combat-sourced combatants and keeps an unmatched block open', () => {
+        const summary = buildLewdCombatCleanup(mercyScene(), cleanupSettings());
+        expect(summary.changed).toBe(true);
+        expect(summary.closed).toBe(false);
+        expect(summary.memo).toContain('Goblin: 3/3 HP\nStatus: At Mercy');
+        expect(summary.memo).toMatch(/Wolf: 2\/2 HP\n(?!Status)/);
+        expect(summary.memo).not.toContain('END_COMBAT');
+        expect(summary.marked).toEqual([{ name: 'Goblin', status: 'At Mercy' }]);
+    });
+
+    it('marks a combat-sourced winner Sated', () => {
+        const summary = buildLewdCombatCleanup(
+            mercyScene({
+                outcome: 'atMercy',
+                winnerIds: ['goblin'],
+                participants: [
+                    { id: 'aria', name: 'Aria', side: 'player' },
+                    { id: 'goblin', name: 'Goblin', side: 'enemy' },
+                ],
+            }),
+            cleanupSettings(),
+        );
+        expect(summary.memo).toContain('Goblin: 3/3 HP\nStatus: Sated');
+        expect(summary.marked).toEqual([{ name: 'Goblin', status: 'Sated' }]);
+    });
+
+    it('never marks a winner Sated for stopped, draw, or mutual outcomes', () => {
+        for (const outcome of ['stopped', 'draw', 'mutual']) {
+            const summary = buildLewdCombatCleanup(
+                mercyScene({
+                    outcome,
+                    winnerIds: ['goblin'],
+                    participants: [
+                        { id: 'aria', name: 'Aria', side: 'player' },
+                        { id: 'goblin', name: 'Goblin', side: 'enemy' },
+                    ],
+                }),
+                cleanupSettings(),
+            );
+            expect(summary.memo).toBe(COMBAT_MEMO);
+            expect(summary.changed).toBe(false);
+            expect(summary.marked).toEqual([]);
+        }
+    });
+
+    it('does not write status lines when mercy writeback is disabled', () => {
+        const summary = buildLewdCombatCleanup(
+            mercyScene(),
+            cleanupSettings({ lewdCombatMercyStatusWriteback: false }),
+        );
+        expect(summary.memo).toBe(COMBAT_MEMO);
+        expect(summary.changed).toBe(false);
+        expect(summary.marked).toEqual([]);
+    });
+
+    it('closes a block only when every combatant was in the scene', () => {
+        const allInScene = mercyScene({
+            participants: [
+                { id: 'aria', name: 'Aria', side: 'player' },
+                { id: 'goblin', name: 'Goblin', side: 'enemy', atMercy: true },
+                { id: 'wolf', name: 'Wolf', side: 'enemy', surrendered: true },
+            ],
+        });
+        const closed = buildLewdCombatCleanup(allInScene, cleanupSettings({ lewdCombatCombatCleanup: 'close' }));
+        expect(closed.closed).toBe(true);
+        expect(closed.memo).toBe('[COMBAT]END_COMBAT[/COMBAT]');
+
+        const unmatched = buildLewdCombatCleanup(mercyScene(), cleanupSettings({ lewdCombatCombatCleanup: 'close' }));
+        expect(unmatched.closed).toBe(false);
+        expect(unmatched.memo).toContain('Status: At Mercy');
+        expect(unmatched.memo).toContain('[/COMBAT]');
+        expect(unmatched.memo).not.toContain('END_COMBAT');
+    });
+
+    it('applies cleanup once and reports the stored summary on later calls', () => {
+        const state = mercyScene();
+        const settings = cleanupSettings();
+        const first = applyLewdCombatCleanup(state, settings, { persist: false });
+        expect(first).toMatchObject({ mode: 'mark', writeback: true, combatSourced: true, closed: false });
+        expect(first.marked).toEqual([{ name: 'Goblin', status: 'At Mercy' }]);
+        expect(settings.currentMemo).toContain('Status: At Mercy');
+        const cleanupAt = state.resolution.cleanupAt;
+        expect(cleanupAt).toBeGreaterThan(0);
+
+        const second = applyLewdCombatCleanup(state, settings, { persist: false });
+        expect(second).toBe(first);
+        expect(state.resolution.cleanupAt).toBe(cleanupAt);
+    });
+
+    it('applies cleanup exactly once from finishEncounterIfEnded and persists it on the board', async () => {
+        const settings = { lewdCombatByChat: {} };
+        const state = endedState();
+        state.chatId = 'vitest-chat';
+        settings.lewdCombatByChat['vitest-chat'] = state;
+        settings.currentMemo = '[COMBAT]\nENEMIES:\nBran: 3/3 HP\nWolf: 2/2 HP\n[/COMBAT]';
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: { rpg_tracker: settings },
+            chatId: 'vitest-chat',
+        });
+
+        const first = await finishEncounterIfEnded(state, { autoNarrate: false });
+        expect(first.ok).toBe(true);
+        expect(settings.currentMemo).toContain('Bran: 3/3 HP\nStatus: At Mercy');
+        expect(settings.currentMemo).toMatch(/Wolf: 2\/2 HP\n(?!Status)/);
+        expect(settings.currentMemo).toContain('[/COMBAT]');
+        expect(state.resolution.cleanup).toMatchObject({ mode: 'mark', closed: false });
+        expect(state.resolution.cleanup.marked).toEqual([{ name: 'Bran', status: 'At Mercy' }]);
+        const cleanupAt = state.resolution.cleanupAt;
+        const memoAfterFirst = settings.currentMemo;
+
+        await finishEncounterIfEnded(state, { autoNarrate: false });
+        expect(state.resolution.cleanupAt).toBe(cleanupAt);
+        expect(settings.currentMemo).toBe(memoAfterFirst);
     });
 });

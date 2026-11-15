@@ -1154,7 +1154,7 @@ export function buildLewdCombatRuntimeOverride(settings) {
             && !Number(board.resolution.consumedAt)
             && settings.lewdCombatPostEncounterLatch !== false;
         if (handoffPending) {
-            return `[LEWD_COMBAT_OVERRIDE]\nThe previous Lewd Combat scene is OVER. This is its aftermath; do not resume or restart the encounter, do not replay exchanges, and do not call StartLewdCombat in this turn. Treat the result notice as authoritative and continue the story from its aftermath. A new intimate scene may begin only after a later player turn explicitly initiates one.\n[/LEWD_COMBAT_OVERRIDE]\n\n`;
+            return `[LEWD_COMBAT_OVERRIDE]\nThe previous Lewd Combat scene is OVER. This is its aftermath; do not resume or restart the encounter, do not replay exchanges, and do not call StartLewdCombat in this turn. Treat the result notice as authoritative and continue the story from its aftermath. Defeated or surrendered participants are at the winner's mercy and remain in the scene with status At Mercy; they are not new hostiles and must not be attacked or treated as a new encounter. There is no new sexual encounter unless the player explicitly starts one after a new scene turn. A new intimate scene may begin only after a later player turn explicitly initiates one.\n[/LEWD_COMBAT_OVERRIDE]\n\n`;
         }
         if (board?.status !== 'active') return '';
         if (hasPendingNarration(settings, chatId)) return '';

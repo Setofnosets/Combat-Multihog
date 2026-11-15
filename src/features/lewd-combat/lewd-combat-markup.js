@@ -629,6 +629,7 @@ function renderEnded(state) {
         <p class="rt-lc-summary-text">${escapeHtml(text(state?.summary) || 'The encounter has ended.')}</p>
         <div class="rt-lc-composer-actions">
             <button type="button" class="rt-lc-btn rt-lc-btn-primary" data-lc-action="new-encounter" aria-label="Start a new Lewd Combat encounter" title="New encounter">New encounter</button>
+            <button type="button" class="rt-lc-btn" data-lc-action="return-to-story" aria-label="Acknowledge the result and return to the story" title="Return to story">Return to story</button>
             <button type="button" class="rt-lc-btn" data-lc-action="reset" aria-label="Reset the encounter" title="Reset">Reset</button>
             <button type="button" class="rt-lc-btn" data-lc-action="close" aria-label="Close Lewd Combat" title="Close">Close</button>
         </div>

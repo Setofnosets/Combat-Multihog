@@ -23,6 +23,8 @@ describe('Lewd Combat settings pane contract', () => {
             'rpg_lewd_combat_prose_frequency',
             'rpg_lewd_combat_round_cap',
             'rpg_lewd_combat_max_partners',
+            'rpg_lewd_combat_combat_cleanup',
+            'rpg_lewd_combat_mercy_status_writeback',
             'rpg_lewd_combat_compendium',
             'rpg_lewd_combat_compendium_reset',
             'rpg_lewd_combat_compendium_status',
@@ -88,6 +90,8 @@ describe('Lewd Combat settings pane contract', () => {
             'lewdCombatAgentPrompt: DEFAULT_LEWD_AGENT_PROMPT',
             'lewdCombatAgentMaxTokens: 2000',
             'lewdCombatProseMaxTokens: 2000',
+            'lewdCombatCombatCleanup: "mark"',
+            'lewdCombatMercyStatusWriteback: true',
             'lewdCombatConnectionSource: "default"',
             'lewdCombatOllamaUrl: "http://localhost:11434"',
         ]) {
@@ -99,6 +103,8 @@ describe('Lewd Combat settings pane contract', () => {
             'lewdCombatAgentPrompt',
             'lewdCombatAgentMaxTokens',
             'lewdCombatProseMaxTokens',
+            'lewdCombatCombatCleanup',
+            'lewdCombatMercyStatusWriteback',
             'lewdCombatConnectionSource',
             'lewdCombatConnectionProfileId',
             'lewdCombatCompletionPresetId',
@@ -143,6 +149,16 @@ describe('Lewd Combat settings pane contract', () => {
         expect(kept.lewdCombatProseFrequency).toBe('per-round');
         expect(kept.lewdCombatRoundCap).toBe(20);
         expect(kept.lewdCombatMaxPartners).toBe(3);
+    });
+
+    it('normalizes the combat cleanup mode and mercy writeback flag', () => {
+        const fallback = normalizeLewdCombatSettings({ lewdCombatCombatCleanup: 'nonsense' });
+        expect(fallback.lewdCombatCombatCleanup).toBe('mark');
+        expect(fallback.lewdCombatMercyStatusWriteback).toBe(true);
+
+        expect(normalizeLewdCombatSettings({ lewdCombatCombatCleanup: 'close' }).lewdCombatCombatCleanup).toBe('close');
+        expect(normalizeLewdCombatSettings({ lewdCombatCombatCleanup: 'off' }).lewdCombatCombatCleanup).toBe('off');
+        expect(normalizeLewdCombatSettings({ lewdCombatMercyStatusWriteback: false }).lewdCombatMercyStatusWriteback).toBe(false);
     });
 
     it('binds start, stop, reset, and the prompt defaults in the settings module', () => {

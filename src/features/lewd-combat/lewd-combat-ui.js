@@ -32,6 +32,7 @@ import {
 import {
     canStartLewdEncounter,
     collectLewdContext,
+    consumeLewdResolution,
     createLewdEncounterFromContext,
     resolveLewdControlMode,
     resolveLewdStartMode,
@@ -485,10 +486,17 @@ export async function finishEncounterIfEnded(inputState, options = {}) {
             return { ok: false, reason: 'outcome module unavailable' };
         }
 
-        if (!state.resolution) {
-            state.resolution = outcome.ensureLewdResolution(state, { now: options.now });
-            persist(state);
+        outcome.ensureLewdResolution(state, { now: options.now });
+        if (typeof outcome.applyLewdCombatCleanup === 'function') {
+            try {
+                outcome.applyLewdCombatCleanup(state, settings, { persist: false });
+            } catch (_) {
+                // Cleanup is best-effort; never break the finish handoff.
+            }
         }
+        // Persist even for a legacy ended board so its one-time cleanup and
+        // backfilled resolution survive the reload.
+        persist(state);
         if (state.finalization?.narrationQueued) {
             return { ok: true, payload: state.finalization.payload || null };
         }
@@ -953,6 +961,9 @@ function handleAction(action, element) {
         case 'reset':
             resetLewdCombatEncounter();
             break;
+        case 'return-to-story':
+            returnLewdCombatToStory();
+            break;
         case 'close':
             closeBoard();
             break;
@@ -1139,6 +1150,46 @@ export function resetLewdCombatEncounter() {
     notifyChanged();
     if (!ui.view.startCandidates) loadStartCandidates();
     render();
+}
+
+/**
+ * Acknowledge the finished scene and hand control back to the story. Removes
+ * the board and its pending lewd narration, closes the overlay, and never
+ * starts a new encounter or an AI turn.
+ * @returns {boolean}
+ */
+export function returnLewdCombatToStory() {
+    const chatId = getActiveChatId();
+    const settings = getSettings();
+    if (!settings) return false;
+    try {
+        if (chatId) consumeLewdResolution(settings, chatId, { reason: 'return-to-story', persist: false });
+    } catch (_) { /* best-effort */ }
+    try {
+        if (chatId) removeLewdEncounterForChat(chatId, settings, { persist: false });
+    } catch (_) { /* best-effort */ }
+    try {
+        // Discard only our own queued result; a tactical/traditional handoff
+        // waiting for narration must survive.
+        if (chatId && getPendingNarration(settings, chatId)?.kind === 'lewd') {
+            clearPendingNarration(settings, { chatId, persist: false });
+        }
+    } catch (_) { /* best-effort */ }
+    try { saveSettings(); } catch (_) { /* boot-time bridge may be absent */ }
+
+    resetProseQueue();
+    ui.view.actorId = '';
+    ui.view.techniqueId = '';
+    ui.view.posture = 'switch';
+    ui.view.zone = '';
+    ui.view.targetIds = [];
+    ui.view.busy = false;
+    ui.view.showDebug = false;
+    ui.view.error = '';
+    ui.view.outcomeDismissed = false;
+    closeBoard();
+    notifyChanged();
+    return true;
 }
 
 /** Re-render after a relevant setting changes. */
