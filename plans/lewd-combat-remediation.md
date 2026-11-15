@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** in progress — B1, B2, B3, B4 implemented and green; next: B5
+- **Status:** in progress — Phase 1 (B1-B5) implemented and green; next: Phase 2 (A1)
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
@@ -148,6 +148,7 @@
 - **Risk:** medium-high
 - **Model / Effort:** implementer model #high
 - **Commit:** `fix(lewd-combat): carry mercy state into the narrator handoff and close out combat sources`
+- **Status:** ✅ Done — cddec86
 
 ## Phase 2 — Additions (after Phase 1 is green)
 
