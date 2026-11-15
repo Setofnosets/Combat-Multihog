@@ -19,29 +19,17 @@ import {
     setCombatStyle,
 } from './combat-mode.js';
 import { clearActiveCombatEncounters } from './combat-board-reset.js';
+import { LEWD_CHANGED_EVENT } from '../lewd-combat/lewd-combat-constants.js';
 import {
-    LEWD_CHANGED_EVENT,
-    LEWD_COMBAT_DEFAULTS,
-    LEWD_COMBAT_LABEL,
-    LEWD_EXPLICITNESS_OPTIONS,
-    LEWD_OPEN_EVENT,
-    LEWD_PROSE_FREQUENCY_OPTIONS,
-} from '../lewd-combat/lewd-combat-constants.js';
-import {
-    getLewdEncounterForChat,
-    removeLewdEncounterForChat,
-} from '../lewd-combat/lewd-combat-store.js';
-import {
-    DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
-    buildLewdTechniqueCatalog,
-    describeLewdCatalog,
-} from '../lewd-combat/lewd-combat-compendium.js';
-import { DEFAULT_LEWD_COMPILER_PROMPT } from '../lewd-combat/lewd-combat-compiler.js';
+    bindLewdCombatSettings,
+    syncLewdCombatSettingsUi,
+} from '../lewd-combat/lewd-combat-settings.js';
+
+export { syncLewdCombatSettingsUi };
 
 let bound = false;
 let eventsInstalled = false;
 let depsRef = null;
-let lewdBound = false;
 /** Style the user tried to select while boards were still running. */
 let pendingStyle = null;
 
@@ -217,226 +205,6 @@ function bindClearButton(settings) {
     });
 }
 
-/**
- * The lewd drawer is a *secondary* module surface: it is never shown by
- * `syncPanes()` and never replaces the primary style pane. It only reflects and
- * writes its own settings keys plus the open/remove controls for the per-chat
- * board.
- * @param {Record<string, any>} settings
- */
-function lewdStatusText(settings) {
-    const state = getLewdEncounterForChat(activeChatId(), settings);
-    if (!state) return `${LEWD_COMBAT_LABEL}: no board in this chat.`;
-    const status = String(state.status || 'unknown');
-    if (status === 'active') {
-        const round = Number(state.round) || 0;
-        const count = Array.isArray(state.participants) ? state.participants.length : 0;
-        const roundText = round > 0 ? ` · round ${round}` : '';
-        const countText = count > 0 ? ` · ${count} participant${count === 1 ? '' : 's'}` : '';
-        return `${LEWD_COMBAT_LABEL}: active${roundText}${countText}.`;
-    }
-    return `${LEWD_COMBAT_LABEL}: finished (${status}).`;
-}
-
-/**
- * @param {Record<string, any>} [settings]
- */
-export function syncLewdCombatSettingsUi(settings = depsRef?.settings) {
-    if (!settings) return;
-    const enabled = !!settings.lewdCombatEnabled;
-    const options = el('rpg_lewd_combat_options');
-    if (options) options.style.display = enabled ? '' : 'none';
-    const toggle = el('rpg_lewd_combat_enabled');
-    if (toggle) toggle.checked = enabled;
-
-    const explicitness = el('rpg_lewd_combat_explicitness');
-    if (explicitness) {
-        const value = String(settings.lewdCombatExplicitness || LEWD_COMBAT_DEFAULTS.explicitness);
-        explicitness.value = LEWD_EXPLICITNESS_OPTIONS.includes(value) ? value : LEWD_COMBAT_DEFAULTS.explicitness;
-    }
-    const darker = el('rpg_lewd_combat_darker_themes');
-    if (darker) darker.checked = !!settings.lewdCombatDarkerThemes;
-    const frequency = el('rpg_lewd_combat_prose_frequency');
-    if (frequency) {
-        const value = String(settings.lewdCombatProseFrequency || LEWD_COMBAT_DEFAULTS.proseFrequency);
-        frequency.value = LEWD_PROSE_FREQUENCY_OPTIONS.includes(value) ? value : LEWD_COMBAT_DEFAULTS.proseFrequency;
-    }
-    const roundCap = el('rpg_lewd_combat_round_cap');
-    if (roundCap) roundCap.value = String(Number(settings.lewdCombatRoundCap) || LEWD_COMBAT_DEFAULTS.roundCap);
-    const maxPartners = el('rpg_lewd_combat_max_partners');
-    if (maxPartners) maxPartners.value = String(Number(settings.lewdCombatMaxPartners) || LEWD_COMBAT_DEFAULTS.maxPartners);
-
-    const compendium = el('rpg_lewd_combat_compendium');
-    if (compendium && document.activeElement !== compendium) {
-        compendium.value = String(settings.lewdCombatTechniqueCompendiumJson ?? DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON);
-    }
-    const compendiumStatus = el('rpg_lewd_combat_compendium_status');
-    if (compendiumStatus) {
-        const catalog = buildLewdTechniqueCatalog(settings);
-        compendiumStatus.textContent = describeLewdCatalog(catalog);
-        compendiumStatus.classList.toggle('rt-lc-error', !!catalog.error);
-        compendiumStatus.classList.toggle('rt-lc-warning', !catalog.error && catalog.diagnostics.length > 0);
-    }
-    const compilerPrompt = el('rpg_lewd_combat_compiler_prompt');
-    if (compilerPrompt && document.activeElement !== compilerPrompt) {
-        compilerPrompt.value = String(settings.lewdCombatCompilerPrompt || DEFAULT_LEWD_COMPILER_PROMPT);
-    }
-
-    const status = el('rpg_lewd_combat_status');
-    if (status) {
-        const state = getLewdEncounterForChat(activeChatId(), settings);
-        status.textContent = lewdStatusText(settings);
-        status.classList.toggle('rt-lc-active', state?.status === 'active');
-        status.classList.toggle('rt-lc-finished', !!state && state.status !== 'active');
-    }
-
-    const remove = el('rpg_lewd_combat_remove');
-    if (remove) remove.disabled = !getLewdEncounterForChat(activeChatId(), settings);
-}
-
-function clampInt(value, min, max, fallback) {
-    const number = Number.parseInt(value, 10);
-    if (!Number.isFinite(number)) return fallback;
-    return Math.min(max, Math.max(min, number));
-}
-
-function bindLewdCombatSettings(settings, saveSettings) {
-    const toggle = el('rpg_lewd_combat_enabled');
-    if (toggle && !lewdBound) {
-        toggle.addEventListener('change', () => {
-            settings.lewdCombatEnabled = !!toggle.checked;
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-            syncLewdCombatSettingsUi(settings);
-            // The header icon, tool registration, and prompt sections all react
-            // to the module flag; one event keeps them in sync.
-            try { document.dispatchEvent(new CustomEvent(LEWD_CHANGED_EVENT)); } catch (_) { /* no-op */ }
-        });
-    }
-
-    const explicitness = el('rpg_lewd_combat_explicitness');
-    if (explicitness && !lewdBound) {
-        explicitness.addEventListener('change', () => {
-            const value = String(explicitness.value || '');
-            settings.lewdCombatExplicitness = LEWD_EXPLICITNESS_OPTIONS.includes(value)
-                ? value
-                : LEWD_COMBAT_DEFAULTS.explicitness;
-            syncLewdCombatSettingsUi(settings);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const darker = el('rpg_lewd_combat_darker_themes');
-    if (darker && !lewdBound) {
-        darker.addEventListener('change', () => {
-            settings.lewdCombatDarkerThemes = !!darker.checked;
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const frequency = el('rpg_lewd_combat_prose_frequency');
-    if (frequency && !lewdBound) {
-        frequency.addEventListener('change', () => {
-            const value = String(frequency.value || '');
-            settings.lewdCombatProseFrequency = LEWD_PROSE_FREQUENCY_OPTIONS.includes(value)
-                ? value
-                : LEWD_COMBAT_DEFAULTS.proseFrequency;
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const roundCap = el('rpg_lewd_combat_round_cap');
-    if (roundCap && !lewdBound) {
-        roundCap.addEventListener('change', () => {
-            settings.lewdCombatRoundCap = clampInt(roundCap.value, 1, 60, LEWD_COMBAT_DEFAULTS.roundCap);
-            syncLewdCombatSettingsUi(settings);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const maxPartners = el('rpg_lewd_combat_max_partners');
-    if (maxPartners && !lewdBound) {
-        maxPartners.addEventListener('change', () => {
-            settings.lewdCombatMaxPartners = clampInt(maxPartners.value, 1, 4, LEWD_COMBAT_DEFAULTS.maxPartners);
-            syncLewdCombatSettingsUi(settings);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const compendium = el('rpg_lewd_combat_compendium');
-    if (compendium && !lewdBound) {
-        compendium.addEventListener('input', () => {
-            settings.lewdCombatTechniqueCompendiumJson = String(compendium.value || '');
-            syncLewdCombatSettingsUi(settings);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-        const reset = el('rpg_lewd_combat_compendium_reset');
-        if (reset) {
-            reset.addEventListener('click', (event) => {
-                event.preventDefault();
-                settings.lewdCombatTechniqueCompendiumJson = DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON;
-                compendium.value = DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON;
-                syncLewdCombatSettingsUi(settings);
-                try { saveSettings?.(); } catch (_) { /* boot */ }
-            });
-        }
-    }
-
-    const compilerPrompt = el('rpg_lewd_combat_compiler_prompt');
-    if (compilerPrompt && !lewdBound) {
-        compilerPrompt.addEventListener('input', () => {
-            settings.lewdCombatCompilerPrompt = String(compilerPrompt.value || DEFAULT_LEWD_COMPILER_PROMPT);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-        });
-    }
-
-    const open = el('rpg_lewd_combat_open');
-    if (open && !lewdBound) {
-        open.addEventListener('click', (event) => {
-            event.preventDefault();
-            if (!settings.lewdCombatEnabled) {
-                toast('warning', 'Enable Lewd Combat before opening its board.');
-                return;
-            }
-            let handled = false;
-            try {
-                handled = document.dispatchEvent(new CustomEvent(LEWD_OPEN_EVENT, {
-                    detail: { chatId: activeChatId() },
-                    cancelable: true,
-                }));
-                handled = !handled;
-            } catch (_) {
-                handled = false;
-            }
-            if (!handled) toast('info', 'No Lewd Combat board is available to open in this build.');
-        });
-    }
-
-    const remove = el('rpg_lewd_combat_remove');
-    if (remove && !lewdBound) {
-        remove.addEventListener('click', (event) => {
-            event.preventDefault();
-            const chatId = activeChatId();
-            if (!chatId) return;
-            const state = getLewdEncounterForChat(chatId, settings);
-            if (!state) {
-                syncLewdCombatSettingsUi(settings);
-                return;
-            }
-            const confirmed = typeof globalThis.confirm === 'function'
-                ? globalThis.confirm('Discard the saved Lewd Combat board for this chat? This cannot be undone.')
-                : true;
-            if (!confirmed) return;
-            removeLewdEncounterForChat(chatId, settings);
-            try { saveSettings?.(); } catch (_) { /* boot */ }
-            syncLewdCombatSettingsUi(settings);
-            refreshCombatEncountersUi(settings);
-            try { document.dispatchEvent(new CustomEvent(LEWD_CHANGED_EVENT)); } catch (_) { /* no-op */ }
-        });
-    }
-
-    lewdBound = true;
-}
-
 export function syncCombatModeSettingsUi(deps = depsRef) {
     const settings = deps?.settings;
     if (!settings) return;
@@ -483,7 +251,7 @@ export function bindCombatModeSettings(deps) {
         document.addEventListener('rt_traditional_combat_changed', () => refreshCombatEncountersUi());
         document.addEventListener(LEWD_CHANGED_EVENT, () => {
             refreshCombatEncountersUi();
-            syncLewdCombatSettingsUi();
+            syncLewdCombatSettingsUi(depsRef?.settings);
         });
     }
     const wasExplicit = COMBAT_STYLES.includes(String(settings.combatStyle || ''));

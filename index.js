@@ -102,7 +102,8 @@ import {
     bindTraditionalCombatSettings,
     syncTraditionalCombatSettingsUi,
 } from './src/features/traditional-combat/traditional-combat-settings.js';
-import { bindCombatModeSettings, syncCombatModeSettingsUi, syncLewdCombatSettingsUi } from './src/features/combat/combat-mode-settings.js';
+import { bindCombatModeSettings, syncCombatModeSettingsUi } from './src/features/combat/combat-mode-settings.js';
+import { syncLewdCombatSettingsUi } from './src/features/lewd-combat/lewd-combat-settings.js';
 import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
 import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
@@ -6313,6 +6314,7 @@ const CONNECTION_SETTINGS_UI = [
     { key: 'map_evolution', control: '#rpg_map_evolution_connection_source', slot: '#rpg_connection_slot_map_evolution', label: 'Map Evolution' },
     { key: 'world_progression', control: '#rpg_world_connection_source', slot: '#rpg_connection_slot_world_progression', label: 'World Progression' },
     { key: 'portraits', control: '#rpg_portrait_connection_source', slot: '#rpg_connection_slot_portraits', label: 'Portrait Generation', recommendation: 'A lightweight model should do fine.' },
+    { key: 'lewd_combat', control: '#rpg_lewd_combat_connection_source', slot: '#rpg_connection_slot_lewd_combat', label: 'Lewd Combat Agent', recommendation: 'Used only by the opt-in Lewd Combat module for the opponent agent and one-time technique compiler. Prose always uses Main API.' },
 ];
 
 function normalizeCentralConnectionDrawer(drawer, key, label, recommendation = '') {
@@ -6639,6 +6641,12 @@ function organizeConnectionSettingsUI() {
         await bindFeatureConnectionSettings({
             uiPrefix: 'rpg_traditional_combat',
             keyPrefix: 'traditionalCombat',
+            settings,
+            presetManager: pm,
+        });
+        await bindFeatureConnectionSettings({
+            uiPrefix: 'rpg_lewd_combat',
+            keyPrefix: 'lewdCombat',
             settings,
             presetManager: pm,
         });

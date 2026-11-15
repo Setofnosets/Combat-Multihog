@@ -681,6 +681,7 @@
                     <div id="rpg_connection_slot_map_evolution" class="rt-connection-drawer-slot"></div>
                     <div id="rpg_connection_slot_world_progression" class="rt-connection-drawer-slot"></div>
                     <div id="rpg_connection_slot_portraits" class="rt-connection-drawer-slot"></div>
+                    <div id="rpg_connection_slot_lewd_combat" class="rt-connection-drawer-slot"></div>
 
                     <div class="rt-connection-apply-all" id="rpg_connection_apply_all_box">
                         <b>Apply Connection Setup to All</b>
@@ -2942,14 +2943,96 @@
                                     <textarea id="rpg_lewd_combat_compiler_prompt" class="text_pole" rows="8" spellcheck="false"></textarea>
                                     <div class="rt-tc-settings-note">Used once per unknown technique. The validated result is cached in <code>lewdCombatTechniqueCache</code>; later uses never call the model again.</div>
                                 </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_agent_prompt">Opponent-agent system prompt</label>
+                                    <textarea id="rpg_lewd_combat_agent_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_lewd_combat_agent_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset agent prompt</button>
+                                    </div>
+                                    <div class="rt-tc-settings-note">The agent may only choose from the engine's legal action list. The engine still owns every roll, Arousal, Poise, and Stamina change.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_prose_prompt">Prose system prompt</label>
+                                    <textarea id="rpg_lewd_combat_prose_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_lewd_combat_prose_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset prose prompt</button>
+                                    </div>
+                                    <div class="rt-tc-settings-note">The prose pass always uses the <b>Main API</b> connection, never the opponent-agent connection. It is non-authoritative and cannot change state.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_outcome_prompt">Outcome handoff prompt</label>
+                                    <textarea id="rpg_lewd_combat_outcome_prompt" class="text_pole rt-tc-prompt-input" rows="10" spellcheck="false"></textarea>
+                                    <div class="rt-tc-settings-actions">
+                                        <button type="button" id="rpg_lewd_combat_outcome_prompt_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset outcome prompt</button>
+                                    </div>
+                                    <div class="rt-tc-settings-note">Used inside the authoritative <code>[LEWD_COMBAT_CONTEXT]</code> handoff. A loss is never death: the participant is at the winner's mercy or has surrendered.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_agent_max_tokens">Opponent-agent max output tokens</label>
+                                    <input type="number" id="rpg_lewd_combat_agent_max_tokens" class="text_pole" min="600" max="32000" step="100" value="2000" />
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_prose_max_tokens">Prose max output tokens</label>
+                                    <input type="number" id="rpg_lewd_combat_prose_max_tokens" class="text_pole" min="400" max="32000" step="100" value="2000" />
+                                </div>
                             </div>
                             <div class="rt-tc-field">
                                 <div id="rpg_lewd_combat_status" class="rt-lc-status">Lewd Combat: no board in this chat.</div>
                                 <div class="rt-tc-settings-actions">
                                     <button type="button" id="rpg_lewd_combat_open" class="menu_button interactable"><i class="fa-solid fa-heart"></i> Open Lewd Combat board</button>
+                                    <button type="button" id="rpg_lewd_combat_start" class="menu_button interactable"><i class="fa-solid fa-play"></i> Start scene</button>
+                                    <button type="button" id="rpg_lewd_combat_stop" class="menu_button interactable"><i class="fa-solid fa-hand"></i> Safe word / Stop</button>
+                                    <button type="button" id="rpg_lewd_combat_reset" class="menu_button interactable"><i class="fa-solid fa-rotate-left"></i> Reset board</button>
                                     <button type="button" id="rpg_lewd_combat_remove" class="menu_button interactable"><i class="fa-solid fa-broom"></i> Discard board in this chat</button>
                                 </div>
-                                <div class="rt-tc-settings-note">Boards are saved per chat under <code>lewdCombatByChat</code> and never touch <code>[COMBAT]</code>, HP, or Willpower. A running lewd board blocks combat-style switching, just like an open tactical board.</div>
+                                <div class="rt-tc-settings-note">Boards are saved per chat under <code>lewdCombatByChat</code> and never touch <code>[COMBAT]</code>, HP, or Willpower. A running lewd board blocks combat-style switching, just like an open tactical board. Safe word / Stop ends the scene immediately with no winner.</div>
+                            </div>
+
+                            <div class="inline-drawer rt-lewd-connection-drawer">
+                                <div class="inline-drawer-toggle inline-drawer-header">
+                                    <i class="fa-solid fa-plug-circle-bolt" style="margin-right: 6px; opacity: 0.65;"></i>
+                                    <b>Lewd Combat agent connection</b>
+                                    <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                                </div>
+                                <div class="inline-drawer-content">
+                                    <div class="rt-tc-settings-note">Used by the opponent agent and the one-time technique compiler. The prose pass always uses <b>Main API</b>. Connection settings are global.</div>
+                                    <div class="flex-container flexFlowColumn gap-1">
+                                        <label for="rpg_lewd_combat_connection_source">Connection source</label>
+                                        <select id="rpg_lewd_combat_connection_source" class="text_pole">
+                                            <option value="default">Main API</option>
+                                            <option value="profile">Profile</option>
+                                            <option value="ollama">Ollama</option>
+                                            <option value="openai">OpenAI-compatible</option>
+                                        </select>
+                                        <div id="rpg_lewd_combat_profile_group" style="display: none;">
+                                            <label for="rpg_lewd_combat_connection_profile">Profile</label>
+                                            <select id="rpg_lewd_combat_connection_profile" class="text_pole"></select>
+                                        </div>
+                                        <div id="rpg_lewd_combat_ollama_group" style="display: none;">
+                                            <label for="rpg_lewd_combat_ollama_url">Ollama URL</label>
+                                            <input id="rpg_lewd_combat_ollama_url" type="text" class="text_pole" placeholder="http://localhost:11434" />
+                                            <label for="rpg_lewd_combat_ollama_model">Ollama model</label>
+                                            <div class="flex-container gap-1">
+                                                <select id="rpg_lewd_combat_ollama_model" class="text_pole" style="flex: 1;"></select>
+                                                <button type="button" id="rpg_lewd_combat_ollama_refresh" class="menu_button interactable" title="Refresh Ollama models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                            </div>
+                                        </div>
+                                        <div id="rpg_lewd_combat_openai_group" style="display: none;">
+                                            <label for="rpg_lewd_combat_openai_url">Endpoint URL</label>
+                                            <input id="rpg_lewd_combat_openai_url" type="text" class="text_pole" placeholder="URL" />
+                                            <label for="rpg_lewd_combat_openai_key">API key</label>
+                                            <input id="rpg_lewd_combat_openai_key" type="password" class="text_pole" placeholder="Key" />
+                                            <label for="rpg_lewd_combat_openai_model">Model</label>
+                                            <div class="flex-container gap-1">
+                                                <select id="rpg_lewd_combat_openai_model" class="text_pole" style="flex: 1;"></select>
+                                                <button type="button" id="rpg_lewd_combat_openai_refresh" class="menu_button interactable" title="Refresh OpenAI-compatible models"><i class="fa-solid fa-arrows-rotate"></i></button>
+                                            </div>
+                                            <input id="rpg_lewd_combat_openai_model_manual" type="text" class="text_pole" placeholder="Manual model name" />
+                                        </div>
+                                        <label for="rpg_lewd_combat_completion_preset">Completion preset</label>
+                                        <select id="rpg_lewd_combat_completion_preset" class="text_pole"></select>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>

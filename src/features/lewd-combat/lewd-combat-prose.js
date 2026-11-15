@@ -134,6 +134,27 @@ function encounterEnded(state) {
 }
 
 /**
+ * Deterministic, non-explicit text used when the explicitness setting is
+ * `fade-to-black`. No model call is made in that mode, so the prose pass cannot
+ * disobey the setting or the hard limits.
+ *
+ * @param {object} state
+ * @param {object|object[]} [beats]
+ * @returns {string}
+ */
+export function buildLewdFadeToBlackProse(state, beats) {
+    void state;
+    const list = beatsList(beats);
+    const last = list.length ? list[list.length - 1] : null;
+    const actor = text(last?.actor?.name);
+    const targets = arr(last?.targets).map(target => text(target?.name)).filter(Boolean);
+    const pair = actor && targets.length
+        ? `${actor} and ${targets.join(', ')}`
+        : actor || targets.join(', ') || 'The participants';
+    return `The scene fades to black around ${pair}. What follows is left to the imagination, and the board keeps its own count of the moment.`;
+}
+
+/**
  * Decide whether this beat or batch warrants a prose call.
  *
  * @param {object} state
@@ -319,6 +340,10 @@ export async function generateLewdProse(state, beats, settings = {}, options = {
 
     if (!shouldGenerateLewdProse(state, list, settings, options)) {
         return { ok: false, skipped: true, fallback };
+    }
+    const tone = text(settings?.lewdCombatExplicitness) || text(state?.settings?.lewdCombatExplicitness) || 'explicit';
+    if (tone === 'fade-to-black') {
+        return { ok: true, prose: buildLewdFadeToBlackProse(state, list), fallback, suppressed: true };
     }
     if (isNarratorBusy()) {
         return { ok: false, deferred: true, fallback };

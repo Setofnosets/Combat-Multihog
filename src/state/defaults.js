@@ -38,6 +38,11 @@ import { DEFAULT_LOADOUT_CLASSIFIER_JSON } from '../features/tactical-combat/tac
 import { DEFAULT_SPELL_COMPENDIUM_JSON } from '../features/tactical-combat/tactical-combat-spell-compendium.js';
 import { DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON } from '../features/lewd-combat/lewd-combat-compendium.js';
 import { DEFAULT_LEWD_COMPILER_PROMPT } from '../features/lewd-combat/lewd-combat-compiler.js';
+import {
+    DEFAULT_LEWD_AGENT_PROMPT,
+    DEFAULT_LEWD_OUTCOME_PROMPT,
+    DEFAULT_LEWD_PROSE_PROMPT,
+} from '../features/lewd-combat/lewd-combat-prompts.js';
 import { createEmptySkillRegistry } from '../features/skill-registry/skill-registry.js';
 import {
     DEFAULT_ROUTER_AUTO_PASS_RESTRICTION,
@@ -286,6 +291,19 @@ export function buildDefaultSettings() {
         lewdCombatTechniqueCompendiumJson: DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
         lewdCombatTechniqueCache: {},
         lewdCombatCompilerPrompt: DEFAULT_LEWD_COMPILER_PROMPT,
+        lewdCombatAgentPrompt: DEFAULT_LEWD_AGENT_PROMPT,
+        lewdCombatProsePrompt: DEFAULT_LEWD_PROSE_PROMPT,
+        lewdCombatOutcomePrompt: DEFAULT_LEWD_OUTCOME_PROMPT,
+        lewdCombatAgentMaxTokens: 2000,
+        lewdCombatProseMaxTokens: 2000,
+        lewdCombatConnectionSource: "default",
+        lewdCombatConnectionProfileId: "",
+        lewdCombatCompletionPresetId: "",
+        lewdCombatOllamaUrl: "http://localhost:11434",
+        lewdCombatOllamaModel: "",
+        lewdCombatOpenaiUrl: "",
+        lewdCombatOpenaiKey: "",
+        lewdCombatOpenaiModel: "",
         lewdCombatByChat: {},
 
         renderedViewActive: true,
