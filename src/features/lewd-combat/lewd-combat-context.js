@@ -14,17 +14,26 @@
  */
 
 import { LEWD_COMBAT_LABEL } from './lewd-combat-constants.js';
+import { buildLewdTechniqueCatalog } from './lewd-combat-compendium.js';
+import {
+    applyInferenceToState,
+    computeDeterministicInference,
+    reconcileInferenceWithRoster,
+} from './lewd-combat-inference.js';
 import {
     applyLewdAction,
     createLewdEncounterState,
+    lewdParticipantControl,
     listLegalActions,
 } from './lewd-combat-engine.js';
 import {
+    extractProfileSourceText,
+    findProfileCard,
     inferProfile,
     normalizeLewdName,
     parseLewdProfiles,
 } from './lewd-combat-profile.js';
-import { getLewdEncounterForChat } from './lewd-combat-store.js';
+import { getLewdEncounterForChat, setLewdEncounterForChat } from './lewd-combat-store.js';
 import {
     collectEncounterContext,
     parseCombatUnits,
@@ -46,6 +55,37 @@ function profileIsExplicit(profile) {
 }
 
 /**
+ * Best-effort card map for profile inference: active narrator character,
+ * supplied `options.cards`, and any `ctx.characters` entries by name.
+ */
+function buildCardMap(ctx, options = {}) {
+    const map = {};
+    const characters = ctx?.characters;
+    if (Array.isArray(characters)) {
+        for (const card of characters) {
+            if (card?.name) map[card.name] = card;
+        }
+    } else if (characters && typeof characters === 'object') {
+        for (const card of Object.values(characters)) {
+            if (card?.name) map[card.name] = card;
+        }
+    }
+    const activeCard = ctx?.characters?.[ctx?.characterId];
+    if (activeCard?.name) map[activeCard.name] = activeCard;
+    if (options.cards && typeof options.cards === 'object' && !Array.isArray(options.cards)) {
+        for (const [name, card] of Object.entries(options.cards)) {
+            if (card && !map[name]) map[name] = card;
+        }
+    }
+    if (options.card) {
+        const cardName = typeof options.card === 'object' ? options.card.name : '';
+        if (cardName) map[cardName] = options.card;
+        else if (ctx?.name2) map[ctx.name2] = options.card;
+    }
+    return map;
+}
+
+/**
  * Normalize a start mode. Unknown/missing values fall back to `duel`.
  * @param {unknown} value
  * @returns {'duel'|'group'|'free-for-all'}
@@ -56,6 +96,56 @@ export function resolveLewdStartMode(value) {
     if (key === 'group') return 'group';
     if (key === 'duel') return 'duel';
     return 'duel';
+}
+
+/**
+ * Normalize a participant-control policy. Unknown/missing values fall back to
+ * `auto`, so a stale or hand-edited setting can never break a start.
+ * @param {unknown} value
+ * @returns {'auto'|'player-all'|'ai-others'}
+ */
+export function resolveLewdControlMode(value) {
+    const key = text(value).toLowerCase().replace(/[_\s]+/g, '-');
+    if (key === 'player-all' || key === 'playerall' || key === 'all-player') return 'player-all';
+    if (key === 'ai-others' || key === 'aiothers' || key === 'others-ai') return 'ai-others';
+    return 'auto';
+}
+
+function normalizePlayerKeys(playerNames) {
+    // Callers that already hold a normalized set pass it straight through so a
+    // per-candidate resolve loop does not rebuild it for every candidate.
+    if (playerNames instanceof Set) return playerNames;
+    const keys = new Set();
+    for (const name of Array.isArray(playerNames) ? playerNames : []) {
+        const key = normalizeLewdName(name);
+        if (key) keys.add(key);
+    }
+    return keys;
+}
+
+/**
+ * Resolve who controls one roster candidate. Control is independent of `side`:
+ * `player-all` makes every participant player-controlled; `auto`/`ai-others`
+ * keep only party/player-persona names on the player side and hand every
+ * `[COMBAT]`, `[LEWD]`-only, session, or scene NPC to the AI. An explicit
+ * `control` on the candidate always wins. Never inferred from names alone.
+ *
+ * @param {object} entry
+ * @param {{ controlMode?: string, playerNames?: Iterable<string> }} [options]
+ * @returns {'player'|'ai'}
+ */
+export function resolveLewdParticipantControl(entry = {}, options = {}) {
+    if (entry?.control === 'player' || entry?.control === 'ai') return entry.control;
+    if (resolveLewdControlMode(options.controlMode) === 'player-all') return 'player';
+
+    const key = text(entry?.normalizedName) || normalizeLewdName(entry?.name);
+    const playerKeys = normalizePlayerKeys(options.playerNames);
+    if (key && playerKeys.has(key)) return 'player';
+
+    const sources = Array.isArray(entry?.sources) ? entry.sources : [];
+    if (sources.includes('party')) return 'player';
+    if (text(entry?.unit?.side).toLowerCase() === 'player') return 'player';
+    return 'ai';
 }
 
 function resolveChatId(collected, ctx, options) {
@@ -83,6 +173,8 @@ function resolveChatId(collected, ctx, options) {
  *   memo: string,
  *   location: string,
  *   sceneExcerpt: string,
+ *   controlMode: 'auto'|'player-all'|'ai-others',
+ *   playerNames: string[],
  *   profiles: Record<string, object>,
  *   units: object[],
  *   candidates: object[],
@@ -92,6 +184,11 @@ function resolveChatId(collected, ctx, options) {
 export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const warnings = [];
     const memo = String(settings?.currentMemo || '');
+    const controlMode = resolveLewdControlMode(options.controlMode ?? settings?.lewdCombatControlMode);
+    const playerNames = new Set();
+    const personaKey = normalizeLewdName(ctx?.name1);
+    if (personaKey) playerNames.add(personaKey);
+    for (const key of normalizePlayerKeys(options.playerNames)) playerNames.add(key);
     let collected = null;
     try {
         collected = collectEncounterContext(settings, ctx, options);
@@ -106,6 +203,14 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const location = text(options.location || collected?.location || '');
     const sceneExcerpt = String(collected?.sceneExcerpt || '');
     const chatId = resolveChatId(collected, ctx, options);
+    // Lorebook text is read, never fetched; no new I/O happens here.
+    const lorebookText = String(options.lorebookText ?? ctx?.lorebookText ?? ctx?.worldInfoText ?? '');
+    const cardMap = buildCardMap(ctx, options);
+    const inferenceSources = (name) => ({
+        card: findProfileCard(cardMap, name),
+        trackerText: extractProfileSourceText(sourceMemo, name),
+        lorebookText,
+    });
 
     let playerUnits = Array.isArray(collected?.playerUnits) ? [...collected.playerUnits] : [];
     let enemies = Array.isArray(collected?.enemies) ? [...collected.enemies] : [];
@@ -127,7 +232,11 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     }
 
     const units = [...playerUnits, ...allies, ...enemies].filter(Boolean);
-    const profiles = parseLewdProfiles(sourceMemo, settings, { units });
+    const profiles = parseLewdProfiles(sourceMemo, settings, {
+        units,
+        cards: cardMap,
+        lorebookText,
+    });
 
     const candidates = [];
     const byKey = new Map();
@@ -135,6 +244,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const addCandidate = (entry) => {
         const key = entry.normalizedName;
         if (!key) return;
+        if (entry.control === 'player' || entry.control === 'ai') entry.controlExplicit = true;
         const existing = byKey.get(key);
         if (!existing) {
             byKey.set(key, entry);
@@ -151,6 +261,10 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
             existing.profile = entry.profile;
             existing.inferred = false;
             existing.roleSuggestion = entry.roleSuggestion;
+        }
+        if (entry.controlExplicit && !existing.controlExplicit) {
+            existing.control = entry.control;
+            existing.controlExplicit = true;
         }
         if (existing.unit?.side) existing.side = existing.unit.side;
         else if (entry.unit?.side) existing.side = entry.unit.side;
@@ -182,7 +296,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
                 unit,
                 side: unit.side || 'player',
                 roleSuggestion: explicit?.role || '',
-                profile: explicit || inferProfile(unit, settings),
+                profile: explicit || inferProfile(unit, settings, inferenceSources(unit.name)),
                 inferred: !profileIsExplicit(explicit),
                 sources: [source],
             });
@@ -205,7 +319,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
             unit,
             side: unit?.side || 'player',
             roleSuggestion: explicit?.role || '',
-            profile: explicit || inferProfile(unit || { name }, settings),
+            profile: explicit || inferProfile(unit || { name }, settings, inferenceSources(name)),
             inferred: !profileIsExplicit(explicit),
             sources: ['session'],
         });
@@ -222,12 +336,46 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
         }
     }
 
+    // Control is resolved once the merged sources/units are final. An explicit
+    // control survives the merge; everything else follows the selected mode.
+    for (const candidate of candidates) {
+        candidate.control = candidate.controlExplicit
+            ? candidate.control
+            : resolveLewdParticipantControl(
+                { ...candidate, control: undefined },
+                { controlMode, playerNames },
+            );
+    }
+
+    // Diagnostic only: which inference buckets were actually consulted.
+    const profileSources = new Set();
+    for (const profile of Object.values(profiles || {})) {
+        if (profile?.source === 'lewd' || profile?.source === 'inline') {
+            profileSources.add(profile.source);
+        }
+    }
+    if (units.length) profileSources.add('unit');
+    const consultedNames = new Set([
+        ...Object.keys(profiles || {}),
+        ...units.map(unitKey),
+        text(ctx?.name1),
+        text(ctx?.name2),
+    ].filter(Boolean).map(normalizeLewdName));
+    for (const name of consultedNames) {
+        if (findProfileCard(cardMap, name)) profileSources.add('card');
+        if (extractProfileSourceText(sourceMemo, name)) profileSources.add('tracker');
+    }
+    if (lorebookText) profileSources.add('lorebook');
+
     return {
         chatId,
         memo: sourceMemo,
         location,
         sceneExcerpt,
+        controlMode,
+        playerNames: [...playerNames],
         profiles,
+        profileSources: [...profileSources],
         units,
         candidates,
         warnings,
@@ -240,15 +388,49 @@ function findCandidate(context, name) {
     return (context?.candidates || []).find(candidate => candidate.normalizedName === key) || null;
 }
 
-function seedForName(name, context, settings, spectator) {
+function seedControlFor(name, candidate, controlMode, playerNames, options = {}) {
+    if (candidate?.controlExplicit && (candidate.control === 'player' || candidate.control === 'ai')) {
+        return candidate.control;
+    }
+    // A candidate already carries the control resolved by `collectLewdContext`.
+    // Re-resolve only when the caller asks for a different mode or player list.
+    if (candidate
+        && (candidate.control === 'player' || candidate.control === 'ai')
+        && !options.playerNamesProvided
+        && resolveLewdControlMode(controlMode) === resolveLewdControlMode(options.contextControlMode)) {
+        return candidate.control;
+    }
+    if (candidate) {
+        return resolveLewdParticipantControl(
+            { ...candidate, control: undefined },
+            { controlMode, playerNames },
+        );
+    }
+    if (resolveLewdControlMode(controlMode) === 'player-all') return 'player';
+    const key = normalizeLewdName(name);
+    if (key && normalizePlayerKeys(playerNames).has(key)) return 'player';
+    // Unknown, session-only names belong to the AI unless the player list or
+    // the mode says otherwise. Never guess from the name itself.
+    return 'ai';
+}
+
+function seedForName(name, context, settings, spectator, options = {}) {
     const clean = text(name);
     if (!clean) return null;
+    const controlMode = options.controlMode ?? context?.controlMode ?? settings?.lewdCombatControlMode;
+    const playerNames = options.playerNames || context?.playerNames || [];
     const candidate = findCandidate(context, clean);
+    const control = seedControlFor(clean, candidate, controlMode, playerNames, {
+        contextControlMode: context?.controlMode,
+        playerNamesProvided: options.playerNamesProvided === true,
+    });
     if (candidate) {
         const unit = candidate.unit || null;
         return {
             name: candidate.name || clean,
             side: candidate.side || unit?.side || 'player',
+            control,
+            ai: control === 'ai',
             spectator: !!spectator,
             stats: unit?.stats || {},
             proficiency: Number(unit?.proficiency) || 0,
@@ -259,6 +441,8 @@ function seedForName(name, context, settings, spectator) {
     return {
         name: clean,
         side: 'player',
+        control,
+        ai: control === 'ai',
         spectator: !!spectator,
         stats: {},
         proficiency: 0,
@@ -269,22 +453,33 @@ function seedForName(name, context, settings, spectator) {
 /**
  * Build engine participant seeds from a collected context.
  *
- * Unknown names are allowed: they become inferred, unit-less players. The
+ * Unknown names are allowed: they become inferred, unit-less participants.
+ * Control follows `controlMode`/`playerNames`; unknown names are AI-controlled
+ * unless the mode is `player-all` or the name is explicitly a player. The
  * function throws when fewer than two non-spectator participants are selected —
  * that is a programming/selection error the caller must surface, not a board.
  *
  * @param {object} context
- * @param {{ participantNames?: string[], spectatorNames?: string[], mode?: string, settings?: object }} [options]
+ * @param {{ participantNames?: string[], spectatorNames?: string[], mode?: string, settings?: object, controlMode?: string, playerNames?: string[] }} [options]
  * @returns {object[]}
  */
 export function buildLewdParticipantSeeds(context, options = {}) {
     const settings = options.settings || {};
+    const controlMode = options.controlMode ?? context?.controlMode ?? settings.lewdCombatControlMode;
+    const explicitPlayerNames = Array.isArray(options.playerNames) ? options.playerNames : [];
+    const contextPlayerNames = Array.isArray(context?.playerNames) ? context.playerNames : [];
+    const playerNames = [...new Set([...explicitPlayerNames, ...contextPlayerNames])];
+    const seedOptions = {
+        controlMode,
+        playerNames,
+        playerNamesProvided: explicitPlayerNames.length > 0,
+    };
     const participants = [];
     const spectators = [];
     const seen = new Set();
 
     for (const name of options.participantNames || []) {
-        const seed = seedForName(name, context, settings, false);
+        const seed = seedForName(name, context, settings, false, seedOptions);
         if (!seed) continue;
         const key = normalizeLewdName(seed.name);
         if (!key || seen.has(key)) continue;
@@ -292,7 +487,7 @@ export function buildLewdParticipantSeeds(context, options = {}) {
         participants.push(seed);
     }
     for (const name of options.spectatorNames || []) {
-        const seed = seedForName(name, context, settings, true);
+        const seed = seedForName(name, context, settings, true, seedOptions);
         if (!seed) continue;
         const key = normalizeLewdName(seed.name);
         if (!key || seen.has(key)) continue;
@@ -304,6 +499,149 @@ export function buildLewdParticipantSeeds(context, options = {}) {
         throw new Error('Lewd Combat needs at least two active participants. Select two or more names.');
     }
     return [...participants, ...spectators];
+}
+
+const DEFAULT_POST_ENCOUNTER_COOLDOWN_MS = 60000;
+
+function postEncounterLatchEnabled(settings) {
+    return settings?.lewdCombatPostEncounterLatch !== false;
+}
+
+function postEncounterCooldownMs(settings) {
+    const value = Number(settings?.lewdCombatPostEncounterCooldownMs);
+    if (!Number.isFinite(value)) return DEFAULT_POST_ENCOUNTER_COOLDOWN_MS;
+    return Math.max(0, Math.min(600000, value));
+}
+
+function sameResolution(state, stateId) {
+    const id = text(stateId);
+    return !id
+        || String(state?.resolution?.stateId ?? '') === id
+        || String(state?.id ?? '') === id;
+}
+
+/**
+ * Record that the narrator actually injected the outcome. This is half of the
+ * turn-based latch; consumption happens on the next user turn.
+ *
+ * @param {Record<string, any>} settings
+ * @param {string} chatId
+ * @param {string} [stateId]
+ * @param {{ now?: number, persist?: boolean }} [options]
+ * @returns {boolean}
+ */
+export function markLewdResolutionDelivered(settings, chatId, stateId, options = {}) {
+    if (!settings || !text(chatId)) return false;
+    const state = getLewdEncounterForChat(chatId, settings);
+    if (!state?.resolution || !sameResolution(state, stateId)) return false;
+    if (Number(state.resolution.deliveredAt) > 0) return true;
+    state.resolution.deliveredAt = Number(options.now) || Date.now();
+    setLewdEncounterForChat(chatId, state, settings, { persist: options.persist !== false });
+    return true;
+}
+
+/**
+ * Consume the resolution latch. Manual consumption (New encounter / Reset)
+ * bypasses the cooldown; automatic consumption still leaves the cooldown as a
+ * safety net.
+ *
+ * @param {Record<string, any>} settings
+ * @param {string} chatId
+ * @param {{ reason?: string, now?: number, persist?: boolean }} [options]
+ * @returns {object|null}
+ */
+export function consumeLewdResolution(settings, chatId, options = {}) {
+    if (!settings || !text(chatId)) return null;
+    const state = getLewdEncounterForChat(chatId, settings);
+    if (!state?.resolution) return null;
+    const now = Number(options.now) || Date.now();
+    if (!Number(state.resolution.consumedAt)) {
+        state.resolution.consumedAt = now;
+        state.resolution.consumedFor = text(options.reason) || 'manual';
+    }
+    // The finalizing marker exists to block the tool until the handoff is
+    // acknowledged. Once consumed it must stop blocking.
+    if (state.finalization && state.finalization.finalizing) {
+        state.finalization = {
+            ...state.finalization,
+            finalizing: false,
+            finalizingClearedAt: now,
+        };
+    }
+    setLewdEncounterForChat(chatId, state, settings, { persist: options.persist !== false });
+    return state.resolution;
+}
+
+/**
+ * Consume a resolution that the narrator already delivered. Called at the start
+ * of the user-turn tool sync: the next player turn acknowledges the aftermath.
+ *
+ * @param {Record<string, any>} settings
+ * @param {string} chatId
+ * @param {{ now?: number, persist?: boolean }} [options]
+ * @returns {object|null}
+ */
+export function consumeDeliveredLewdResolution(settings, chatId, options = {}) {
+    if (!settings || !text(chatId) || !postEncounterLatchEnabled(settings)) return null;
+    const state = getLewdEncounterForChat(chatId, settings);
+    if (!state?.resolution) return null;
+    if (!Number(state.resolution.deliveredAt)) return null;
+    if (Number(state.resolution.consumedAt)) return null;
+    return consumeLewdResolution(settings, chatId, { ...options, reason: 'user-turn' });
+}
+
+/**
+ * Whether a start must be refused because the previous encounter still owns the
+ * chat: unconsumed handoff, in-flight finalization, or the post-encounter
+ * cooldown. Legacy finished boards without a resolution stay startable.
+ *
+ * @param {Record<string, any>} settings
+ * @param {string} chatId
+ * @param {{ now?: number }} [options]
+ * @returns {{ latched: boolean, reason?: string }}
+ */
+export function isLewdStartLatched(settings, chatId, options = {}) {
+    const id = text(chatId);
+    if (!settings || !id) return { latched: false };
+    const state = getLewdEncounterForChat(id, settings);
+    if (!state) return { latched: false };
+    const now = Number(options.now) || Date.now();
+    const resolution = state.resolution && typeof state.resolution === 'object'
+        ? state.resolution
+        : null;
+    const consumed = Number(resolution?.consumedAt) > 0;
+    const manual = consumed && ['manual', 'reset'].includes(text(resolution?.consumedFor));
+
+    if (state.status !== 'active') {
+        if (resolution && !consumed && postEncounterLatchEnabled(settings)) {
+            return {
+                latched: true,
+                reason: 'The last Lewd Combat scene has not been acknowledged yet. Finish its aftermath or choose New encounter before starting another.',
+            };
+        }
+        const endedAt = Number(resolution?.endedAt || state.endedAt) || 0;
+        const cooldown = postEncounterCooldownMs(settings);
+        if (endedAt && cooldown > 0 && !manual && now - endedAt < cooldown) {
+            const seconds = Math.ceil((cooldown - Math.max(0, now - endedAt)) / 1000);
+            return {
+                latched: true,
+                reason: `A Lewd Combat scene just ended. Wait ${seconds}s or choose New encounter before starting another.`,
+            };
+        }
+        if (!resolution && state.finalization?.finalizing && postEncounterLatchEnabled(settings)) {
+            return {
+                latched: true,
+                reason: 'The last Lewd Combat outcome is still being delivered. Wait for the aftermath before starting another scene.',
+            };
+        }
+    }
+    if (state.finalization?.finalizing && !consumed) {
+        return {
+            latched: true,
+            reason: 'The last Lewd Combat outcome is still being delivered. Wait for the aftermath before starting another scene.',
+        };
+    }
+    return { latched: false };
 }
 
 /**
@@ -322,6 +660,8 @@ export function canStartLewdEncounter(settings, chatId) {
     if (existing && existing.status === 'active') {
         return { ok: false, reason: 'A Lewd Combat board is already active in this chat. Reset it first.' };
     }
+    const latch = isLewdStartLatched(settings, id);
+    if (latch.latched) return { ok: false, reason: latch.reason };
     const tactical = settings?.tacticalCombatByChat?.[id]?.status;
     const traditional = settings?.traditionalCombatByChat?.[id]?.status;
     if (tactical === 'active' || traditional === 'active') {
@@ -339,30 +679,67 @@ export function canStartLewdEncounter(settings, chatId) {
  * @returns {{ state: object, context: object, warnings: string[], opening?: object }}
  */
 export function createLewdEncounterFromContext(settings = {}, ctx = {}, options = {}) {
-    const context = collectLewdContext(settings, ctx, options);
+    const controlMode = resolveLewdControlMode(options.controlMode ?? settings.lewdCombatControlMode);
+    const playerNames = Array.isArray(options.playerNames) ? options.playerNames : [];
+    const context = collectLewdContext(settings, ctx, { ...options, controlMode, playerNames });
     const seeds = buildLewdParticipantSeeds(context, {
         participantNames: options.participantNames,
         spectatorNames: options.spectatorNames,
         mode: options.mode,
         settings,
+        controlMode,
+        playerNames,
     });
     const seed = options.seed != null && options.seed !== ''
         ? String(options.seed)
         : `${context.chatId || 'lewd'}:${Date.now()}`;
+    // A new encounter always sees the merged catalog: shipped + compile-once
+    // cache + user compendium + `[LEWD_TECHNIQUES]` from the current memo. Tests
+    // may still supply an explicit catalog to keep a fixture deterministic.
+    const catalog = Array.isArray(options.techniques)
+        ? {
+            techniques: options.techniques,
+            diagnostics: [],
+            error: '',
+            sources: { shipped: options.techniques.length, cache: 0, user: 0, memo: 0 },
+        }
+        : buildLewdTechniqueCatalog(settings, context.memo || '');
     const state = createLewdEncounterState({
         participants: seeds,
         seed,
         settings,
         mode: resolveLewdStartMode(options.mode),
+        controlMode,
         id: options.id != null ? String(options.id) : `lewd-${seed}`,
-        techniques: options.techniques,
+        techniques: catalog.techniques,
     });
     state.title = text(options.title) || LEWD_COMBAT_LABEL;
     state.location = text(options.location) || context.location || '';
     state.reason = text(options.reason);
     state.tone = text(options.tone) || text(settings.lewdCombatExplicitness) || 'explicit';
+    state.profileInference = {
+        completedAt: Date.now(),
+        sources: Array.isArray(context.profileSources) ? [...context.profileSources] : [],
+    };
+
+    // One-time, per-encounter availability pass. The deterministic prefilter is
+    // synchronous and always succeeds; an optional agent enrichment runs later
+    // through `refreshLewdActionInference` without ever blocking the board.
+    if (options.inferredActions && typeof options.inferredActions === 'object') {
+        applyInferenceToState(state, options.inferredActions);
+    } else if (options.inferActions !== false) {
+        const inference = computeDeterministicInference(state);
+        if (catalog.diagnostics?.length) {
+            inference.diagnostics.push(...catalog.diagnostics);
+        }
+        applyInferenceToState(state, inference);
+    }
 
     const warnings = [...context.warnings];
+    if (catalog.diagnostics?.length) {
+        warnings.push(...catalog.diagnostics.slice(0, 3));
+    }
+    if (catalog.error) warnings.push(`Technique compendium error: ${catalog.error}`);
     let opening = null;
     if (options.openingTechnique) {
         opening = applyLewdOpeningExchange(state, {
@@ -379,13 +756,15 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
 }
 
 function openingActor(state) {
-    return (state?.participants || []).find(participant =>
-        !participant.spectator
-        && !participant.ai
-        && participant.side !== 'enemy'
-        && participant.side !== 'opponent'
+    const participants = state?.participants || [];
+    const eligible = participant => !participant.spectator
         && !participant.atMercy
-        && !participant.surrendered) || null;
+        && !participant.surrendered;
+    // Only a player-controlled participant may open the narrator-declared
+    // exchange. A legacy board without a control field is resolved through
+    // `ai`/side inside `lewdParticipantControl`.
+    return participants.find(participant =>
+        eligible(participant) && lewdParticipantControl(participant) === 'player') || null;
 }
 
 /**

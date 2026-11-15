@@ -21,6 +21,11 @@ import {
     parseLewdAgentResponse,
     requestLewdOpponentAction,
 } from '../src/features/lewd-combat/lewd-combat-agent.js';
+import {
+    computeDeterministicInference,
+    reconcileInferenceWithRoster,
+    refreshLewdActionInference,
+} from '../src/features/lewd-combat/lewd-combat-inference.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -124,6 +129,79 @@ describe('lewd-combat-agent', () => {
         expect(payload.knownProfiles[aria.id].limits).toEqual(['feet']);
         expect(payload.knownProfiles[actor.id].limits).toBeUndefined();
         expect(payload.rules.constraints.join(' ')).toContain('Never invent numbers, targets, body zones, or outcomes.');
+    });
+
+    it('lists requirement-disabled actions with reasons while legalActions excludes them', () => {
+        const state = makeState();
+        const actor = unit(state, 'Bran');
+        const payload = buildLewdAgentPayload(state, actor);
+
+        const disabled = payload.disabledActions.find(entry => entry.id === 'penetration-start');
+        expect(disabled).toBeTruthy();
+        expect(disabled.reasons.join(' ')).toContain('Set anatomy in [LEWD]');
+        expect(payload.legalActions.some(entry => entry.id === 'penetration-start')).toBe(false);
+        expect(payload.legalActions.find(entry => entry.id === 'neck-kiss').effects.requires)
+            .toBeTypeOf('object');
+
+        const prompts = buildLewdAgentPrompts(state, actor);
+        expect(prompts.user).toContain('disabledActions');
+        expect(prompts.user).toContain('illegal');
+    });
+
+    it('exposes anatomy, skills, kinks, and source tags without leaking provenance', () => {
+        const state = createLewdEncounterState({
+            seed: 'agent-profile-seed',
+            participants: [
+                {
+                    name: 'Aria',
+                    side: 'player',
+                    profile: profile('Aria', {
+                        anatomy: ['vagina'],
+                        skills: ['bondage'],
+                        kinks: ['praise'],
+                        sourceSkills: ['Ropework'],
+                        sourceTraits: ['tail'],
+                        body: 'Lean.',
+                        species: 'human',
+                        inferredFields: ['anatomy'],
+                    }),
+                },
+                {
+                    name: 'Bran',
+                    side: 'opponent',
+                    profile: profile('Bran', {
+                        anatomy: ['penis', 'tail'],
+                        skills: ['teasing'],
+                        kinks: ['praise'],
+                        sourceSkills: [],
+                        sourceTraits: ['tail'],
+                        body: 'Broad.',
+                        species: 'elf',
+                    }),
+                },
+            ],
+        });
+        const aria = unit(state, 'Aria');
+        const bran = unit(state, 'Bran');
+        const payload = buildLewdAgentPayload(state, bran);
+
+        expect(payload.knownProfiles[aria.id]).toMatchObject({
+            body: 'Lean.',
+            species: 'human',
+            anatomy: ['vagina'],
+            skills: ['bondage'],
+            kinks: ['praise'],
+            sourceSkills: ['Ropework'],
+            sourceTraits: ['tail'],
+            inferredFields: ['anatomy'],
+        });
+        expect(payload.actor).toMatchObject({
+            anatomy: ['penis', 'tail'],
+            skills: ['teasing'],
+            kinks: ['praise'],
+            sourceTraits: ['tail'],
+        });
+        expect(JSON.stringify(payload)).not.toContain('provenance');
     });
 
     it('builds prompts with the payload and actor name', () => {
@@ -322,6 +400,175 @@ describe('lewd-combat-agent', () => {
         expect(second.ok).toBe(true);
         expect(resolveNovelTechnique).toHaveBeenCalledTimes(1);
         expect(state.techniques.filter(entry => entry.id === novel.id)).toHaveLength(1);
+    });
+
+    it('scopes listLegalActions to the encounter inference set', () => {
+        const state = makeState();
+        const aria = unit(state, 'Aria');
+        const all = listLegalActions(state, aria);
+        expect(all.length).toBeGreaterThan(1);
+
+        state.inferredActions = {
+            stateId: state.id,
+            availableTechniqueIds: ['neck-kiss'],
+            perParticipant: {},
+        };
+        const scoped = listLegalActions(state, aria);
+        expect(scoped.map(entry => entry.id)).toEqual(['neck-kiss']);
+    });
+
+    it('reports the inference source and count in the agent payload', () => {
+        const state = makeState();
+        state.inferredActions = {
+            stateId: state.id,
+            completedAt: 1234,
+            source: 'agent',
+            availableTechniqueIds: ['neck-kiss'],
+            perParticipant: {},
+        };
+        const payload = buildLewdAgentPayload(state, unit(state, 'Bran'));
+        expect(payload.inference).toEqual({ source: 'agent', availableCount: 1, completedAt: 1234 });
+        expect(payload.legalActions.map(entry => entry.id)).toEqual(['neck-kiss']);
+    });
+
+    it('infers anatomy-aware acts deterministically without the agent', async () => {
+        const state = createLewdEncounterState({
+            seed: 'infer-seed',
+            participants: [
+                { name: 'Aria', side: 'player', anatomy: ['penis'], skills: ['bondage'], profile: profile('Aria') },
+                { name: 'Bran', side: 'opponent', anatomy: ['vagina', 'tail'], profile: profile('Bran') },
+                { name: 'Nyx', side: 'opponent', anatomy: [], profile: profile('Nyx') },
+            ],
+        });
+
+        const deterministic = computeDeterministicInference(state);
+        expect(deterministic.availableTechniqueIds).toContain('penetration-start');
+        expect(deterministic.availableTechniqueIds).toContain('tighten-bindings');
+        expect(deterministic.availableTechniqueIds).toContain('tail-wrap');
+
+        // Aria has no tail, so tail-wrap is in the union but not her list.
+        expect(deterministic.perParticipant.aria.availableTechniqueIds).not.toContain('tail-wrap');
+        expect(deterministic.perParticipant.aria.availableTechniqueIds).toContain('tighten-bindings');
+        // Bran has a tail.
+        expect(deterministic.perParticipant.bran.availableTechniqueIds).toContain('tail-wrap');
+        // Nyx has no known anatomy: penis-only acts are blocked with a reason.
+        expect(deterministic.perParticipant.nyx.availableTechniqueIds).not.toContain('paizuri');
+        expect(deterministic.perParticipant.nyx.reasons['penetration-start']).toMatch(/requires/i);
+
+        // Offline: no send and no configured agent falls back deterministically.
+        const inference = await refreshLewdActionInference(state, {});
+        expect(inference.source).toBe('deterministic');
+        expect(state.inferredActions.availableTechniqueIds).toEqual(deterministic.availableTechniqueIds);
+        expect(state.inferredActions.perParticipant.bran.availableTechniqueIds).toContain('tail-wrap');
+    });
+
+    it('rejects inferred ids outside the catalog and falls back on agent failure', async () => {
+        const state = makeState();
+        const send = vi.fn(async () => '{"availableTechniqueIds":["not-in-catalog"]}');
+        const inference = await refreshLewdActionInference(state, {}, { sendStateRequest: send });
+        expect(inference.source).toBe('agent');
+        expect(inference.availableTechniqueIds).not.toContain('not-in-catalog');
+        expect(inference.diagnostics.join(' ')).toMatch(/not in the catalog/i);
+
+        const broken = makeState({ seed: 'broken-infer' });
+        const failing = vi.fn(async () => { throw new Error('offline'); });
+        const fallback = await refreshLewdActionInference(broken, {}, { sendStateRequest: failing });
+        expect(fallback.source).toBe('deterministic-fallback');
+        expect(fallback.agentError).toBe('offline');
+        expect(broken.inferredActions.availableTechniqueIds.length).toBeGreaterThan(0);
+    });
+
+    it('keeps the deterministic union when the agent returns an empty list', async () => {
+        const state = makeState();
+        const deterministic = computeDeterministicInference(state).availableTechniqueIds;
+        const send = vi.fn(async () => '{"availableTechniqueIds":[]}');
+        const inference = await refreshLewdActionInference(state, {}, { sendStateRequest: send });
+        expect(inference.source).toBe('agent');
+        expect(inference.availableTechniqueIds).toEqual(deterministic);
+    });
+
+    it('unions a fresh deterministic pass when the roster changes', async () => {
+        const state = makeState();
+        state.inferredActions = {
+            stateId: state.id,
+            source: 'agent',
+            availableTechniqueIds: ['neck-kiss'],
+            perParticipant: {},
+        };
+        const nyx = state.participants.find(participant => participant.name === 'Bran');
+        nyx.spectator = true;
+        state.participants.push({
+            id: 'tail-guest',
+            name: 'Tail Guest',
+            side: 'player',
+            spectator: false,
+            anatomy: ['tail'],
+            profile: profile('Tail Guest'),
+            control: 'player',
+            ai: false,
+            engagedWith: [],
+            status: [],
+            uses: {},
+            acted: false,
+            atMercy: false,
+            surrendered: false,
+            stamina: 3,
+            maxStamina: 3,
+            arousal: 0,
+            maxArousal: 20,
+            poise: 8,
+            maxPoise: 8,
+        });
+        reconcileInferenceWithRoster(state);
+        expect(state.inferredActions.availableTechniqueIds).toContain('neck-kiss');
+        expect(state.inferredActions.availableTechniqueIds).toContain('tail-wrap');
+        expect(state.inferredActions.perParticipant['tail-guest'].availableTechniqueIds)
+            .toContain('tail-wrap');
+    });
+
+    it('compiles a novel inferred technique once while recomputing availability per encounter', async () => {
+        const novel = validateLewdTechnique({
+            id: 'silk-slide',
+            name: 'Silk Slide',
+            category: 'technique',
+            posture: 'either',
+            zones: ['neck'],
+            targetMode: 'single',
+            tags: ['teasing'],
+            check: { stat: 'cha', accuracy: 2 },
+            arousal: '1d4',
+            poise: '1d4',
+            actType: 'other',
+        }).technique;
+        const compileTechnique = vi.fn(async () => ({ ok: true, technique: novel }));
+        const settings = {};
+        const send = vi.fn(async () => JSON.stringify({
+            availableTechniqueIds: [],
+            novelTechniques: [{ name: novel.name, description: 'A slow slide.' }],
+        }));
+
+        const firstState = makeState({ seed: 'novel-infer-1' });
+        const first = await refreshLewdActionInference(firstState, settings, {
+            sendStateRequest: send,
+            compileTechnique,
+        });
+        expect(first.novelTechniqueIds).toEqual(['silk-slide']);
+        expect(first.availableTechniqueIds).toContain('silk-slide');
+        expect(compileTechnique).toHaveBeenCalledTimes(1);
+        expect(settings.lewdCombatTechniqueCache['silk-slide']).toBeTruthy();
+
+        // Second encounter: the definition comes from the compile-once cache,
+        // while availability is a fresh, encounter-scoped object.
+        const secondState = makeState({ seed: 'novel-infer-2' });
+        const second = await refreshLewdActionInference(secondState, settings, {
+            sendStateRequest: send,
+            compileTechnique,
+        });
+        expect(compileTechnique).toHaveBeenCalledTimes(1);
+        expect(second.availableTechniqueIds).toContain('silk-slide');
+        expect(secondState.inferredActions).not.toBe(firstState.inferredActions);
+        expect(secondState.inferredActions.stateId).toBe(secondState.id);
+        expect(secondState.techniques.filter(entry => entry.id === 'silk-slide')).toHaveLength(1);
     });
 
     it('only reports the lewd agent as configured when its own keys are set', () => {

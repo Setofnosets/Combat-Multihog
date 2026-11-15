@@ -11,6 +11,9 @@ import {
     describeLewdBeat,
 } from './lewd-combat-markup.js';
 import {
+    lewdBeatId,
+} from './lewd-combat-engine.js';
+import {
     DEFAULT_LEWD_PROSE_PROMPT,
 } from './lewd-combat-prompts.js';
 
@@ -127,6 +130,58 @@ export function buildLewdBeatSheet(state, beats, options = {}) {
         targets: lastExchange?.targets || [],
         stateChanges: lastExchange?.stateChanges || [],
     };
+}
+
+/**
+ * Every log entry after the last narrated index. This is the whole exchange —
+ * the player's beat and the AI reply — not only the newest entry.
+ *
+ * @param {object} state
+ * @returns {{ beat: object, index: number }[]}
+ */
+export function selectUnnarratedBeats(state) {
+    const log = arr(state?.log);
+    const last = Number.isFinite(Number(state?.lastNarratedLogIndex))
+        ? Number(state.lastNarratedLogIndex)
+        : -1;
+    const narrated = new Set(arr(state?.narratedBeatIds).map(String));
+    const items = [];
+    log.forEach((beat, index) => {
+        if (!beat || typeof beat !== 'object') return;
+        const id = lewdBeatId(state, beat, index);
+        if (narrated.has(id)) return;
+        // Legacy boards have no beat ids; fall back to the absolute cursor.
+        if (!narrated.size && index <= last) return;
+        items.push({ beat, index });
+    });
+    return items;
+}
+
+/**
+ * Deterministic stand-ins for un-narrated beats when the model prose pass fails
+ * or is unavailable. One entry per beat, all clearly marked as fallback.
+ *
+ * @param {object} state
+ * @param {{ beat: object, index: number }[]} items
+ * @returns {object[]}
+ */
+export function buildLewdFallbackProseEntries(state, items) {
+    return arr(items)
+        .filter(item => item?.beat && typeof item.beat === 'object')
+        .map(item => {
+            const beat = item.beat;
+            const actorId = text(beat?.actor?.id);
+            return {
+                stateId: text(state?.id),
+                chatId: text(state?.chatId),
+                round: Number(beat?.round) || Number(state?.round) || 1,
+                actorIds: actorId ? [actorId] : [],
+                beatIds: [lewdBeatId(state, beat, item.index)],
+                text: describeLewdBeat(beat, state),
+                source: 'fallback',
+            };
+        })
+        .filter(entry => entry.text);
 }
 
 function encounterEnded(state) {

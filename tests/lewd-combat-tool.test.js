@@ -9,11 +9,12 @@ vi.mock('../../../../script.js', () => ({
 import {
     buildLewdCombatRuntimeOverride,
     lewdCombatToolConfigured,
+    onLewdUserTurn,
     registerLewdCombatTool,
     syncLewdCombatToolRegistration,
     unregisterLewdCombatTool,
 } from '../narrative-hooks.js';
-import { canStartLewdEncounter } from '../src/features/lewd-combat/lewd-combat-context.js';
+import { canStartLewdEncounter, consumeLewdResolution } from '../src/features/lewd-combat/lewd-combat-context.js';
 import { buildDefaultSettings } from '../src/state/defaults.js';
 import { RT_PROMPTS } from '../constants.js';
 
@@ -49,6 +50,7 @@ describe('Lewd Combat narrator function tool', () => {
 
     afterEach(() => {
         vi.restoreAllMocks();
+        delete globalThis._rpgGenerationBusy;
     });
 
     it('registers StartLewdCombat once with the public draft-04 schema', () => {
@@ -69,9 +71,10 @@ describe('Lewd Combat narrator function tool', () => {
         expect(tool.parameters.type).toBe('object');
         expect(tool.parameters.required).toEqual([]);
         expect(Object.keys(tool.parameters.properties).sort()).toEqual([
-            'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
+            'controlMode', 'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
         ]);
         expect(tool.parameters.properties.mode.enum).toEqual(['duel', 'group', 'free-for-all']);
+        expect(tool.parameters.properties.controlMode.enum).toEqual(['auto', 'player-all', 'ai-others']);
         expect(tool.stealth).toBe(false);
         expect(typeof tool.action).toBe('function');
         expect(tool.formatMessage()).toMatch(/board is open/i);
@@ -122,6 +125,102 @@ describe('Lewd Combat narrator function tool', () => {
         expect(lewdCombatToolConfigured()).toBe(true);
     });
 
+    it('stays unavailable through the handoff and re-arms after manual consumption', () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatPostEncounterCooldownMs = 0;
+        s.lewdCombatByChat = {
+            'vitest-chat': {
+                id: 'lewd-latch',
+                status: 'ended',
+                endedAt: Date.now(),
+                resolution: {
+                    stateId: 'lewd-latch',
+                    endedAt: Date.now(),
+                    consumedAt: 0,
+                    consumedFor: '',
+                    deliveredAt: Date.now(),
+                },
+            },
+        };
+        registerLewdCombatTool();
+        const tool = registerFunctionTool.mock.calls[0][0];
+
+        expect(tool.shouldRegister()).toBe(false);
+        expect(canStartLewdEncounter(s, 'vitest-chat').ok).toBe(false);
+
+        consumeLewdResolution(s, 'vitest-chat', { reason: 'manual', persist: false });
+        expect(tool.shouldRegister()).toBe(true);
+        expect(canStartLewdEncounter(s, 'vitest-chat').ok).toBe(true);
+    });
+
+    it('consumes a delivered result on the next user turn and re-registers', () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatPostEncounterCooldownMs = 0;
+        const board = {
+            id: 'lewd-delivered',
+            status: 'ended',
+            endedAt: Date.now(),
+            resolution: {
+                stateId: 'lewd-delivered',
+                endedAt: Date.now(),
+                consumedAt: 0,
+                consumedFor: '',
+                deliveredAt: Date.now(),
+            },
+        };
+        s.lewdCombatByChat = { 'vitest-chat': board };
+
+        onLewdUserTurn();
+        expect(board.resolution.consumedFor).toBe('user-turn');
+        expect(registerFunctionTool).toHaveBeenCalledTimes(1);
+        expect(registerFunctionTool.mock.calls[0][0].name).toBe('StartLewdCombat');
+    });
+
+    it('never consumes the latch on generation start/end registration syncs', () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatPostEncounterCooldownMs = 0;
+        const board = {
+            id: 'lewd-busy',
+            status: 'ended',
+            endedAt: Date.now(),
+            resolution: {
+                stateId: 'lewd-busy',
+                endedAt: Date.now(),
+                consumedAt: 0,
+                consumedFor: '',
+                deliveredAt: Date.now(),
+            },
+        };
+        s.lewdCombatByChat = { 'vitest-chat': board };
+
+        // GENERATION_STARTED and GENERATION_ENDED both call the sync, including
+        // for swipes/continues. Neither is a player turn, so neither consumes.
+        globalThis._rpgGenerationBusy = false;
+        syncLewdCombatToolRegistration();
+        expect(board.resolution.consumedAt).toBe(0);
+        expect(registerFunctionTool).not.toHaveBeenCalled();
+
+        globalThis._rpgGenerationBusy = true;
+        syncLewdCombatToolRegistration();
+        expect(board.resolution.consumedAt).toBe(0);
+        expect(registerFunctionTool).not.toHaveBeenCalled();
+
+        // Only the explicit user-turn hook releases the latch.
+        globalThis._rpgGenerationBusy = false;
+        onLewdUserTurn();
+        expect(board.resolution.consumedFor).toBe('user-turn');
+        expect(registerFunctionTool).toHaveBeenCalledTimes(1);
+    });
+
     it('syncs registration without any combat-style coupling', () => {
         const registerFunctionTool = vi.fn();
         const unregisterFunctionTool = vi.fn();
@@ -154,6 +253,25 @@ describe('Lewd Combat narrator function tool', () => {
         delete s.tacticalCombatReturn;
 
         s.lewdCombatByChat = { 'vitest-chat': { status: 'ended' } };
+        expect(buildLewdCombatRuntimeOverride(s)).toBe('');
+
+        s.lewdCombatByChat = {
+            'vitest-chat': {
+                status: 'ended',
+                resolution: { stateId: 'lewd-1', consumedAt: 0, deliveredAt: 0 },
+            },
+        };
+        const handoff = buildLewdCombatRuntimeOverride(s);
+        expect(handoff).toContain('[LEWD_COMBAT_OVERRIDE]');
+        expect(handoff).toMatch(/do not resume or restart/i);
+        expect(handoff).toContain('StartLewdCombat');
+
+        s.lewdCombatByChat = {
+            'vitest-chat': {
+                status: 'ended',
+                resolution: { stateId: 'lewd-1', consumedAt: Date.now(), consumedFor: 'user-turn' },
+            },
+        };
         expect(buildLewdCombatRuntimeOverride(s)).toBe('');
 
         delete s.lewdCombatByChat;

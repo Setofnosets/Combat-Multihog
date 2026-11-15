@@ -13541,6 +13541,47 @@ body.rt-tc-modal-open {
     gap: 8px;
 }
 
+.rt-lc-pair-state {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 9px;
+    border: 1px solid var(--tc-border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--tc-muted);
+    font-size: 11px;
+}
+
+.rt-lc-inference {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 9px;
+    border: 1px dashed var(--tc-border);
+    border-radius: 8px;
+    color: var(--tc-muted);
+    font-size: 11px;
+}
+
+.rt-lc-inference-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rt-lc-pair-row {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rt-lc-followups .rt-lc-technique-category {
+    color: var(--tc-accent);
+}
+
 .rt-lc-technique-group {
     display: flex;
     flex-direction: column;
@@ -13770,6 +13811,26 @@ body.rt-tc-modal-open {
     font-size: 12px;
     font-style: italic;
     line-height: 1.6;
+}
+
+/* Chronological prose transcript: one entry per exchange, newest at the bottom. */
+.rt-lc-prose-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.rt-lc-prose-entry {
+    flex: 0 0 auto;
+}
+
+.rt-lc-prose-entry[data-lc-prose-source="fallback"] {
+    opacity: 0.85;
+    font-style: normal;
 }
 
 .rt-lc-debug {

@@ -2929,6 +2929,28 @@
                                     <label for="rpg_lewd_combat_max_partners">Max concurrent partners</label>
                                     <input type="number" id="rpg_lewd_combat_max_partners" class="text_pole" min="1" max="4" step="1" value="2" />
                                 </div>
+                                <label class="checkbox_label" for="rpg_lewd_combat_post_encounter_latch">
+                                    <input type="checkbox" id="rpg_lewd_combat_post_encounter_latch" checked />
+                                    Latch a finished scene until the aftermath has been delivered and the next player turn begins
+                                </label>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_post_encounter_cooldown">Post-encounter cooldown (seconds)</label>
+                                    <input type="number" id="rpg_lewd_combat_post_encounter_cooldown" class="text_pole" min="0" max="600" step="1" value="60" />
+                                    <div class="rt-tc-settings-note">Mechanical safety net against tool loops; the turn-based latch is the primary guard. <b>New encounter</b> or <b>Reset</b> clears both immediately.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_combat_cleanup">[COMBAT] cleanup after a combat-sourced scene</label>
+                                    <select id="rpg_lewd_combat_combat_cleanup" class="text_pole">
+                                        <option value="off">Off — leave [COMBAT] untouched</option>
+                                        <option value="mark" selected>Mark — write At Mercy / Sated status lines</option>
+                                        <option value="close">Close — mark, then END_COMBAT when every combatant was in the scene</option>
+                                    </select>
+                                    <div class="rt-tc-settings-note">Only applies when the lewd scene includes combat-sourced participants. A <code>[LEWD]</code>-only scene never writes <code>[COMBAT]</code>.</div>
+                                </div>
+                                <label class="checkbox_label" for="rpg_lewd_combat_mercy_status_writeback">
+                                    <input type="checkbox" id="rpg_lewd_combat_mercy_status_writeback" checked />
+                                    Write At Mercy / Sated status back into [COMBAT]
+                                </label>
                                 <div class="rt-tc-field">
                                     <label for="rpg_lewd_combat_compendium">Technique compendium (JSON)</label>
                                     <textarea id="rpg_lewd_combat_compendium" class="text_pole rt-tc-catalog-input" rows="12" spellcheck="false" placeholder="Leave empty to use only the shipped catalog."></textarea>

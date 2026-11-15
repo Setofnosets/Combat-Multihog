@@ -13,9 +13,13 @@
 import { getActiveChatId, getSettings } from '../../../state-manager.js';
 import { LEWD_CHANGED_EVENT, LEWD_OPEN_EVENT } from './lewd-combat-constants.js';
 import {
+    appendLewdProseEntry,
     applyLewdAction,
     hydrateLewdState,
+    lewdBeatId,
+    lewdParticipantControl,
     listLegalActions,
+    markLewdBeatsNarrated,
     resolveLewdOpponentTurn,
     serializeLewdState,
     setSpectator,
@@ -23,23 +27,32 @@ import {
 } from './lewd-combat-engine.js';
 import {
     buildLewdCombatMarkup,
+    describeLewdBeat,
 } from './lewd-combat-markup.js';
 import {
     canStartLewdEncounter,
     collectLewdContext,
+    consumeLewdResolution,
     createLewdEncounterFromContext,
+    resolveLewdControlMode,
     resolveLewdStartMode,
 } from './lewd-combat-context.js';
+import { reconcileInferenceWithRoster } from './lewd-combat-inference.js';
 import {
     getLewdEncounterForChat,
     removeLewdEncounterForChat,
     setLewdEncounterForChat,
 } from './lewd-combat-store.js';
 import { clearPendingNarration, getPendingNarration } from '../tactical-combat/tactical-combat-store.js';
+import { saveSettings } from '../../app/runtime-bridge.js';
 
 const OVERLAY_ID = 'rt-lewd-combat-overlay';
 const HOST_ID = 'rt-lewd-combat-host';
 const MAX_AI_ITERATIONS = 12;
+// Bound on the optional start-of-encounter agent enrichment. The deterministic
+// prefilter is synchronous and already on the board; a slow/hung connection must
+// never delay the board, so the enrichment is raced against this budget.
+const INFERENCE_TIMEOUT_MS = 8000;
 
 /**
  * Non-authoritative prose is queued per round and, while a narrator generation
@@ -48,9 +61,11 @@ const MAX_AI_ITERATIONS = 12;
  */
 const proseQueue = {
     round: 0,
-    beats: [],
     pending: [],
     flushing: false,
+    // Bumped on reset/close/chat change. A result tagged with an older token is
+    // from a board that no longer exists and is discarded.
+    token: 0,
 };
 
 const ui = {
@@ -58,12 +73,14 @@ const ui = {
     overlay: null,
     overlayOpen: false,
     starting: false,
+    lastProseEntryId: '',
     view: {
         startOpen: false,
         startCandidates: null,
         startSelected: [],
         spectatorSelected: [],
         startMode: 'duel',
+        startControlMode: 'auto',
         tone: '',
         darkerThemes: false,
         actorId: '',
@@ -140,13 +157,82 @@ function persist(state) {
     notifyChanged();
 }
 
+/**
+ * Agent-enrich the encounter-scoped availability set. The deterministic
+ * prefilter already ran at creation; a missing/broken/hung agent leaves it
+ * intact. The wait is bounded so a stalled connection can never freeze the
+ * board (the plan requires that inference never blocks the board).
+ * @param {object|null} state
+ * @returns {Promise<object|null>}
+ */
+async function inferActionsFor(state) {
+    if (!state || state.status !== 'active') return state;
+    try {
+        const inference = await import('./lewd-combat-inference.js');
+        if (typeof inference.refreshLewdActionInference !== 'function') return state;
+        const settings = getSettings() || {};
+        const timeoutMs = INFERENCE_TIMEOUT_MS;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let cancelled = false;
+        let timer = null;
+        const timeout = new Promise(resolve => {
+            timer = setTimeout(() => {
+                cancelled = true;
+                try { controller?.abort(); } catch (_) { /* ignore */ }
+                resolve(null);
+            }, timeoutMs);
+            if (typeof timer?.unref === 'function') timer.unref();
+        });
+        const run = inference.refreshLewdActionInference(state, settings, {
+            signal: controller?.signal,
+            // A late result for an aborted/closed board must not mutate or
+            // repaint it; the timeout marks the attempt as stale.
+            shouldApply: () => !cancelled && state.status === 'active',
+        }).catch(() => null);
+        const result = await Promise.race([run, timeout]);
+        if (timer) clearTimeout(timer);
+        if (result && !cancelled) persist(state);
+    } catch (_) {
+        // Inference is optional; the board keeps the deterministic set.
+    }
+    return state;
+}
+
+async function refreshActions() {
+    const state = readState();
+    if (!state || state.status !== 'active') return;
+    ui.view.busy = true;
+    ui.view.error = '';
+    render();
+    try {
+        await inferActionsFor(state);
+        const count = Array.isArray(state.inferredActions?.availableTechniqueIds)
+            ? state.inferredActions.availableTechniqueIds.length
+            : 0;
+        toast('info', `Inferred ${count} action${count === 1 ? '' : 's'} for this encounter.`);
+    } catch (error) {
+        setError(error?.message || 'Could not refresh the inferred actions.');
+    } finally {
+        ui.view.busy = false;
+        render();
+    }
+}
+
 function isOut(participant) {
     return !!participant?.atMercy || !!participant?.surrendered;
 }
 
+function isPlayerControlled(participant) {
+    return lewdParticipantControl(participant) === 'player';
+}
+
+function isAiControlled(participant) {
+    return lewdParticipantControl(participant) === 'ai';
+}
+
 function activePlayers(state) {
     return (state?.participants || []).filter(participant =>
-        !participant.ai && !participant.spectator && !isOut(participant));
+        isPlayerControlled(participant) && !participant.spectator && !isOut(participant));
 }
 
 function currentActor(state) {
@@ -155,10 +241,10 @@ function currentActor(state) {
     // Prefer an actor that still owes this round a turn. An explicit selection
     // is honoured only while it can actually act, so the board never dead-ends
     // on the participant who just resolved an exchange.
-    if (chosen && !chosen.spectator && !isOut(chosen) && !chosen.acted) return chosen;
+    if (chosen && isPlayerControlled(chosen) && !chosen.spectator && !isOut(chosen) && !chosen.acted) return chosen;
     const eligible = activePlayers(state);
     return eligible.find(participant => !participant.acted)
-        || (chosen && !chosen.spectator && !isOut(chosen) ? chosen : null)
+        || (chosen && isPlayerControlled(chosen) && !chosen.spectator && !isOut(chosen) ? chosen : null)
         || eligible[0]
         || null;
 }
@@ -200,12 +286,12 @@ async function runAiTurns() {
     try {
         while (state.status === 'active' && iterations < MAX_AI_ITERATIONS) {
             const actor = (state.participants || []).find(participant =>
-                participant.ai && !participant.acted && !participant.spectator && !isOut(participant));
+                isAiControlled(participant) && !participant.acted && !participant.spectator && !isOut(participant));
             if (!actor) break;
             const techniqueCount = arr(state.techniques).length;
             let result = null;
-            if (agent && typeof agent.lewAgentConfigured === 'function'
-                && agent.lewAgentConfigured(settings) && !busyNow()) {
+            if (agent && typeof agent.lewdAgentConfigured === 'function'
+                && agent.lewdAgentConfigured(settings) && !busyNow()) {
                 try {
                     const proposal = await agent.requestLewdOpponentAction(state, actor, settings);
                     if (proposal?.ok && proposal.actions?.length) {
@@ -239,66 +325,169 @@ async function runAiTurns() {
 
 function resetProseQueue() {
     proseQueue.round = 0;
-    proseQueue.beats = [];
     proseQueue.pending = [];
     proseQueue.flushing = false;
+    proseQueue.token += 1;
     ui.view.prose = '';
+    ui.lastProseEntryId = '';
 }
 
-async function requestProse(state, beats) {
-    const list = arr(beats).filter(Boolean);
-    if (!state || !list.length) return { ok: false };
+/** Drop `wait` beats so a trailing wait never suppresses a whole batch. */
+function proseItems(list) {
+    return arr(list).filter(item =>
+        item?.beat && typeof item.beat === 'object' && text(item.beat.type) !== 'wait');
+}
+
+function proseItemId(state, item) {
+    return lewdBeatId(state, item?.beat, item?.index);
+}
+
+function mergeProseItems(state, items) {
+    const narrated = new Set(arr(state?.narratedBeatIds).map(String));
+    const seen = new Set(proseQueue.pending.map(item => proseItemId(state, item)));
+    const merged = [...proseQueue.pending];
+    for (const item of proseItems(items)) {
+        const id = proseItemId(state, item);
+        if (seen.has(id) || narrated.has(id)) continue;
+        seen.add(id);
+        merged.push(item);
+    }
+    return merged;
+}
+
+/**
+ * Drop items another flush (or a previous exchange) already narrated. The
+ * cursor is identity-based, so a trimmed log cannot cause a re-narration.
+ */
+function freshProseItems(state, items) {
+    const narrated = new Set(arr(state?.narratedBeatIds).map(String));
+    return proseItems(items).filter(item => !narrated.has(proseItemId(state, item)));
+}
+
+/**
+ * Ask the Main connection for prose covering every supplied beat. Does not
+ * mutate or persist state; the caller commits after checking the render token.
+ */
+async function requestProse(state, items) {
+    const beats = arr(items).map(item => item?.beat).filter(Boolean);
+    if (!state || !beats.length) return { ok: false, skipped: true };
     let prose = null;
     try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
-    if (!prose || typeof prose.generateLewdProse !== 'function') return { ok: false };
+    if (!prose || typeof prose.generateLewdProse !== 'function') {
+        return { ok: false, error: 'The prose connection is unavailable.' };
+    }
     const settings = getSettings() || {};
     const frequency = text(settings.lewdCombatProseFrequency) || 'per-exchange';
-    let result;
     try {
-        result = await prose.generateLewdProse(state, list, settings, {
+        return await prose.generateLewdProse(state, beats, settings, {
             roundEnded: frequency === 'per-round',
         });
     } catch (error) {
-        result = { ok: false, error: error?.message || String(error) };
+        return { ok: false, error: error?.message || String(error) };
     }
-    if (result?.ok && result.prose) {
-        state.prose = { text: result.prose, round: Number(state.round) || 1 };
-        ui.view.prose = result.prose;
-        persist(state);
-        return { ok: true };
+}
+
+function commitProse(state, items, proseText, source = 'model') {
+    const list = proseItems(items);
+    if (!list.length) return null;
+    const beatIds = list.map(({ beat, index }) => lewdBeatId(state, beat, index));
+    const actorIds = [...new Set(list
+        .map(({ beat }) => text(beat?.actor?.id))
+        .filter(Boolean))];
+    const maxIndex = Math.max(...list.map(item => Number(item.index) || 0));
+    const round = Number(state.round) || 1;
+    const entry = appendLewdProseEntry(state, {
+        stateId: state.id,
+        chatId: state.chatId,
+        round,
+        exchangeId: `${text(state.id) || 'lewd'}:${round}:${beatIds[0] || ''}`,
+        actorIds,
+        beatIds,
+        text: proseText,
+        source,
+    });
+    markLewdBeatsNarrated(state, maxIndex, beatIds);
+    return entry;
+}
+
+function commitFallbackProse(state, items, proseModule) {
+    const list = proseItems(items);
+    if (!list.length) return 0;
+    const entries = typeof proseModule?.buildLewdFallbackProseEntries === 'function'
+        ? proseModule.buildLewdFallbackProseEntries(state, list)
+        : list.map(({ beat, index }) => ({
+            beatIds: [lewdBeatId(state, beat, index)],
+            text: describeLewdBeat(beat, state),
+            source: 'fallback',
+        }));
+    const beatIds = [];
+    for (const entry of entries) {
+        appendLewdProseEntry(state, {
+            ...entry,
+            stateId: state.id,
+            chatId: state.chatId,
+            round: entry.round || Number(state.round) || 1,
+        });
+        beatIds.push(...arr(entry.beatIds));
     }
-    if (result?.deferred) return { ok: false, deferred: true };
-    if (settings.debugMode && result?.error) toast('warning', result.error);
-    return { ok: false, deferred: false };
+    const maxIndex = Math.max(...list.map(item => Number(item.index) || 0));
+    markLewdBeatsNarrated(state, maxIndex, beatIds);
+    return entries.length;
 }
 
 async function flushPendingProse() {
     if (proseQueue.flushing || !proseQueue.pending.length) return;
-    const beats = proseQueue.pending.slice();
-    proseQueue.pending = [];
+    const token = proseQueue.token;
     const state = readState();
     if (!state) return;
+    const items = freshProseItems(state, proseQueue.pending);
+    proseQueue.pending = [];
+    if (!items.length) return;
     proseQueue.flushing = true;
+    let result = null;
+    let proseModule = null;
+    try { proseModule = await import('./lewd-combat-prose.js'); } catch (_) { proseModule = null; }
     try {
-        const result = await requestProse(state, beats);
-        if (result?.deferred) proseQueue.pending = [...beats, ...proseQueue.pending];
-    } catch (_) {
-        // Prose is optional; never let the listener reject.
+        result = await requestProse(state, items);
+    } catch (error) {
+        result = { ok: false, error: error?.message || String(error) };
     } finally {
         proseQueue.flushing = false;
+    }
+
+    // A late result for a reset/closed board or another chat is discarded.
+    if (token !== proseQueue.token) return;
+
+    if (result?.deferred) {
+        proseQueue.pending = [...items, ...proseQueue.pending];
+        return;
+    }
+    if (result?.skipped) return;
+
+    const current = readState();
+    if (!current || String(current.id) !== String(state.id)) return;
+    // Another flush may have committed some of these while the model was
+    // working; never narrate a beat twice.
+    const remaining = freshProseItems(current, items);
+    if (!remaining.length) return;
+
+    if (result?.ok && result.prose) {
+        commitProse(current, remaining, result.prose, 'model');
+        persist(current);
+    } else {
+        const settings = getSettings() || {};
+        if (settings.debugMode && result?.error) toast('warning', result.error);
+        commitFallbackProse(current, remaining, proseModule);
+        persist(current);
     }
     if (ui.overlayOpen) render();
 }
 
-/** Drop `wait` beats so a trailing wait never suppresses a whole batch. */
-function proseBeats(list) {
-    return arr(list).filter(beat => beat && text(beat.type) !== 'wait');
-}
-
 /**
- * Non-authoritative prose for the exchange that just resolved. Frequency gates
- * live here; `generateLewdProse` re-checks them. Never throws and never changes
- * mechanics.
+ * Non-authoritative prose for the exchange that just resolved. It covers every
+ * beat since the last narrated index, so the player's action and the AI reply
+ * are both visible. Frequency gates live here; `generateLewdProse` re-checks
+ * them. Never throws and never changes mechanics.
  * @param {object|null} state
  * @param {number} [previousRound]
  */
@@ -308,35 +497,25 @@ async function narrateAfterExchange(state, previousRound) {
         const frequency = text(settings.lewdCombatProseFrequency) || 'per-exchange';
         if (frequency === 'off') return;
         if (!state || !arr(state.log).length) return;
-        const latest = state.log[state.log.length - 1];
-        if (!latest) return;
+
+        let prose = null;
+        try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
+        if (typeof prose?.selectUnnarratedBeats !== 'function') return;
+        const items = prose.selectUnnarratedBeats(state);
+        if (!items.length) return;
 
         if (frequency === 'per-round') {
-            const roundChanged = proseQueue.round && proseQueue.round !== Number(state.round);
-            if (roundChanged || Number(previousRound) !== Number(state.round)) {
-                if (proseQueue.beats.length) {
-                    proseQueue.pending = [...proseQueue.pending, ...proseBeats(proseQueue.beats)];
-                    proseQueue.beats = [];
-                }
+            const ended = state.status !== 'active';
+            const roundChanged = Number(previousRound) !== Number(state.round)
+                || (proseQueue.round && proseQueue.round !== Number(state.round));
+            if (!ended && !roundChanged) {
                 proseQueue.round = Number(state.round) || 1;
-                await flushPendingProse();
-            } else if (!proseQueue.round) {
-                proseQueue.round = Number(state.round) || 1;
+                return;
             }
-            proseQueue.beats.push(latest);
-            if (state.status !== 'active') {
-                const beats = proseBeats(proseQueue.beats);
-                proseQueue.beats = [];
-                proseQueue.round = 0;
-                if (beats.length) {
-                    proseQueue.pending = [...proseQueue.pending, ...beats];
-                    await flushPendingProse();
-                }
-            }
-            return;
+            proseQueue.round = Number(state.round) || 1;
         }
 
-        proseQueue.pending = [...proseQueue.pending, ...proseBeats([latest])];
+        proseQueue.pending = mergeProseItems(state, items);
         await flushPendingProse();
     } catch (_) {
         // Prose is optional; the templated sentence remains visible.
@@ -347,25 +526,58 @@ async function narrateAfterExchange(state, previousRound) {
  * Queue the authoritative result once a board has ended, then optionally hand
  * the turn back to the narrator when the host is idle. Best-effort: a failed
  * import or a busy host must never break the board.
- * @param {object|null} state
- * @returns {Promise<void>}
+ *
+ * The persisted board, not the caller's snapshot, is authoritative: a retry
+ * after a reload must not queue a second payload or write a second resolution.
+ *
+ * @param {object|null} inputState
+ * @param {{ autoNarrate?: boolean, now?: number }} [options]
+ * @returns {Promise<{ ok: boolean, payload?: object, reason?: string }>}
  */
-async function finishEncounterIfEnded(state) {
-    if (!state || state.status === 'active' || state.finalization?.narrationQueued) return;
+export async function finishEncounterIfEnded(inputState, options = {}) {
+    let settings = {};
+    let state = inputState;
     try {
-        const settings = getSettings() || {};
+        settings = getSettings() || {};
+        const chatId = getActiveChatId();
+        const stored = chatId ? getLewdEncounterForChat(chatId, settings) : null;
+        if (stored) state = stored;
+    } catch (_) { /* settings/runtime bridge not ready */ }
+    if (!state || state.status !== 'ended') return { ok: false, reason: 'not-ended' };
+    try {
         let outcome = null;
         try { outcome = await import('./lewd-combat-outcome.js'); } catch (_) { outcome = null; }
-        if (!outcome || typeof outcome.queueLewdOutcome !== 'function') return;
+        if (!outcome || typeof outcome.queueLewdOutcome !== 'function'
+            || typeof outcome.ensureLewdResolution !== 'function') {
+            return { ok: false, reason: 'outcome module unavailable' };
+        }
+
+        outcome.ensureLewdResolution(state, { now: options.now });
+        if (typeof outcome.applyLewdCombatCleanup === 'function') {
+            try {
+                outcome.applyLewdCombatCleanup(state, settings, { persist: false });
+            } catch (_) {
+                // Cleanup is best-effort; never break the finish handoff.
+            }
+        }
+        // Persist even for a legacy ended board so its one-time cleanup and
+        // backfilled resolution survive the reload.
+        persist(state);
+        if (state.finalization?.narrationQueued) {
+            return { ok: true, payload: state.finalization.payload || null };
+        }
+
         const payload = outcome.queueLewdOutcome(state, settings, { persist: false });
-        if (!payload) return;
+        if (!payload) return { ok: false, reason: 'outcome payload unavailable' };
         persist(state);
 
-        if (state.finalization?.autoNarrateStarted) return;
+        if (options.autoNarrate === false) return { ok: true, payload };
+        if (state.finalization?.autoNarrateStarted) return { ok: true, payload };
+
         let prose = null;
         try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
         const busy = typeof prose?.isNarratorBusy === 'function' ? prose.isNarratorBusy() : false;
-        if (busy) return;
+        if (busy) return { ok: true, payload };
         state.finalization = {
             ...(state.finalization || {}),
             autoNarrateStarted: Date.now(),
@@ -375,9 +587,11 @@ async function finishEncounterIfEnded(state) {
             const { continueToNarration } = await import('../tactical-combat/tactical-combat-outcome.js');
             void continueToNarration(settings);
         } catch (_) { /* narration is optional */ }
+        return { ok: true, payload };
     } catch (error) {
         // The result is optional; the board's own summary stays visible.
         if (getSettings()?.debugMode) console.warn('[RPG Tracker][Lewd Combat] Could not queue the outcome:', error);
+        return { ok: false, reason: error?.message || String(error) };
     }
 }
 
@@ -404,6 +618,7 @@ export async function startLewdCombatFromNarrator(args = {}) {
             openingZone: args.openingZone,
             tone: args.tone || settings.lewdCombatExplicitness,
             mode: args.mode,
+            controlMode: resolveLewdControlMode(args.controlMode ?? settings.lewdCombatControlMode),
         });
 
         resetProseQueue();
@@ -412,14 +627,19 @@ export async function startLewdCombatFromNarrator(args = {}) {
         ui.view.startCandidates = null;
         ui.view.startSelected = [];
         ui.view.spectatorSelected = [];
+        ui.view.startControlMode = resolveLewdControlMode(settings.lewdCombatControlMode);
         ui.view.actorId = '';
         ui.view.techniqueId = '';
         ui.view.posture = 'switch';
         ui.view.zone = '';
         ui.view.targetIds = [];
         ui.view.error = '';
+        // The board opens with the deterministic set immediately; the optional
+        // agent enrichment is bounded and repaints when it returns.
         openLewdCombatBoard();
         notifyChanged();
+        await inferActionsFor(result.state);
+        render();
         const names = (result.state.participants || [])
             .filter(participant => !participant.spectator)
             .map(participant => participant.name)
@@ -436,7 +656,14 @@ export async function startLewdCombatFromNarrator(args = {}) {
 function loadStartCandidates() {
     try {
         const settings = getSettings() || {};
-        const context = collectLewdContext(settings, safeContext(), {});
+        if (!ui.view.startCandidates) {
+            // First load of the dialog follows the saved default; a user's later
+            // selection in the dialog is preserved across a re-collect.
+            ui.view.startControlMode = resolveLewdControlMode(settings.lewdCombatControlMode);
+        }
+        const context = collectLewdContext(settings, safeContext(), {
+            controlMode: resolveLewdControlMode(ui.view.startControlMode),
+        });
         ui.view.startCandidates = context.candidates || [];
         ui.view.tone = text(settings.lewdCombatExplicitness) || 'explicit';
         ui.view.darkerThemes = !!settings.lewdCombatDarkerThemes;
@@ -478,6 +705,13 @@ function render() {
         busy: !!ui.view.busy || ui.starting,
     };
     host.innerHTML = buildLewdCombatMarkup(state, safeView);
+    const scroll = host.querySelector('[data-lc-prose-scroll]');
+    const proseLog = arr(state?.proseLog);
+    const lastId = text(proseLog[proseLog.length - 1]?.id);
+    if (scroll && lastId && lastId !== ui.lastProseEntryId) {
+        scroll.scrollTop = scroll.scrollHeight;
+        ui.lastProseEntryId = lastId;
+    }
 }
 
 function openBoard() {
@@ -498,6 +732,9 @@ function openBoard() {
 
 function closeBoard() {
     if (!ui.overlay) return;
+    // Any in-flight prose result belongs to a board the player has closed.
+    proseQueue.token += 1;
+    proseQueue.pending = [];
     ui.overlayOpen = false;
     ui.overlay.classList.remove('is-open');
     ui.overlay.setAttribute('aria-hidden', 'true');
@@ -529,6 +766,9 @@ async function startFromOverlay() {
     const participantNames = checkedValues(ui.overlay, 'data-lc-start-participant');
     const spectatorNames = checkedValues(ui.overlay, 'data-lc-start-spectator');
     const mode = ui.overlay?.querySelector('[data-lc-start-mode]')?.value || ui.view.startMode;
+    const controlMode = resolveLewdControlMode(
+        ui.overlay?.querySelector('[data-lc-start-control-mode]')?.value || ui.view.startControlMode,
+    );
     ui.starting = true;
     resetProseQueue();
     try {
@@ -536,6 +776,7 @@ async function startFromOverlay() {
             participantNames,
             spectatorNames,
             mode,
+            controlMode,
             tone: settings.lewdCombatExplicitness,
         });
         ui.view.startOpen = false;
@@ -549,6 +790,7 @@ async function startFromOverlay() {
         ui.view.targetIds = [];
         ui.view.error = '';
         persist(result.state);
+        await inferActionsFor(result.state);
         const previousRound = result.state.round;
         const next = await runAiTurns();
         await narrateAfterExchange(next || result.state, previousRound);
@@ -636,10 +878,11 @@ async function simpleAction(type) {
     }
     const previousRound = state.round;
     const actor = currentActor(state)
-        || state.participants.find(participant => !participant.spectator)
-        || state.participants[0];
+        || state.participants.find(participant =>
+            isPlayerControlled(participant) && !participant.spectator && !isOut(participant))
+        || null;
     if (!actor) {
-        setError('No participant can act.');
+        setError('No player participant can act.');
         render();
         return;
     }
@@ -676,7 +919,9 @@ function stopEncounter() {
     ui.view.busy = true;
     try {
         const actor = state.participants?.find(participant =>
-            !participant.spectator && !isOut(participant)) || state.participants?.[0];
+            isPlayerControlled(participant) && !participant.spectator && !isOut(participant))
+            || state.participants?.find(participant => !participant.spectator && !isOut(participant))
+            || state.participants?.[0];
         let result = null;
         if (actor) result = applyLewdAction(state, { type: 'stop', unitId: actor.id });
         if (!result?.ok) {
@@ -712,6 +957,10 @@ function moveParticipant(unitId, spectator) {
         if (!result.ok) {
             setError(result.reason || 'That participant cannot change seats.');
         } else {
+            // A participant joining or leaving changes which acts are visible;
+            // union a fresh deterministic pass so the newcomer is not hidden
+            // behind a stale availability set.
+            reconcileInferenceWithRoster(state);
             ui.view.error = '';
             persist(state);
         }
@@ -783,8 +1032,12 @@ function handleAction(action, element) {
         case 'stop':
             stopEncounter();
             break;
+        case 'new-encounter':
         case 'reset':
             resetLewdCombatEncounter();
+            break;
+        case 'return-to-story':
+            returnLewdCombatToStory();
             break;
         case 'close':
             closeBoard();
@@ -800,6 +1053,9 @@ function handleAction(action, element) {
             break;
         case 'select-actor':
             selectActor(element);
+            break;
+        case 'refresh-actions':
+            refreshActions();
             break;
         case 'toggle-debug':
             ui.view.showDebug = !ui.view.showDebug;
@@ -854,6 +1110,13 @@ function onOverlayChange(event) {
         }
         if (target.matches('[data-lc-start-mode]')) {
             ui.view.startMode = resolveLewdStartMode(target.value);
+            return;
+        }
+        if (target.matches('[data-lc-start-control-mode]')) {
+            ui.view.startControlMode = resolveLewdControlMode(target.value);
+            // Re-collect so the per-candidate Player/AI preview follows the mode.
+            loadStartCandidates();
+            render();
             return;
         }
         if (target.matches('[data-lc-start-participant], [data-lc-start-spectator]')) {
@@ -939,11 +1202,17 @@ export function stopLewdCombatEncounter() {
 export function resetLewdCombatEncounter() {
     const chatId = getActiveChatId();
     const settings = getSettings();
-    if (chatId && settings) removeLewdEncounterForChat(chatId, settings);
-    // Discard only our own queued result; a tactical/traditional result waiting
-    // for narration must survive a lewd-board reset.
-    if (chatId && settings && getPendingNarration(settings, chatId)?.kind === 'lewd') {
-        clearPendingNarration(settings, { chatId });
+    if (chatId && settings) {
+        // One write for the whole reset: the board (with its resolution and
+        // prose log) and the lewd pending narration leave together.
+        removeLewdEncounterForChat(chatId, settings, { persist: false });
+        // Discard only our own queued result; a tactical/traditional result
+        // waiting for narration must survive a lewd-board reset.
+        if (getPendingNarration(settings, chatId)?.kind === 'lewd') {
+            clearPendingNarration(settings, { chatId });
+        } else {
+            try { saveSettings(); } catch (_) { /* boot-time bridge may be absent */ }
+        }
     }
     resetProseQueue();
     ui.view.actorId = '';
@@ -954,10 +1223,51 @@ export function resetLewdCombatEncounter() {
     ui.view.showDebug = false;
     ui.view.error = '';
     ui.view.outcomeDismissed = false;
+    ui.view.startControlMode = resolveLewdControlMode(settings?.lewdCombatControlMode);
     ui.view.startOpen = true;
     notifyChanged();
     if (!ui.view.startCandidates) loadStartCandidates();
     render();
+}
+
+/**
+ * Acknowledge the finished scene and hand control back to the story. Removes
+ * the board and its pending lewd narration, closes the overlay, and never
+ * starts a new encounter or an AI turn.
+ * @returns {boolean}
+ */
+export function returnLewdCombatToStory() {
+    const chatId = getActiveChatId();
+    const settings = getSettings();
+    if (!settings) return false;
+    try {
+        if (chatId) consumeLewdResolution(settings, chatId, { reason: 'return-to-story', persist: false });
+    } catch (_) { /* best-effort */ }
+    try {
+        if (chatId) removeLewdEncounterForChat(chatId, settings, { persist: false });
+    } catch (_) { /* best-effort */ }
+    try {
+        // Discard only our own queued result; a tactical/traditional handoff
+        // waiting for narration must survive.
+        if (chatId && getPendingNarration(settings, chatId)?.kind === 'lewd') {
+            clearPendingNarration(settings, { chatId, persist: false });
+        }
+    } catch (_) { /* best-effort */ }
+    try { saveSettings(); } catch (_) { /* boot-time bridge may be absent */ }
+
+    resetProseQueue();
+    ui.view.actorId = '';
+    ui.view.techniqueId = '';
+    ui.view.posture = 'switch';
+    ui.view.zone = '';
+    ui.view.targetIds = [];
+    ui.view.busy = false;
+    ui.view.showDebug = false;
+    ui.view.error = '';
+    ui.view.outcomeDismissed = false;
+    closeBoard();
+    notifyChanged();
+    return true;
 }
 
 /** Re-render after a relevant setting changes. */

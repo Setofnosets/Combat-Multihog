@@ -41,6 +41,43 @@ export const LEWD_COMBAT_DEFAULTS = Object.freeze({
     proseFrequency: 'per-exchange',
     roundCap: 12,
     maxPartners: 2,
+    postEncounterLatch: true,
+    postEncounterCooldownMs: 60000,
+});
+
+/**
+ * Canonical anatomy tags. These are capability/body descriptors, never inferred
+ * from gender or from an assumed default body.
+ */
+export const LEWD_ANATOMY_TAGS = Object.freeze([
+    'penis', 'testes', 'vagina', 'vulva', 'anus', 'breasts', 'tail', 'wings',
+    'tentacles', 'knot', 'bondage-gear',
+]);
+
+/**
+ * Literal anatomy words mapped to their canonical tag. Only these words map;
+ * nothing here is derived from gender words such as `female` or `male`.
+ */
+export const LEWD_ANATOMY_ALIASES = Object.freeze({
+    cock: 'penis',
+    dick: 'penis',
+    balls: 'testes',
+    testicles: 'testes',
+    pussy: 'vagina',
+    cunt: 'vagina',
+    anus: 'anus',
+    ass: 'anus',
+    boobs: 'breasts',
+    breast: 'breasts',
+    tail: 'tail',
+    tails: 'tail',
+    wing: 'wings',
+    wings: 'wings',
+    tentacle: 'tentacles',
+    tentacles: 'tentacles',
+    restrained: 'bondage-gear',
+    restraints: 'bondage-gear',
+    'bondage gear': 'bondage-gear',
 });
 
 export const LEWD_EXPLICITNESS_OPTIONS = Object.freeze(['explicit', 'suggestive', 'fade-to-black']);

@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+    appendLewdProseEntry,
     applyLewdAction,
     createLewdEncounterState,
+    hydrateLewdState,
+    markLewdBeatsNarrated,
+    serializeLewdState,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
 import {
     buildLewdCombatMarkup,
@@ -9,11 +13,13 @@ import {
 } from '../src/features/lewd-combat/lewd-combat-markup.js';
 import {
     buildLewdBeatSheet,
+    buildLewdFallbackProseEntries,
     buildLewdProsePrompt,
     generateLewdProse,
     isNarratorBusy,
     lewdProseRequestSettings,
     parseLewdProseResponse,
+    selectUnnarratedBeats,
     shouldGenerateLewdProse,
 } from '../src/features/lewd-combat/lewd-combat-prose.js';
 
@@ -235,6 +241,99 @@ describe('lewd-combat-prose', () => {
         expect(settings.connectionSource).toBe('default');
         expect(settings.maxTokens).toBe(400);
         expect(settings.debugMode).toBe(true);
+    });
+
+    it('selects every un-narrated beat, not only the newest one', () => {
+        const state = makeFight();
+        const { result, aria, bran } = resolveOne(state);
+        const reply = applyLewdAction(state, {
+            type: 'technique',
+            unitId: bran.id,
+            techniqueId: TECHNIQUE.id,
+            targetIds: [aria.id],
+            zone: 'waist',
+            posture: 'switch',
+        });
+        expect(reply.ok).toBe(true);
+
+        const items = selectUnnarratedBeats(state);
+        expect(items).toHaveLength(2);
+        expect(items[0].beat.actor.name).toBe('Aria');
+        expect(items[1].beat.actor.name).toBe('Bran');
+
+        markLewdBeatsNarrated(state, 1, items.map(item => item.beat.id));
+        expect(state.lastNarratedLogIndex).toBe(1);
+        expect(selectUnnarratedBeats(state)).toHaveLength(0);
+        expect(result.beat).toBeTruthy();
+    });
+
+    it('dedupes by stable beat id so a trimmed log cannot re-narrate a beat', () => {
+        const state = makeFight();
+        state.log = [
+            { id: 'beat-1', type: 'technique', actor: { name: 'Aria' } },
+            { id: 'beat-2', type: 'technique', actor: { name: 'Bran' } },
+            { id: 'beat-3', type: 'technique', actor: { name: 'Aria' } },
+        ];
+        state.narratedBeatIds = ['beat-1', 'beat-2'];
+        state.lastNarratedLogIndex = 1;
+        // The oldest entry fell off the capped log: indices shift by one.
+        state.log = state.log.slice(1);
+
+        const items = selectUnnarratedBeats(state);
+        expect(items.map(item => item.beat.id)).toEqual(['beat-3']);
+    });
+
+    it('builds deterministic fallback entries for every un-narrated beat', () => {
+        const state = makeFight();
+        const { result } = resolveOne(state);
+        const items = selectUnnarratedBeats(state);
+        const entries = buildLewdFallbackProseEntries(state, items);
+
+        expect(entries).toHaveLength(items.length);
+        expect(entries[0].source).toBe('fallback');
+        expect(entries[0].text).toBe(describeLewdBeat(result.beat, state));
+        expect(entries[0].beatIds).toHaveLength(1);
+    });
+
+    it('caps the prose log at 50 entries and restores it on hydrate', () => {
+        const state = makeFight();
+        for (let index = 0; index < 60; index += 1) {
+            appendLewdProseEntry(state, {
+                stateId: state.id,
+                chatId: 'chat-prose',
+                round: 1,
+                text: `Entry ${index + 1}`,
+                source: 'model',
+            });
+        }
+        expect(state.proseLog).toHaveLength(50);
+        expect(state.proseLog[0].text).toBe('Entry 11');
+        expect(state.proseLog[49].text).toBe('Entry 60');
+        expect(state.prose.text).toBe('Entry 60');
+
+        const restored = hydrateLewdState(serializeLewdState(state));
+        expect(restored.proseLog).toHaveLength(50);
+        expect(restored.proseLog[49].text).toBe('Entry 60');
+        expect(restored.proseSeq).toBe(60);
+    });
+
+    it('renders the prose log as an ordered transcript and keeps both exchange entries', () => {
+        const state = makeFight();
+        const withLog = {
+            ...state,
+            proseLog: [
+                { id: 'p1', stateId: state.id, round: 1, text: 'Aria moves first.', source: 'model' },
+                { id: 'p2', stateId: state.id, round: 1, text: 'Bran answers in kind.', source: 'model' },
+            ],
+        };
+        const html = buildLewdCombatMarkup(withLog, {});
+
+        expect(html).toContain('data-lc-prose-scroll');
+        expect(html).toContain('data-lc-prose-entry');
+        const first = html.indexOf('Aria moves first.');
+        const second = html.indexOf('Bran answers in kind.');
+        expect(first).toBeGreaterThan(-1);
+        expect(second).toBeGreaterThan(first);
     });
 
     it('renders supplied prose in the Scene pane and falls back to the templated sentence', () => {

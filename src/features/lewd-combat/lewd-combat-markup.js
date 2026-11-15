@@ -9,10 +9,11 @@
 
 import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
-import { LEWD_POSTURES } from './lewd-combat-engine.js';
+import { LEWD_POSTURES, lewdParticipantControl } from './lewd-combat-engine.js';
 import { LEWD_ZONES } from './lewd-combat-profile.js';
-import { buildPairingMatrix, holdsOn } from './lewd-combat-pairing.js';
+import { buildPairingMatrix, engagementsFor, holdsOn } from './lewd-combat-pairing.js';
 import { LEWD_TECHNIQUE_CATEGORIES, listLegalActions } from './lewd-combat-techniques.js';
+import { resolveLewdControlMode } from './lewd-combat-context.js';
 
 const POSTURE_KEYS = ['lead', 'follow', 'switch'];
 const POSTURE_LABELS = { lead: 'Lead', follow: 'Follow', switch: 'Switch' };
@@ -36,6 +37,17 @@ function isOut(participant) {
 
 function isActive(participant) {
     return !!participant && !participant.spectator && !isOut(participant);
+}
+
+function candidateControl(candidate, controlMode) {
+    if (resolveLewdControlMode(controlMode) === 'player-all') return 'player';
+    if (candidate?.control === 'player' || candidate?.control === 'ai') return candidate.control;
+    if (candidate?.ai === true || candidate?.side === 'enemy' || candidate?.side === 'opponent') return 'ai';
+    return 'player';
+}
+
+function controlLabel(control) {
+    return control === 'ai' ? 'AI' : 'Player';
 }
 
 function pct(value, max) {
@@ -163,6 +175,7 @@ function renderStartScreen(view = {}, context = null) {
     const selected = arr(view.startSelected);
     const spectators = arr(view.spectatorSelected);
     const mode = text(view.startMode) || 'duel';
+    const controlMode = text(view.startControlMode) || 'auto';
     const error = text(view.error)
         ? `<p class="rt-lc-error" role="alert">${escapeHtml(view.error)}</p>`
         : '';
@@ -179,11 +192,13 @@ function renderStartScreen(view = {}, context = null) {
             ? '<span class="rt-lc-badge rt-lc-badge-inferred" title="No [LEWD] profile; pools inferred from stats">Inferred</span>'
             : '<span class="rt-lc-badge rt-lc-badge-profile" title="Explicit [LEWD] profile">Profile</span>';
         const side = text(candidate?.side) || 'player';
+        const control = candidateControl(candidate, controlMode);
+        const controlBadge = `<span class="rt-lc-badge rt-lc-badge-control" data-lc-control="${escapeHtml(control)}" title="${control === 'ai' ? 'Controlled by the local policy' : 'Controlled by the player'}">${controlLabel(control)}</span>`;
         return `<li class="rt-lc-start-row" data-lc-candidate="${escapeHtml(key)}">
             <span class="rt-lc-start-name" style="--rt-lc-side:${escapeHtml(sideColor(side))}">
                 ${escapeHtml(name)} <span class="rt-lc-start-side">${escapeHtml(sideLabel(side))}</span>
             </span>
-            <span class="rt-lc-start-badges">${profileNote}${source ? `<span class="rt-lc-badge">${escapeHtml(source)}</span>` : ''}</span>
+            <span class="rt-lc-start-badges">${controlBadge}${profileNote}${source ? `<span class="rt-lc-badge">${escapeHtml(source)}</span>` : ''}</span>
             <span class="rt-lc-start-picks">
                 <label class="rt-lc-check" title="Active participant">
                     <input type="checkbox" data-lc-start-participant value="${escapeHtml(name)}"${isParticipant ? ' checked' : ''} aria-label="Add ${escapeHtml(name)} as an active participant">
@@ -223,6 +238,13 @@ function renderStartScreen(view = {}, context = null) {
                         `<option value="${key}"${mode === key ? ' selected' : ''}>${escapeHtml(MODE_LABELS[key])}</option>`).join('')}
                 </select>
             </label>
+            <label class="rt-lc-field">Control
+                <select data-lc-start-control-mode aria-label="Who controls the participants">
+                    <option value="auto"${controlMode === 'auto' ? ' selected' : ''}>Auto (you and your party vs. AI for everyone else)</option>
+                    <option value="player-all"${controlMode === 'player-all' ? ' selected' : ''}>Player controls all participants</option>
+                    <option value="ai-others"${controlMode === 'ai-others' ? ' selected' : ''}>AI controls every non-party participant</option>
+                </select>
+            </label>
             <p class="rt-lc-tone">Tone: ${escapeHtml(tone)}${darker === undefined ? '' : ` · Darker themes ${darker ? 'on' : 'off'}`}. Change these in Settings → Combat.</p>
         </div>
         <div class="rt-lc-start-actions">
@@ -258,9 +280,10 @@ function renderCard(state, participant) {
     const inferred = profile.inferred
         ? '<span class="rt-lc-badge rt-lc-badge-inferred" title="No [LEWD] profile; pools inferred from stats">Inferred</span>'
         : '';
-    const ai = participant?.ai
+    const control = lewdParticipantControl(participant);
+    const controlChip = control === 'ai'
         ? '<span class="rt-lc-chip rt-lc-chip-ai" title="Controlled by the local policy">AI</span>'
-        : '';
+        : '<span class="rt-lc-chip rt-lc-chip-player" title="Controlled by the player">Player</span>';
 
     const stamina = Number(participant?.stamina) || 0;
     const maxStamina = Number(participant?.maxStamina) || 0;
@@ -273,7 +296,7 @@ function renderCard(state, participant) {
         <div class="rt-lc-card-head">
             <span class="rt-lc-name">${escapeHtml(participant?.name)}</span>
             <span class="rt-lc-card-side">${escapeHtml(sideLabel(side))}</span>
-            ${ai}${role}${inferred}${limits}
+            ${controlChip}${role}${inferred}${limits}
         </div>
         <div class="rt-lc-pools">
             <span class="rt-lc-stamina" title="Stamina ${stamina}/${maxStamina}">
@@ -306,7 +329,7 @@ function renderRail(state, participants) {
 function renderSpectatorRail(state, participants, view) {
     const spectators = participants.filter(participant => participant.spectator);
     const activePlayers = participants.filter(participant =>
-        !participant.spectator && !participant.ai && !isOut(participant));
+        lewdParticipantControl(participant) === 'player' && !participant.spectator && !isOut(participant));
     const rows = spectators.map(participant => `<li class="rt-lc-spectator-row">
         <span class="rt-lc-spectator-name">${escapeHtml(participant.name)}</span>
         <button type="button" class="rt-lc-btn rt-lc-join" data-lc-action="join" data-lc-unit-id="${escapeHtml(participant.id)}"
@@ -343,9 +366,15 @@ function renderMatrix(state) {
                 || (entry.a === column.id && entry.b === row.id)) || null;
             const bits = [];
             if (cell?.engaged) {
-                bits.push(cell.hold?.label || cell.hold?.id || 'Engaged');
-                if (cell.stance?.label || cell.stance?.id) bits.push(cell.stance.label || cell.stance.id);
-                bits.push(`Int ${Number(cell.intensity) || 0}`);
+                if (cell.hold) bits.push(cell.hold?.label || cell.hold?.id || 'Engaged');
+                const act = text(cell.act) || text(cell.actType);
+                if (act) bits.push(`${act}${Number(cell.actIntensity) ? ` ${Number(cell.actIntensity)}` : ''}`);
+                if (Number(cell.bindings) > 0) bits.push(`bindings ${Number(cell.bindings)}`);
+                const pairStance = cell.pairStance ? (cell.pairStance.label || cell.pairStance.id) : '';
+                if (pairStance) bits.push(pairStance);
+                else if (cell.stance?.label || cell.stance?.id) bits.push(cell.stance.label || cell.stance.id);
+                if (Number(cell.intensity)) bits.push(`Int ${Number(cell.intensity)}`);
+                if (!bits.length) bits.push('Engaged');
             }
             return `<td class="rt-lc-matrix-cell${cell?.engaged ? ' is-engaged' : ''}" data-lc-pair-a="${escapeHtml(row.id)}" data-lc-pair-b="${escapeHtml(column.id)}" title="${escapeHtml(`${row.name} × ${column.name}: ${bits.length ? bits.join(' · ') : 'not paired'}`)}">${bits.length ? escapeHtml(bits.join(' · ')) : '—'}</td>`;
         }).join('');
@@ -365,17 +394,18 @@ function renderMatrix(state) {
 
 function actorCandidates(state) {
     return (state?.participants || []).filter(participant =>
-        !participant.ai && !participant.spectator && !isOut(participant));
+        lewdParticipantControl(participant) === 'player' && !participant.spectator && !isOut(participant));
 }
 
 function pickActor(state, view) {
     const participants = state?.participants || [];
     const explicit = text(view?.actorId);
     const chosen = participants.find(participant => participant.id === explicit);
-    if (chosen && isActive(chosen) && !chosen.acted) return chosen;
+    const chosenEligible = chosen && lewdParticipantControl(chosen) === 'player' && isActive(chosen);
+    if (chosenEligible && !chosen.acted) return chosen;
     const eligible = actorCandidates(state);
     return eligible.find(participant => !participant.acted)
-        || (chosen && isActive(chosen) ? chosen : null)
+        || (chosenEligible ? chosen : null)
         || eligible[0]
         || null;
 }
@@ -412,21 +442,36 @@ function renderBeats(beat) {
     return `${round} ${escapeHtml(type || 'beat')}`;
 }
 
+function renderProse(state, view) {
+    const proseLog = arr(state?.proseLog).filter(entry => text(entry?.text));
+    if (proseLog.length) {
+        const entries = proseLog.map(entry =>
+            `<p class="rt-lc-prose-entry rt-lc-prose-text" data-lc-prose-entry data-lc-prose-id="${escapeHtml(entry.id)}" data-lc-prose-source="${escapeHtml(entry.source || 'model')}" data-lc-prose-round="${escapeHtml(entry.round)}">${escapeHtml(entry.text)}</p>`).join('');
+        return `<section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
+        <h3 class="rt-lc-section-title">Scene</h3>
+        <div class="rt-lc-prose-scroll" data-lc-prose-scroll>${entries}</div>
+    </section>`;
+    }
+    const log = arr(state?.log);
+    const latest = log.length ? log[log.length - 1] : null;
+    const prose = text(view?.prose) || text(state?.prose?.text) || describeLewdBeat(latest, state);
+    return `<section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
+        <h3 class="rt-lc-section-title">Scene</h3>
+        <p class="rt-lc-prose-text">${escapeHtml(prose)}</p>
+    </section>`;
+}
+
 function renderLog(state, view) {
     const log = arr(state?.log);
     const latest = log.length ? log[log.length - 1] : null;
     const entries = log.map((beat, index) =>
         `<li class="rt-lc-log-entry" data-lc-log-entry data-lc-log-index="${index}">${renderBeats(beat)}</li>`).join('');
     const debugValue = latest || log.slice(-20);
-    const prose = text(view?.prose) || text(state?.prose?.text) || describeLewdBeat(latest, state);
     return `<section class="rt-lc-log-wrap" aria-label="Beat log">
         <h3 class="rt-lc-section-title">Beat log</h3>
         <ol class="rt-lc-log">${entries || '<li class="rt-lc-empty">No exchanges yet.</li>'}</ol>
     </section>
-    <section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
-        <h3 class="rt-lc-section-title">Scene</h3>
-        <p class="rt-lc-prose-text">${escapeHtml(prose)}</p>
-    </section>
+    ${renderProse(state, view)}
     <section class="rt-lc-debug${view?.showDebug ? ' is-open' : ''}" aria-label="Debug">
         <button type="button" class="rt-lc-btn rt-lc-debug-toggle" data-lc-action="toggle-debug" aria-expanded="${view?.showDebug ? 'true' : 'false'}" aria-label="Toggle debug details" title="Toggle debug JSON">Debug</button>
         ${view?.showDebug ? `<pre class="rt-lc-debug-json">${escapeHtml(JSON.stringify(debugValue, null, 2))}</pre>` : ''}
@@ -449,6 +494,18 @@ function renderPostureButtons(view, entry) {
     }).join('');
 }
 
+function techniqueButton(entry, selectedId) {
+    const reasons = arr(entry.reasons);
+    const selected = selectedId === entry.id || selectedId === entry.name;
+    const title = reasons.length ? reasons.join(' · ') : `${entry.name} (${entry.category})`;
+    const uses = entry.usesRemaining === Infinity ? 'at will' : `${entry.usesRemaining} left`;
+    return `<button type="button" class="rt-lc-btn rt-lc-technique${selected ? ' is-selected' : ''}" data-lc-technique="${escapeHtml(entry.id)}" aria-pressed="${selected ? 'true' : 'false'}" aria-label="${escapeHtml(`${entry.name}: ${title}`)}" title="${escapeHtml(title)}"${entry.disabled ? ' disabled' : ''}>
+                <span class="rt-lc-technique-name">${escapeHtml(entry.name)}</span>
+                <span class="rt-lc-technique-meta">${escapeHtml(entry.posture)} · ${escapeHtml(uses)}</span>
+                ${reasons.length ? `<span class="rt-lc-technique-reasons">${escapeHtml(reasons.join(' '))}</span>` : ''}
+            </button>`;
+}
+
 function renderTechniques(legal, view) {
     const selectedId = text(view?.techniqueId);
     if (!legal.length) {
@@ -456,26 +513,66 @@ function renderTechniques(legal, view) {
     }
     const groups = new Map();
     for (const category of LEWD_TECHNIQUE_CATEGORIES) groups.set(category, []);
+    const followUps = new Map();
     for (const entry of legal) {
+        const required = entry.technique?.requires || {};
+        if (required.act || required.actType) {
+            const act = text(required.act || required.actType) || 'act';
+            if (!followUps.has(act)) followUps.set(act, []);
+            followUps.get(act).push(entry);
+            continue;
+        }
         const category = LEWD_TECHNIQUE_CATEGORIES.includes(entry.category) ? entry.category : 'technique';
         if (!groups.has(category)) groups.set(category, []);
         groups.get(category).push(entry);
     }
-    return [...groups.entries()].map(([category, entries]) => {
+    const followUpHtml = [...followUps.entries()].map(([act, entries]) =>
+        `<div class="rt-lc-technique-group rt-lc-followups"><h4 class="rt-lc-technique-category">Follow-ups · ${escapeHtml(titleCase(act))}</h4>${entries.map(entry => techniqueButton(entry, selectedId)).join('')}</div>`).join('');
+    const categoryHtml = [...groups.entries()].map(([category, entries]) => {
         if (!entries.length) return '';
-        const buttons = entries.map(entry => {
-            const reasons = arr(entry.reasons);
-            const selected = selectedId === entry.id || selectedId === entry.name;
-            const title = reasons.length ? reasons.join(' · ') : `${entry.name} (${entry.category})`;
-            const uses = entry.usesRemaining === Infinity ? 'at will' : `${entry.usesRemaining} left`;
-            return `<button type="button" class="rt-lc-btn rt-lc-technique${selected ? ' is-selected' : ''}" data-lc-technique="${escapeHtml(entry.id)}" aria-pressed="${selected ? 'true' : 'false'}" aria-label="${escapeHtml(`${entry.name}: ${title}`)}" title="${escapeHtml(title)}"${entry.disabled ? ' disabled' : ''}>
-                <span class="rt-lc-technique-name">${escapeHtml(entry.name)}</span>
-                <span class="rt-lc-technique-meta">${escapeHtml(entry.posture)} · ${escapeHtml(uses)}</span>
-                ${reasons.length ? `<span class="rt-lc-technique-reasons">${escapeHtml(reasons.join(' '))}</span>` : ''}
-            </button>`;
-        }).join('');
+        const buttons = entries.map(entry => techniqueButton(entry, selectedId)).join('');
         return `<div class="rt-lc-technique-group"><h4 class="rt-lc-technique-category">${escapeHtml(titleCase(category))}</h4>${buttons}</div>`;
     }).join('');
+    return `${followUpHtml}${categoryHtml}`;
+}
+
+function renderInference(state, view) {
+    const inference = state?.inferredActions;
+    if (!inference || typeof inference !== 'object') return '';
+    const count = arr(inference.availableTechniqueIds).length;
+    const source = inference.source === 'agent'
+        ? 'AI-assisted'
+        : inference.source === 'deterministic-fallback'
+            ? 'offline fallback'
+            : 'profile prefilter';
+    const diagnostics = arr(inference.diagnostics).length;
+    const label = `${count} inferred action${count === 1 ? '' : 's'} · ${source}${diagnostics ? ` · ${diagnostics} diagnostic${diagnostics === 1 ? '' : 's'}` : ''}`;
+    return `<div class="rt-lc-inference" aria-label="Inferred actions">
+        <span class="rt-lc-inference-meta" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+        <button type="button" class="rt-lc-btn" data-lc-action="refresh-actions" aria-label="Refresh inferred actions" title="Re-run anatomy and skill inference for this encounter"${view?.busy || state?.status !== 'active' ? ' disabled' : ''}>Refresh actions</button>
+    </div>`;
+}
+
+function renderPairState(state, actor) {
+    const edges = actor ? engagementsFor(state, actor) : [];
+    if (!edges.length) {
+        return '<div class="rt-lc-pair-state" aria-label="Pair state"><span class="rt-lc-pair-row">Pair: not paired</span></div>';
+    }
+    const rows = edges.map(edge => {
+        const otherId = edge.a === actor.id ? edge.b : edge.a;
+        const other = (state?.participants || []).find(participant => participant.id === otherId);
+        const bits = [];
+        const act = text(typeof edge.act === 'object' && edge.act ? edge.act.id ?? edge.act.type : edge.act)
+            || text(edge.actType);
+        if (act) bits.push(`act: ${act}`);
+        if (Number(edge.actIntensity) > 0) bits.push(`intensity ${Number(edge.actIntensity)}`);
+        if (Number(edge.bindings) > 0) bits.push(`bindings ${Number(edge.bindings)}`);
+        const stance = edge.pairStance?.label || edge.pairStance?.id || edge.stance?.label || edge.stance?.id;
+        if (stance) bits.push(`stance: ${stance}`);
+        const label = `Pair: ${text(actor.name)} ↔ ${text(other?.name) || otherId}${bits.length ? ` · ${bits.join(' · ')}` : ''}`;
+        return `<span class="rt-lc-pair-row" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+    }).join('');
+    return `<div class="rt-lc-pair-state" aria-label="Pair state">${rows}</div>`;
 }
 
 function defaultTargets(state, actor) {
@@ -568,6 +665,8 @@ function renderComposer(state, view) {
         <h3 class="rt-lc-section-title">Action</h3>
         <div class="rt-lc-actor-picker" role="group" aria-label="Actor">${actorButtons}</div>
         <div class="rt-lc-postures" role="group" aria-label="Posture">${renderPostureButtons(view, entry)}</div>
+        ${renderPairState(state, actor)}
+        ${renderInference(state, view)}
         <div class="rt-lc-techniques">${renderTechniques(legal, view)}</div>
         <div class="rt-lc-pickers">
             ${renderZones(entry, view)}
@@ -589,7 +688,9 @@ function renderEnded(state) {
         <h3 class="rt-lc-section-title">Outcome: ${escapeHtml(titleCase(outcome))}</h3>
         <p class="rt-lc-summary-text">${escapeHtml(text(state?.summary) || 'The encounter has ended.')}</p>
         <div class="rt-lc-composer-actions">
-            <button type="button" class="rt-lc-btn rt-lc-btn-primary" data-lc-action="reset" aria-label="Reset the encounter" title="Reset">Reset</button>
+            <button type="button" class="rt-lc-btn rt-lc-btn-primary" data-lc-action="new-encounter" aria-label="Start a new Lewd Combat encounter" title="New encounter">New encounter</button>
+            <button type="button" class="rt-lc-btn" data-lc-action="return-to-story" aria-label="Acknowledge the result and return to the story" title="Return to story">Return to story</button>
+            <button type="button" class="rt-lc-btn" data-lc-action="reset" aria-label="Reset the encounter" title="Reset">Reset</button>
             <button type="button" class="rt-lc-btn" data-lc-action="close" aria-label="Close Lewd Combat" title="Close">Close</button>
         </div>
     </section>`;

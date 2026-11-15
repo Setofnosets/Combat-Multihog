@@ -38,6 +38,8 @@ import {
 import {
     LEWD_TECHNIQUES,
     listLegalActions,
+    techniqueActorRequirementReason,
+    techniqueTargetRequirementReason,
 } from './lewd-combat-techniques.js';
 import {
     attemptEscape,
@@ -46,6 +48,7 @@ import {
     isOverwhelmed,
     markOverwhelmed,
     normalizeHold,
+    normalizePairStance,
     normalizeStance,
     poiseEscapeBonus,
     tickOverwhelmed,
@@ -67,6 +70,30 @@ const POSTURE_KEYS = Object.keys(LEWD_POSTURES);
 const LOG_LIMIT = 100;
 const DEFAULT_ROUND_CAP = 12;
 const DEFAULT_MAX_PARTNERS = 2;
+
+function normalizeControlMode(value) {
+    const key = textValue(value).toLowerCase().replace(/[_\s]+/g, '-');
+    if (key === 'player-all' || key === 'playerall' || key === 'all-player') return 'player-all';
+    if (key === 'ai-others' || key === 'aiothers' || key === 'others-ai') return 'ai-others';
+    return 'auto';
+}
+
+/**
+ * Resolve a participant's control. `control` is authoritative; a legacy board
+ * that only carries `ai` (and maybe `side`) is read through those fields so the
+ * board, UI, and agent can never disagree. Exported because this is the single
+ * canonical fallback used by every consumer.
+ *
+ * @param {object} participant
+ * @returns {'player'|'ai'}
+ */
+export function lewdParticipantControl(participant) {
+    if (participant?.control === 'player' || participant?.control === 'ai') return participant.control;
+    if (participant?.ai === true) return 'ai';
+    if (participant?.ai === false) return 'player';
+    if (participant?.side === 'enemy' || participant?.side === 'opponent') return 'ai';
+    return 'player';
+}
 
 function clamp(value, min, max, fallback = min) {
     const number = Number(value);
@@ -194,6 +221,17 @@ function uniqueId(state, requested, name) {
     return `${base}-${index}`;
 }
 
+function cloneProfileProvenance(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const copy = {};
+    for (const [key, entry] of Object.entries(value)) {
+        copy[key] = entry && typeof entry === 'object' && !Array.isArray(entry)
+            ? { ...entry }
+            : entry;
+    }
+    return copy;
+}
+
 function normalizeProfile(raw, unit) {
     if (!raw) return null;
     if (Number.isFinite(Number(raw.maxStamina))) {
@@ -206,12 +244,21 @@ function normalizeProfile(raw, unit) {
             limits: Array.isArray(raw.limits) ? [...raw.limits] : [],
             traits: { ...(raw.traits || {}) },
             warnings: Array.isArray(raw.warnings) ? [...raw.warnings] : [],
+            anatomy: Array.isArray(raw.anatomy) ? [...raw.anatomy] : [],
+            skills: Array.isArray(raw.skills) ? [...raw.skills] : [],
+            kinks: Array.isArray(raw.kinks) ? [...raw.kinks] : [],
+            sourceSkills: Array.isArray(raw.sourceSkills) ? [...raw.sourceSkills] : [],
+            sourceTraits: Array.isArray(raw.sourceTraits) ? [...raw.sourceTraits] : [],
+            provenance: cloneProfileProvenance(raw.provenance),
+            inferredFields: Array.isArray(raw.inferredFields) ? [...raw.inferredFields] : [],
+            body: String(raw.body ?? ''),
+            species: String(raw.species ?? ''),
         };
     }
     return normalizeLewdProfile(raw, { unit });
 }
 
-function buildParticipant(raw = {}, state, index) {
+function buildParticipant(raw = {}, state, index, controlMode = 'auto') {
     const name = String(raw.name || `Participant ${index + 1}`).trim().slice(0, 80);
     const profile = normalizeProfile(raw.profile, raw) || inferProfile(raw, {});
     const maxStamina = maxStaminaFromProfile(profile);
@@ -219,10 +266,21 @@ function buildParticipant(raw = {}, state, index) {
     const maxPoise = clamp(profile.maxPoise, 4, 16, 6);
     const spectator = raw.spectator === true;
     const stamina = clamp(raw.stamina ?? maxStamina, 0, maxStamina, maxStamina);
+    const mode = normalizeControlMode(controlMode);
+    let control;
+    if (raw.control === 'player' || raw.control === 'ai') control = raw.control;
+    else if (mode === 'player-all') control = 'player';
+    else control = raw.side === 'opponent' || raw.side === 'enemy' ? 'ai' : 'player';
+    const profileList = (key) => {
+        if (Array.isArray(raw?.[key])) return raw[key].map(String);
+        if (Array.isArray(profile?.[key])) return profile[key].map(String);
+        return [];
+    };
     return {
         id: uniqueId(state, raw.id, name),
         name,
         side: String(raw.side || 'player'),
+        control,
         spectator,
         active: !spectator && stamina > 0,
         stats: raw.stats || raw.unit?.stats || {},
@@ -230,8 +288,20 @@ function buildParticipant(raw = {}, state, index) {
         initiativeBonus: Number(raw.initiativeBonus ?? raw.unit?.initiativeBonus ?? statModifier(raw, 'dex')) || 0,
         initiative: 0,
         tieBreak: 0,
-        ai: raw.ai === true || raw.side === 'opponent' || raw.side === 'enemy',
+        ai: control === 'ai',
         profile,
+        anatomy: profileList('anatomy'),
+        skills: profileList('skills'),
+        kinks: profileList('kinks'),
+        sourceSkills: profileList('sourceSkills'),
+        sourceTraits: profileList('sourceTraits'),
+        inferredFields: profileList('inferredFields'),
+        provenance: raw?.provenance && typeof raw.provenance === 'object'
+            ? cloneProfileProvenance(raw.provenance)
+            : cloneProfileProvenance(profile.provenance),
+        body: String(raw.body ?? profile.body ?? ''),
+        species: String(raw.species ?? profile.species ?? ''),
+        notes: String(raw.notes ?? profile.notes ?? '').trim(),
         stamina,
         maxStamina,
         arousal: clamp(raw.arousal ?? 0, 0, maxArousal, 0),
@@ -279,6 +349,10 @@ function NUMBER(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
+function textValue(value) {
+    return String(value ?? '').trim();
+}
+
 function holdDefenseBonus(state, participant) {
     let bonus = 0;
     for (const edge of state.engagements) {
@@ -291,6 +365,112 @@ function holdDefenseBonus(state, participant) {
 
 function engage(state, actor, target, patch = {}) {
     return upsertEngagement(state, actor.id, target.id, patch);
+}
+
+function edgeActId(edge) {
+    const source = edge?.act;
+    if (source == null) return null;
+    if (typeof source === 'object') return source.id ?? source.type ?? null;
+    return source;
+}
+
+function pairStanceKey(stance) {
+    if (!stance) return '';
+    return String(stance.id ?? stance.label ?? '').toLowerCase();
+}
+
+function pairStateSnapshot(edge) {
+    return {
+        act: edgeActId(edge),
+        actType: edge?.actType ?? null,
+        actRole: edge?.actRole ?? null,
+        actIntensity: Number(edge?.actIntensity) || 0,
+        bindings: Number(edge?.bindings) || 0,
+        pairStance: pairStanceKey(edge?.pairStance),
+    };
+}
+
+function pairStateSummary(edge) {
+    const parts = [];
+    const act = edgeActId(edge);
+    const intensity = Number(edge?.actIntensity) || 0;
+    if (act) parts.push(`${String(act)}${intensity ? ` intensity ${intensity}` : ''}`);
+    if ((Number(edge?.bindings) || 0) > 0) parts.push(`bindings ${Number(edge.bindings)}`);
+    if (edge?.pairStance) parts.push(edge.pairStance.label || edge.pairStance.id);
+    return parts;
+}
+
+/**
+ * Apply a technique's pair-level effects to one engagement edge. Mutates only
+ * the edge; callers decide whether the action hit. Returns true when the edge's
+ * pair state changed.
+ */
+function applyPairEffects(state, edge, technique, entry, before = pairStateSnapshot(edge)) {
+    if (!edge) return false;
+    const applies = technique?.applies || {};
+
+    if ('act' in applies) {
+        if (applies.act == null) {
+            edge.act = null;
+            edge.actType = null;
+            edge.actRole = null;
+            edge.actIntensity = 0;
+            edge.actStartedRound = 0;
+        } else {
+            const source = typeof applies.act === 'object' ? applies.act : { id: applies.act };
+            const previousId = edgeActId(edge);
+            const hadAct = !!previousId || !!edge.actType || !!edge.actRole
+                || (Number(edge.actIntensity) || 0) > 0;
+            const nextId = source.id ?? source.type ?? previousId ?? null;
+            const nextType = source.type ?? technique.actType ?? edge.actType ?? null;
+            const nextRole = source.role ?? technique.actRole ?? edge.actRole ?? null;
+            const nextIntensity = source.intensity != null
+                ? clamp(source.intensity, 0, 5, 1)
+                : (hadAct ? (Number(edge.actIntensity) || 0) : 1);
+            const idChanged = String(previousId ?? '') !== String(nextId ?? '');
+            edge.act = nextId ? String(nextId) : null;
+            edge.actType = nextType ? String(nextType) : null;
+            edge.actRole = nextRole ? String(nextRole) : null;
+            edge.actIntensity = clamp(nextIntensity, 0, 5, 0);
+            if (idChanged || !hadAct) edge.actStartedRound = state.round;
+        }
+    }
+
+    if (applies.intensityDelta != null && edge.act) {
+        edge.actIntensity = clamp((Number(edge.actIntensity) || 0) + Number(applies.intensityDelta), 0, 5, 0);
+    }
+
+    if (applies.bindings != null || applies.bindingsDelta != null) {
+        const previous = Number(edge.bindings) || 0;
+        const next = applies.bindings != null
+            ? clamp(applies.bindings, 0, 5, 0)
+            : clamp(previous + Number(applies.bindingsDelta), 0, 5, 0);
+        edge.bindings = next;
+        if (previous === 0 && next > 0) edge.bindingsStartedRound = state.round;
+        if (next === 0) edge.bindingsStartedRound = 0;
+    }
+
+    if ('pairStance' in applies && applies.pairStance != null) {
+        const stance = normalizePairStance(applies.pairStance, 3);
+        if (stance) {
+            stance.appliedRound = state.round;
+            edge.pairStance = stance;
+            edge.stance = stance;
+        }
+    }
+
+    const changed = JSON.stringify(before) !== JSON.stringify(pairStateSnapshot(edge));
+    if (changed) {
+        entry.pair = {
+            act: edge.act,
+            actType: edge.actType,
+            actIntensity: edge.actIntensity,
+            bindings: edge.bindings,
+            pairStance: edge.pairStance,
+        };
+    }
+
+    return changed;
 }
 
 function applyStatus(state, participant, status) {
@@ -482,6 +662,12 @@ function addStateChange(changes, participant) {
 }
 
 function pushLog(state, beat) {
+    // Beats carry a stable, monotonic id so the prose cursor survives the log
+    // trimming its oldest entries.
+    if (beat && typeof beat === 'object' && !beat.id) {
+        state.beatSeq = (Number(state.beatSeq) || 0) + 1;
+        beat.id = `${textValue(state.id) || 'lewd'}:beat:${state.beatSeq}`;
+    }
     state.log.push(beat);
     if (state.log.length > LOG_LIMIT) state.log.splice(0, state.log.length - LOG_LIMIT);
 }
@@ -521,6 +707,7 @@ function endEncounter(state, outcome, extra = {}) {
     state.status = 'ended';
     state.outcome = outcome;
     state.endedRound = state.round;
+    state.endedAt = Number(extra.endedAt) || Date.now();
     state.endReason = extra.reason || outcome;
     if (extra.winnerIds) state.winnerIds = extra.winnerIds;
     if (extra.winnerSide) state.winnerSide = extra.winnerSide;
@@ -608,11 +795,13 @@ export function checkLewdEncounterEnd(state) {
 export function createLewdEncounterState(options = {}) {
     const settings = options.settings || {};
     const seed = String(options.seed ?? settings.lewdCombatSeed ?? 'lewd-combat');
+    const controlMode = normalizeControlMode(options.controlMode);
     const state = {
         format: LEWD_STATE_FORMAT,
         schemaVersion: LEWD_STATE_VERSION,
         id: String(options.id || ''),
         mode: LEWD_MODES.includes(options.mode) ? options.mode : 'duel',
+        controlMode,
         status: 'active',
         round: 1,
         roundCap: clamp(settings.lewdCombatRoundCap, 1, 60, DEFAULT_ROUND_CAP),
@@ -633,12 +822,19 @@ export function createLewdEncounterState(options = {}) {
         actionLog: [],
         outcome: null,
         summary: '',
+        endedAt: 0,
         stopped: false,
+        prose: null,
+        proseLog: [],
+        proseSeq: 0,
+        beatSeq: 0,
+        lastNarratedLogIndex: -1,
+        narratedBeatIds: [],
     };
 
     const input = Array.isArray(options.participants) ? options.participants : [];
     input.forEach((raw, index) => {
-        state.participants.push(buildParticipant(raw, state, index));
+        state.participants.push(buildParticipant(raw, state, index, controlMode));
     });
 
     for (const participant of state.participants) {
@@ -794,6 +990,10 @@ export function applyLewdAction(state, action, options = {}) {
     if (techniqueUsesRemaining(actor, technique) <= 0) {
         return { ok: false, reason: 'No uses remaining for this technique.' };
     }
+    const actorRequirementReason = techniqueActorRequirementReason(state, actor, technique);
+    if (actorRequirementReason) {
+        return { ok: false, reason: actorRequirementReason };
+    }
 
     const resolved = resolveTargets(state, actor, technique, action);
     if (resolved.error) return { ok: false, reason: resolved.error };
@@ -811,6 +1011,11 @@ export function applyLewdAction(state, action, options = {}) {
     const targets = [];
     const excluded = [...(resolved.excluded || [])];
     for (const target of resolved.targets) {
+        const targetRequirementReason = techniqueTargetRequirementReason(state, actor, target, technique);
+        if (targetRequirementReason) {
+            excluded.push({ id: target.id, name: target.name, reason: targetRequirementReason });
+            continue;
+        }
         if (!requiresHoldCheck(state, actor, target, technique)) {
             excluded.push({ id: target.id, name: target.name, reason: 'Requires a hold.' });
             continue;
@@ -913,20 +1118,47 @@ export function applyLewdAction(state, action, options = {}) {
                 entry.status = applyStatus(state, target, technique.applies.status);
             }
 
+            let edge = null;
+            let pairBefore = null;
+            if (target.id !== actor.id) {
+                const hold = normalizeHold(technique.hold, technique);
+                edge = engage(state, actor, target, hold ? { hold } : {});
+                pairBefore = pairStateSnapshot(edge);
+                if (hold) entry.hold = hold.label;
+            }
+
             if (technique.applies?.stance) {
                 const stance = normalizeStance(technique.applies.stance, 3);
                 if (stance) {
-                    actor.stance = stance;
-                    entry.stance = stance.label;
+                    const stanceTarget = technique.applies.stance.target || 'actor';
+                    if (stanceTarget === 'actor') {
+                        actor.stance = stance;
+                        entry.stance = stance.label;
+                    } else if (stanceTarget === 'target') {
+                        if (target.id !== actor.id) {
+                            target.stance = { ...stance };
+                            entry.stance = stance.label;
+                        }
+                    } else if (stanceTarget === 'pair') {
+                        actor.stance = { ...stance };
+                        entry.stance = stance.label;
+                        if (target.id !== actor.id) {
+                            target.stance = { ...stance };
+                            if (edge) {
+                                const pairStance = { ...stance, appliedRound: state.round };
+                                edge.stance = pairStance;
+                                edge.pairStance = pairStance;
+                            }
+                        }
+                    }
                 }
             }
 
-            const hold = normalizeHold(technique.hold, technique);
-            if (hold) {
-                engage(state, actor, target, { hold });
-                entry.hold = hold.label;
-            } else if (target.id !== actor.id) {
-                engage(state, actor, target);
+            if (edge && applyPairEffects(state, edge, technique, entry, pairBefore)) {
+                const parts = pairStateSummary(edge);
+                beat.stateChanges.push(
+                    `${actor.name} ↔ ${target.name}: ${parts.length ? parts.join(', ') : 'act ended'}.`,
+                );
             }
 
             if (target.arousal >= target.maxArousal) {
@@ -1088,7 +1320,7 @@ export function joinParticipant(state, raw = {}) {
     }
     // `state.maxPartners` caps how many partners a technique may engage (U4
     // pairing); the roster itself may hold additional spectators.
-    const participant = buildParticipant(raw, state, state.participants.length);
+    const participant = buildParticipant(raw, state, state.participants.length, state.controlMode);
     participant.joinRound = state.round;
     participant.acted = true;
     if (!participant.spectator) {
@@ -1135,7 +1367,7 @@ export function canLewdParticipantAct(state, unit) {
 
 function nextOpponentActor(state) {
     const pool = state.participants.filter(participant =>
-        isActive(participant) && (participant.ai || participant.side === 'opponent' || participant.side === 'enemy'));
+        isActive(participant) && lewdParticipantControl(participant) === 'ai');
     return pool.find(participant => !participant.acted) || null;
 }
 
@@ -1276,6 +1508,102 @@ export function resolveLewdOpponentTurn(state, actions = [], options = {}) {
     return applyLewdAction(state, { type: 'wait', unitId: actor.id, source: 'ai' }, options);
 }
 
+/** Cap the prose transcript so a long scene cannot grow the saved board without bound. */
+export const LEWD_PROSE_LOG_LIMIT = 50;
+
+/**
+ * Stable id for a log entry. Beats may not carry their own id, so the board id
+ * plus the log index is the identity used by the prose transcript.
+ *
+ * @param {object} state
+ * @param {object} beat
+ * @param {number} index
+ * @returns {string}
+ */
+export function lewdBeatId(state, beat, index) {
+    const id = textValue(beat?.id);
+    if (id) return id;
+    return `${textValue(state?.id) || 'lewd'}:beat:${Number(index) || 0}`;
+}
+
+/**
+ * Normalize the prose transcript fields on a board. Safe to call repeatedly.
+ * @param {object} state
+ * @returns {object|null}
+ */
+export function ensureLewdProseState(state) {
+    if (!state || typeof state !== 'object') return null;
+    state.proseLog = Array.isArray(state.proseLog) ? state.proseLog.slice(-LEWD_PROSE_LOG_LIMIT) : [];
+    state.proseSeq = Math.max(0, Number(state.proseSeq) || 0);
+    state.beatSeq = Math.max(0, Number(state.beatSeq) || 0);
+    state.lastNarratedLogIndex = Number.isFinite(Number(state.lastNarratedLogIndex))
+        ? Number(state.lastNarratedLogIndex)
+        : -1;
+    state.narratedBeatIds = Array.isArray(state.narratedBeatIds)
+        ? state.narratedBeatIds.map(String)
+        : [];
+    if (!state.prose || typeof state.prose !== 'object') state.prose = null;
+    return state;
+}
+
+/**
+ * Append one prose transcript entry (model prose or deterministic fallback).
+ * Newest last, capped, and mirrored to `state.prose` for compatibility.
+ *
+ * @param {object} state
+ * @param {object} entry
+ * @returns {object|null}
+ */
+export function appendLewdProseEntry(state, entry = {}) {
+    if (!state || typeof state !== 'object') return null;
+    ensureLewdProseState(state);
+    state.proseSeq += 1;
+    const round = Math.max(1, Number(entry.round) || Number(state.round) || 1);
+    const beatIds = Array.isArray(entry.beatIds) ? entry.beatIds.map(String).filter(Boolean) : [];
+    const item = {
+        id: textValue(entry.id) || `${textValue(state.id) || 'lewd'}:prose:${state.proseSeq}`,
+        stateId: textValue(entry.stateId) || textValue(state.id),
+        chatId: textValue(entry.chatId) || textValue(state.chatId),
+        round,
+        exchangeId: textValue(entry.exchangeId) || `${textValue(state.id) || 'lewd'}:${round}:${beatIds[0] || state.proseSeq}`,
+        actorIds: Array.isArray(entry.actorIds) ? entry.actorIds.map(String).filter(Boolean) : [],
+        beatIds,
+        text: String(entry.text ?? '').trim(),
+        source: textValue(entry.source) || 'model',
+        createdAt: Number(entry.createdAt) || Date.now(),
+    };
+    state.proseLog = [...state.proseLog, item].slice(-LEWD_PROSE_LOG_LIMIT);
+    state.prose = { text: item.text, round: item.round };
+    return item;
+}
+
+/**
+ * Advance the narrated cursor after prose (or a deterministic fallback) covers
+ * every log entry up to `upToIndex`.
+ *
+ * @param {object} state
+ * @param {number} upToIndex
+ * @param {string[]} [beatIds]
+ * @returns {object|null}
+ */
+export function markLewdBeatsNarrated(state, upToIndex, beatIds = []) {
+    if (!state || typeof state !== 'object') return null;
+    ensureLewdProseState(state);
+    state.lastNarratedLogIndex = Math.max(
+        state.lastNarratedLogIndex,
+        Number(upToIndex) || 0,
+    );
+    const seen = new Set(state.narratedBeatIds);
+    for (const id of Array.isArray(beatIds) ? beatIds : []) {
+        const value = textValue(id);
+        if (value) seen.add(value);
+    }
+    // The sentinel set is an aid for debugging/back-compat, not the cursor; cap
+    // it so a very long board does not accumulate forever.
+    state.narratedBeatIds = [...seen].slice(-200);
+    return state;
+}
+
 /**
  * Deep-clone the board for storage. Preserves seed, rollCount, RNG state,
  * profiles, stances, holds, engagements, and both logs.
@@ -1310,6 +1638,7 @@ export function hydrateLewdState(raw) {
     state.round = Math.max(1, Number(state.round) || 1);
     state.roundCap = Math.max(1, Number(state.roundCap) || DEFAULT_ROUND_CAP);
     state.maxPartners = Math.max(1, Number(state.maxPartners) || DEFAULT_MAX_PARTNERS);
+    state.controlMode = normalizeControlMode(state.controlMode);
     state.seed = String(state.seed ?? 'lewd-combat');
     state.rollCount = Math.max(0, Number(state.rollCount) || 0);
     state.techniques = Array.isArray(state.techniques) && state.techniques.length
@@ -1317,9 +1646,54 @@ export function hydrateLewdState(raw) {
         : LEWD_TECHNIQUES;
     state.participants = Array.isArray(state.participants) ? state.participants : [];
     state.engagements = Array.isArray(state.engagements) ? state.engagements : [];
+    for (const edge of state.engagements) {
+        if (!edge || typeof edge !== 'object') continue;
+        // Legacy edges predate the pair-level state; backfill safe defaults so
+        // the matrix, composer, and gating never read undefined.
+        if (edge.act === undefined) edge.act = null;
+        if (edge.actType === undefined) edge.actType = null;
+        if (edge.actRole === undefined) edge.actRole = null;
+        if (edge.actIntensity == null || !Number.isFinite(Number(edge.actIntensity))) edge.actIntensity = 0;
+        if (edge.actStartedRound == null || !Number.isFinite(Number(edge.actStartedRound))) edge.actStartedRound = 0;
+        if (edge.bindings == null || !Number.isFinite(Number(edge.bindings))) edge.bindings = 0;
+        if (edge.bindingsStartedRound == null || !Number.isFinite(Number(edge.bindingsStartedRound))) edge.bindingsStartedRound = 0;
+        if (edge.pairStance === undefined) edge.pairStance = null;
+    }
     state.log = Array.isArray(state.log) ? state.log : [];
     state.actionLog = Array.isArray(state.actionLog) ? state.actionLog : [];
     state.stopped = !!state.stopped;
+    ensureLewdProseState(state);
+    for (const beat of state.log) {
+        if (beat && typeof beat === 'object' && !beat.id) {
+            state.beatSeq += 1;
+            beat.id = `${textValue(state.id) || 'lewd'}:beat:${state.beatSeq}`;
+        }
+    }
+    state.endedAt = Math.max(0, Number(state.endedAt) || 0);
+    // The resolution latch is written once by `finishEncounterIfEnded`; hydrate
+    // only preserves a stored record so a reload cannot drop it. No synthetic
+    // null is added, so a fresh board round-trips byte-for-byte.
+    if (!state.resolution || typeof state.resolution !== 'object') delete state.resolution;
+    // Inferred availability is encounter-scoped. Legacy boards have none; a
+    // stored set is preserved verbatim (it is recomputed on the next start).
+    if (state.inferredActions && typeof state.inferredActions === 'object' && !Array.isArray(state.inferredActions)) {
+        const inference = state.inferredActions;
+        inference.availableTechniqueIds = Array.isArray(inference.availableTechniqueIds)
+            ? inference.availableTechniqueIds.map(String)
+            : [];
+        inference.perParticipant = inference.perParticipant && typeof inference.perParticipant === 'object'
+            && !Array.isArray(inference.perParticipant)
+            ? inference.perParticipant
+            : {};
+        inference.novelTechniqueIds = Array.isArray(inference.novelTechniqueIds)
+            ? inference.novelTechniqueIds.map(String)
+            : [];
+        inference.diagnostics = Array.isArray(inference.diagnostics)
+            ? inference.diagnostics.map(String)
+            : [];
+    } else {
+        delete state.inferredActions;
+    }
 
     for (const participant of state.participants) {
         participant.status = Array.isArray(participant.status) ? participant.status : [];
@@ -1330,6 +1704,15 @@ export function hydrateLewdState(raw) {
         participant.atMercy = !!participant.atMercy || Number(participant.stamina) <= 0;
         participant.surrendered = !!participant.surrendered;
         participant.spectator = !!participant.spectator;
+        // Control is persisted, but a legacy board may only carry `ai`. Backfill
+        // from `ai` (then side) and re-mirror so the two never disagree.
+        if (participant.control !== 'player' && participant.control !== 'ai') {
+            if (participant.ai === true) participant.control = 'ai';
+            else if (participant.ai === false) participant.control = 'player';
+            else if (participant.side === 'enemy' || participant.side === 'opponent') participant.control = 'ai';
+            else participant.control = 'player';
+        }
+        participant.ai = participant.control === 'ai';
         participant.active = !participant.spectator && !participant.atMercy && !participant.surrendered;
         participant.maxStamina = clamp(participant.maxStamina, 1, 6, 2);
         participant.stamina = clamp(participant.stamina, 0, participant.maxStamina, participant.maxStamina);
@@ -1338,6 +1721,14 @@ export function hydrateLewdState(raw) {
         participant.maxPoise = clamp(participant.maxPoise, 4, 16, 6);
         participant.poise = clamp(participant.poise, 0, participant.maxPoise, participant.maxPoise);
         if (!participant.profile) participant.profile = inferProfile(participant, {});
+        // Profile capability data is additive. Legacy boards get empty
+        // containers; unknown persisted fields are left untouched.
+        for (const key of ['anatomy', 'skills', 'kinks', 'sourceSkills', 'sourceTraits', 'inferredFields']) {
+            participant[key] = Array.isArray(participant[key]) ? participant[key] : [];
+        }
+        participant.provenance = cloneProfileProvenance(participant.provenance);
+        participant.body = String(participant.body ?? '');
+        participant.species = String(participant.species ?? '');
     }
     refreshEngagedWith(state);
 

@@ -10,6 +10,7 @@ import {
     LEWD_POSTURES,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
 import * as ui from '../src/features/lewd-combat/lewd-combat-ui.js';
+import { upsertEngagement } from '../src/features/lewd-combat/lewd-combat-pairing.js';
 
 function profile(name, overrides = {}) {
     return {
@@ -62,6 +63,10 @@ describe('lewd-combat-markup', () => {
         expect(html).toContain('data-lc-start-participant');
         expect(html).toContain('data-lc-start-spectator');
         expect(html).toContain('data-lc-start-mode');
+        expect(html).toContain('data-lc-start-control-mode');
+        expect(html).toContain('value="auto"');
+        expect(html).toContain('value="player-all"');
+        expect(html).toContain('value="ai-others"');
         expect(html).toContain('data-lc-action="start"');
         expect(html).toContain('value="Aria"');
         expect(html).not.toContain('data-tc-cell');
@@ -100,6 +105,52 @@ describe('lewd-combat-markup', () => {
         expect(staminaPips(3, 3)).toBe('●●●');
         expect(staminaPips(1, 3)).toBe('●○○');
         expect(describeLewdBeat(null)).toMatch(/no exchange yet/i);
+    });
+
+    it('renders pair act state in the matrix and composer with follow-up groups', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', stats: { cha: 16, chaMod: 3 }, profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        const ariaId = participantId(state, 'Aria');
+        const branId = participantId(state, 'Bran');
+        upsertEngagement(state, ariaId, branId, {
+            act: { id: 'penetration', type: 'penetration', role: 'give' },
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 1,
+            bindingsStartedRound: 1,
+            pairStance: { id: 'entwined', label: 'Entwined', roundsLeft: 3 },
+        });
+
+        const html = buildLewdCombatMarkup(state, { actorId: ariaId });
+
+        // Matrix cell carries the act ladder, restraint, and pair stance.
+        expect(html).toContain('rt-lc-matrix');
+        expect(html).toContain('penetration 2');
+        expect(html).toContain('bindings 1');
+        expect(html.toLowerCase()).toContain('entwined');
+
+        // Composer pair header above the technique buttons.
+        expect(html).toContain('rt-lc-pair-state');
+        expect(html).toContain('Pair: Aria');
+        expect(html).toContain('act: penetration');
+        expect(html).toContain('intensity 2');
+        expect(html).toContain('stance: Entwined');
+
+        // Follow-up techniques are grouped under the act label.
+        expect(html).toContain('Follow-ups · Penetration');
+        expect(html).toContain('data-lc-technique="thrust-harder"');
+    });
+
+    it('renders a not-paired composer state when the actor is unengaged', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+        expect(html).toContain('rt-lc-pair-state');
+        expect(html).toContain('Pair: not paired');
     });
 
     it('escapes script tags in participant names, titles, and prose', () => {
@@ -174,8 +225,107 @@ describe('lewd-combat-markup', () => {
         expect(html.toLowerCase()).toContain('at mercy');
         expect(html).toContain('Aria wins the encounter');
         expect(html).not.toContain('data-lc-action="resolve"');
+        expect(html).toContain('data-lc-action="new-encounter"');
         expect(html).toContain('data-lc-action="reset"');
         expect(html).toContain('data-lc-action="close"');
+    });
+
+    it('renders a capped prose transcript with per-entry data attributes', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        state.proseLog = [1, 2, 3].map(index => ({
+            id: `prose-${index}`,
+            stateId: state.id,
+            round: 1,
+            text: `Beat number ${index}.`,
+            source: index === 3 ? 'fallback' : 'model',
+        }));
+
+        const html = buildLewdCombatMarkup(state, {});
+
+        expect(html).toContain('rt-lc-prose-scroll');
+        expect((html.match(/data-lc-prose-entry/g) || [])).toHaveLength(3);
+        expect(html).toContain('data-lc-prose-id="prose-1"');
+        expect(html).toContain('data-lc-prose-source="fallback"');
+        expect(html.indexOf('Beat number 1.')).toBeLessThan(html.indexOf('Beat number 3.'));
+        expect(html).toContain('rt-lc-log');
+    });
+
+    it('renders the control chip from control with a legacy ai fallback', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', profile: profile('Bran') },
+        ]);
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+
+        const aria = state.participants.find(participant => participant.name === 'Aria');
+        const bran = state.participants.find(participant => participant.name === 'Bran');
+        expect(aria.control).toBe('player');
+        expect(bran.control).toBe('ai');
+        expect(html).toContain('rt-lc-chip-player');
+        expect(html).toContain('rt-lc-chip-ai');
+
+        // A participant whose control is player must never be labelled AI even
+        // when its legacy side is hostile.
+        const overridden = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', control: 'player', profile: profile('Bran') },
+        ]);
+        const card = buildLewdCombatMarkup(overridden, {})
+            .split('data-lc-unit-id=')
+            .find(chunk => chunk.includes('Bran'));
+        expect(card).toBeTruthy();
+        expect(card).toContain('rt-lc-chip-player');
+        expect(card).not.toContain('rt-lc-chip-ai');
+    });
+
+    it('previews the start control badges and shows Player for every row under player-all', () => {
+        const candidates = [
+            { name: 'Aria', normalizedName: 'aria', side: 'player', sources: ['party'], control: 'player', profile: profile('Aria') },
+            { name: 'Nyx', normalizedName: 'nyx', side: 'player', sources: ['lewd'], control: 'ai', profile: profile('Nyx') },
+        ];
+
+        const auto = buildLewdCombatMarkup(null, {
+            startOpen: true,
+            startCandidates: candidates,
+            startControlMode: 'auto',
+        });
+        expect(auto).toContain('data-lc-control="player"');
+        expect(auto).toContain('data-lc-control="ai"');
+
+        const playerAll = buildLewdCombatMarkup(null, {
+            startOpen: true,
+            startCandidates: candidates,
+            startControlMode: 'player-all',
+        });
+        expect(playerAll).toContain('data-lc-control="player"');
+        expect(playerAll).not.toContain('data-lc-control="ai"');
+    });
+
+    it('renders the inferred action strip with a refresh button', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', profile: profile('Bran') },
+        ]);
+        // A legacy board without inference has no strip.
+        expect(buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') }))
+            .not.toContain('rt-lc-inference');
+        state.inferredActions = {
+            stateId: state.id,
+            completedAt: 1,
+            source: 'deterministic-fallback',
+            availableTechniqueIds: ['neck-kiss'],
+            perParticipant: {},
+            diagnostics: ['offline'],
+        };
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+        expect(html).toContain('rt-lc-inference');
+        expect(html).toContain('data-lc-action="refresh-actions"');
+        expect(html).toContain('1 inferred action');
+        expect(html).toContain('offline fallback');
+        expect(html).toContain('1 diagnostic');
     });
 
     it('exports the UI lifecycle functions without touching the DOM at import', () => {

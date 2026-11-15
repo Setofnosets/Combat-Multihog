@@ -31,6 +31,9 @@ import {
 import {
     isOverwhelmed,
 } from './lewd-combat-states.js';
+import {
+    lewdParticipantControl,
+} from './lewd-combat-engine.js';
 
 export const LEWD_AGENT_MAX_ATTEMPTS = 2;
 
@@ -44,6 +47,11 @@ function arr(value) {
     if (Array.isArray(value)) return value;
     if (value == null || value === '') return [];
     return [value];
+}
+
+function capabilityList(participant, key) {
+    const profile = participant?.profile || {};
+    return arr(participant?.[key] ?? profile[key]).map(String);
 }
 
 function findParticipant(state, reference) {
@@ -160,6 +168,16 @@ function payloadLegalActions(entries) {
         });
 }
 
+function payloadDisabledActions(entries) {
+    return arr(entries)
+        .filter(entry => entry && arr(entry.requirementReasons).length)
+        .map(entry => ({
+            id: entry.id,
+            name: entry.name,
+            reasons: arr(entry.requirementReasons).map(String),
+        }));
+}
+
 function payloadProfiles(state) {
     const profiles = {};
     for (const participant of arr(state?.participants)) {
@@ -174,6 +192,14 @@ function payloadProfiles(state) {
             endurance: Number(profile.endurance) || 0,
             experience: Number(profile.experience) || 0,
             inferred: profile.inferred === true,
+            body: String(participant.body ?? profile.body ?? ''),
+            species: String(participant.species ?? profile.species ?? ''),
+            anatomy: capabilityList(participant, 'anatomy'),
+            skills: capabilityList(participant, 'skills'),
+            kinks: capabilityList(participant, 'kinks'),
+            sourceSkills: capabilityList(participant, 'sourceSkills'),
+            sourceTraits: capabilityList(participant, 'sourceTraits'),
+            inferredFields: capabilityList(participant, 'inferredFields'),
         };
         // Inferred profiles never declare limits; exposing an empty list would
         // look like a declaration the player never made.
@@ -213,6 +239,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             id: actor?.id || '',
             name: actor?.name || '',
             side: actor?.side || '',
+            control: lewdParticipantControl(actor),
             role: actor?.profile?.role || 'switch',
             stance: actor?.stance?.label || actor?.stance?.id || null,
             stamina: actor?.stamina ?? 0,
@@ -221,12 +248,17 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             maxArousal: actor?.maxArousal ?? 0,
             poise: actor?.poise ?? 0,
             maxPoise: actor?.maxPoise ?? 0,
+            anatomy: capabilityList(actor, 'anatomy'),
+            skills: capabilityList(actor, 'skills'),
+            kinks: capabilityList(actor, 'kinks'),
+            sourceTraits: capabilityList(actor, 'sourceTraits'),
             overwhelmed: state && actor ? isOverwhelmed(state, actor) : false,
         },
         participants: participants.map(participant => ({
             id: participant.id,
             name: participant.name,
             side: participant.side,
+            control: lewdParticipantControl(participant),
             spectator: !!participant.spectator,
             atMercy: !!participant.atMercy,
             surrendered: !!participant.surrendered,
@@ -251,7 +283,15 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             stance: edge.stance?.label || edge.stance?.id || null,
             intensity: Number(edge.intensity) || 0,
         })),
+        inference: state?.inferredActions
+            ? {
+                source: state.inferredActions.source || 'deterministic',
+                availableCount: arr(state.inferredActions.availableTechniqueIds).length,
+                completedAt: Number(state.inferredActions.completedAt) || 0,
+            }
+            : null,
         legalActions: payloadLegalActions(legalEntries),
+        disabledActions: payloadDisabledActions(legalEntries),
         recentActions: compactActionLog(state),
         knownProfiles: payloadProfiles(state),
         rules: {
@@ -260,6 +300,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
                 RULE_TEXT,
                 'The engine owns all Arousal, Poise, and Stamina math; never compute or state results.',
                 'Use only ids, names, targets, zones, and postures from the legalActions list.',
+                'Only use legalActions; a technique in disabledActions is illegal and its reasons explain why.',
                 'Respect every hard limit in knownProfiles.',
                 'Return only one JSON object shaped like {"actions":[...]}.',
             ],
@@ -643,6 +684,21 @@ export async function requestLewdOpponentAction(state, unit, settings = {}, opti
                 const technique = resolved.technique;
                 if (!state.techniques.some(entry => entry?.id === technique.id)) {
                     state.techniques.push(technique);
+                }
+                // A freshly compiled technique must also join the encounter's
+                // inferred set, otherwise the catalog gate would hide it.
+                const inference = state.inferredActions;
+                if (inference && Array.isArray(inference.availableTechniqueIds)
+                    && !inference.availableTechniqueIds.includes(technique.id)) {
+                    inference.availableTechniqueIds.push(technique.id);
+                }
+                if (inference && Array.isArray(inference.novelTechniqueIds)
+                    && !inference.novelTechniqueIds.includes(technique.id)) {
+                    inference.novelTechniqueIds.push(technique.id);
+                }
+                if (inference) {
+                    inference.catalogSize = Array.isArray(state.techniques) ? state.techniques.length : inference.catalogSize;
+                    inference.completedAt = Date.now();
                 }
                 compiledTechnique = technique;
                 // A freshly compiled technique is now part of the legal catalog.
