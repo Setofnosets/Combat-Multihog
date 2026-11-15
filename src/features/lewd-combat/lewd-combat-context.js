@@ -322,6 +322,11 @@ export function canStartLewdEncounter(settings, chatId) {
     if (existing && existing.status === 'active') {
         return { ok: false, reason: 'A Lewd Combat board is already active in this chat. Reset it first.' };
     }
+    const tactical = settings?.tacticalCombatByChat?.[id]?.status;
+    const traditional = settings?.traditionalCombatByChat?.[id]?.status;
+    if (tactical === 'active' || traditional === 'active') {
+        return { ok: false, reason: 'A tactical/traditional combat board is active in this chat. Finish or reset it before starting Lewd Combat.' };
+    }
     return { ok: true };
 }
 

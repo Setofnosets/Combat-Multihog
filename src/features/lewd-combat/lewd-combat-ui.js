@@ -35,6 +35,7 @@ import {
     removeLewdEncounterForChat,
     setLewdEncounterForChat,
 } from './lewd-combat-store.js';
+import { clearPendingNarration, getPendingNarration } from '../tactical-combat/tactical-combat-store.js';
 
 const OVERLAY_ID = 'rt-lewd-combat-overlay';
 const HOST_ID = 'rt-lewd-combat-host';
@@ -342,6 +343,96 @@ async function narrateAfterExchange(state, previousRound) {
     }
 }
 
+/**
+ * Queue the authoritative result once a board has ended, then optionally hand
+ * the turn back to the narrator when the host is idle. Best-effort: a failed
+ * import or a busy host must never break the board.
+ * @param {object|null} state
+ * @returns {Promise<void>}
+ */
+async function finishEncounterIfEnded(state) {
+    if (!state || state.status === 'active' || state.finalization?.narrationQueued) return;
+    try {
+        const settings = getSettings() || {};
+        let outcome = null;
+        try { outcome = await import('./lewd-combat-outcome.js'); } catch (_) { outcome = null; }
+        if (!outcome || typeof outcome.queueLewdOutcome !== 'function') return;
+        const payload = outcome.queueLewdOutcome(state, settings, { persist: false });
+        if (!payload) return;
+        persist(state);
+
+        if (state.finalization?.autoNarrateStarted) return;
+        let prose = null;
+        try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
+        const busy = typeof prose?.isNarratorBusy === 'function' ? prose.isNarratorBusy() : false;
+        if (busy) return;
+        state.finalization = {
+            ...(state.finalization || {}),
+            autoNarrateStarted: Date.now(),
+        };
+        persist(state);
+        try {
+            const { continueToNarration } = await import('../tactical-combat/tactical-combat-outcome.js');
+            void continueToNarration(settings);
+        } catch (_) { /* narration is optional */ }
+    } catch (error) {
+        // The result is optional; the board's own summary stays visible.
+        if (getSettings()?.debugMode) console.warn('[RPG Tracker][Lewd Combat] Could not queue the outcome:', error);
+    }
+}
+
+/**
+ * Narrator entry point: start a lewd board from a StartLewdCombat tool call.
+ * Opens the board for the player; it never auto-runs AI turns.
+ * @param {object} [args]
+ * @returns {Promise<{ ok: boolean, message: string }>}
+ */
+export async function startLewdCombatFromNarrator(args = {}) {
+    try {
+        const settings = getSettings() || {};
+        const chatId = getActiveChatId();
+        const gate = canStartLewdEncounter(settings, chatId);
+        if (!gate.ok) return { ok: false, message: gate.reason };
+
+        const result = createLewdEncounterFromContext(settings, safeContext(), {
+            participantNames: arr(args.participantNames),
+            spectatorNames: arr(args.spectatorNames),
+            title: args.title,
+            location: args.location,
+            reason: args.reason,
+            openingTechnique: args.openingTechnique,
+            openingZone: args.openingZone,
+            tone: args.tone || settings.lewdCombatExplicitness,
+            mode: args.mode,
+        });
+
+        resetProseQueue();
+        persist(result.state);
+        ui.view.startOpen = false;
+        ui.view.startCandidates = null;
+        ui.view.startSelected = [];
+        ui.view.spectatorSelected = [];
+        ui.view.actorId = '';
+        ui.view.techniqueId = '';
+        ui.view.posture = 'switch';
+        ui.view.zone = '';
+        ui.view.targetIds = [];
+        ui.view.error = '';
+        openLewdCombatBoard();
+        notifyChanged();
+        const names = (result.state.participants || [])
+            .filter(participant => !participant.spectator)
+            .map(participant => participant.name)
+            .join(', ');
+        return {
+            ok: true,
+            message: `Lewd Combat: the board is open for ${names}. Resolve the scene on the board; the result returns to the narrator when it ends.`,
+        };
+    } catch (error) {
+        return { ok: false, message: `Lewd Combat could not start: ${error?.message || error}` };
+    }
+}
+
 function loadStartCandidates() {
     try {
         const settings = getSettings() || {};
@@ -461,6 +552,7 @@ async function startFromOverlay() {
         const previousRound = result.state.round;
         const next = await runAiTurns();
         await narrateAfterExchange(next || result.state, previousRound);
+        await finishEncounterIfEnded(next || result.state);
         if (result.warnings?.length) toast('info', result.warnings[0]);
     } catch (error) {
         setError(error?.message || 'Could not start the Lewd Combat encounter.');
@@ -524,6 +616,7 @@ async function resolveAction() {
             persist(state);
             const next = await runAiTurns();
             await narrateAfterExchange(next || state, previousRound);
+            await finishEncounterIfEnded(next || state);
         }
     } catch (error) {
         setError(error?.message || 'The action could not be resolved.');
@@ -562,10 +655,12 @@ async function simpleAction(type) {
             ui.view.targetIds = [];
             ui.view.zone = '';
             persist(state);
+            let next = state;
             if (type !== 'stop') {
-                const next = await runAiTurns();
-                await narrateAfterExchange(next || state, previousRound);
+                next = (await runAiTurns()) || state;
+                await narrateAfterExchange(next, previousRound);
             }
+            await finishEncounterIfEnded(next);
         }
     } catch (error) {
         setError(error?.message || 'The action could not be resolved.');
@@ -592,6 +687,7 @@ function stopEncounter() {
         if (result) {
             ui.view.error = '';
             persist(state);
+            void finishEncounterIfEnded(state);
         }
     } catch (error) {
         setError(error?.message || 'The safe word could not be applied.');
@@ -844,6 +940,11 @@ export function resetLewdCombatEncounter() {
     const chatId = getActiveChatId();
     const settings = getSettings();
     if (chatId && settings) removeLewdEncounterForChat(chatId, settings);
+    // Discard only our own queued result; a tactical/traditional result waiting
+    // for narration must survive a lewd-board reset.
+    if (chatId && settings && getPendingNarration(settings, chatId)?.kind === 'lewd') {
+        clearPendingNarration(settings, { chatId });
+    }
     resetProseQueue();
     ui.view.actorId = '';
     ui.view.techniqueId = '';

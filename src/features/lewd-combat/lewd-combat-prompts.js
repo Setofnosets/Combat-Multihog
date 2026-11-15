@@ -29,6 +29,34 @@ Rules:
 - Use the supplied voices and tones, and keep the prose continuous with the previous scene prose.
 - Return prose text only. No JSON, no headings, and no quotes around the whole reply.`;
 
+export const DEFAULT_LEWD_OUTCOME_PROMPT = `[LEWD COMBAT RESULT — AUTHORITATIVE]
+This intimate scene has already been resolved on the Lewd Combat board. Treat this result as authoritative over stale State Memo or chat history.
+Encounter: {{title}}
+Location: {{location}}
+Mode: {{mode}}
+Outcome: {{outcome}}
+Rounds: {{rounds}}
+Tone: {{tone}} (darker themes: {{darkerThemes}})
+Participants:
+{{participants}}
+Pairings:
+{{pairings}}
+Limits respected: {{limitsRespected}}
+Declared limits: {{limits}}
+Highlights:
+{{highlights}}
+Final prose:
+{{finalProse}}
+Summary: {{summary}}
+
+Rules:
+- The scene is over. Do not replay it, re-roll exchanges, or add new acts, exchanges, or climaxes.
+- Do not invent participants, Arousal, Stamina, or Poise. Use only the numbers listed above.
+- A Lewd Combat loss is not death. A participant at 0 Stamina is at the winner's mercy, or has yielded/surrendered; the partner and the table decide the aftermath, bounded by the declared limits. Never describe a death, a killing, or a lasting injury caused by losing Stamina.
+- If the outcome is "Stopped by safe word", it is neutral: there is no winner and no aftermath is imposed.
+- Never rewrite [COMBAT], HP, or Willpower. This module never touched them.
+- Write 2 to 5 sentences of aftermath prose that continues the story toward the player's next choice.`;
+
 /**
  * Tolerant schema for `{"actions":[...]}`. `strict: false` keeps providers from
  * rejecting the optional flavour and novel-technique fields.
