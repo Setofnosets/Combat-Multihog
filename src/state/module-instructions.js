@@ -6,6 +6,7 @@ import { getSettings } from './settings-ref.js';
 import { DEFAULT_NPC_SECTIONS } from './schema-sections.js';
 import { getNpcRelationshipMax } from './relationship-math.js';
 import { buildNpcRelationshipInstruction } from './relationship-prompts.js';
+import { DEFAULT_STOCK_PROMPTS } from '../../constants.js';
 
 /** Passed as the Lorebook Agent Direct Prompt during Full Audit so color markup survives CORE rewrites. */
 export const LOREBOOK_FULL_AUDIT_INSTRUCTION = 'FULL AUDIT: Reconstruct lore from this history chunk. Preserve existing <font color=...> tags and hex color codes already stored in [CORE] (including custom color sections). When writing color markup, use unquoted hex only: <font color=#RRGGBB>text</font> — never color="#RRGGBB" (quoted attributes break JSON tool calls). Do not strip color markup down to plain text.';
@@ -201,4 +202,23 @@ export function rebuildAllModuleInstructions(settings) {
     if (settings.routerModules.fac) {
         settings.routerModules.fac.instruction = buildFacInstruction(settings);
     }
+}
+
+/**
+ * The `[LEWD]` tracker instruction. Returns an empty string unless the Lewd
+ * Combat module is enabled, so the block is never injected into ordinary play.
+ * The current stock prompt (including user edits) is used when present.
+ * @param {object} [passedSettings]
+ * @returns {string}
+ */
+export function buildLewdInstruction(passedSettings = null) {
+    let settings = passedSettings || {};
+    if (!passedSettings) {
+        try {
+            settings = getSettings() || {};
+        } catch (_) {}
+    }
+    if (!settings.lewdCombatEnabled) return '';
+    const prompt = settings.stockPrompts?.lewd || DEFAULT_STOCK_PROMPTS.lewd || '';
+    return String(prompt).trim();
 }

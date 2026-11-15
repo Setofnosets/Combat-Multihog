@@ -25,4 +25,20 @@ export const DEFAULT_PC_SECTIONS = [
     { id: 'sec_flaws', name: 'Flaws', description: '[Concise bullet phrases formatted in bullet points of their most notable weaknesses, bad habits, or moral failings. Be honest and specific. A troubled character may have more flaws than strengths.]\n(Note: The split between strengths and flaws does not need to be even. It is perfectly fine to have an uneven split—like having more strengths than flaws, or more flaws than strengths—so long as it authentically reflects the character. However, it can be evenly split if it makes sense.)', icon: '⚠️', color: '#ef4444' }
 ];
 
+/**
+ * Optional character-sheet section for Lewd Combat. It is NOT part of the
+ * default NPC/PC schemas: profiles normally live in the dedicated `[LEWD]`
+ * memo block. Editors that want a visible desires field for a character can
+ * append this section explicitly.
+ */
+export const LEWD_DESIRES_SECTION = {
+    id: 'sec_desires',
+    name: 'Desires',
+    description: 'Optional intimate preferences and boundaries: likes, dislikes, sensitivities, and hard limits. Never invent a hard limit; leave the section out when nothing is established.',
+    icon: '💗',
+    color: '#c96b8e',
+};
+
+export const OPTIONAL_LEWD_SECTIONS = [LEWD_DESIRES_SECTION];
+
 export const MODULE_NAME = 'rpg_tracker';

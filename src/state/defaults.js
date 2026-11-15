@@ -595,6 +595,10 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
             quests: true,
 
+            // Lewd Combat profile module. Off by default and only meaningful
+            // while the opt-in Lewd Combat module is enabled.
+            lewd: false,
+
         },
 
         stockPrompts: { ...DEFAULT_STOCK_PROMPTS },
@@ -683,7 +687,7 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
 
         fullViewSections: [],
 
-        blockOrder: ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME'],
+        blockOrder: ['COMBAT', 'CHARACTER', 'PARTY', 'INVENTORY', 'ABILITIES', 'SPELLS', 'XP', 'TIME', 'LEWD'],
 
         legacyDiceNaming: false,
 
