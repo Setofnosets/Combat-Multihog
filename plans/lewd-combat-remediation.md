@@ -198,6 +198,7 @@
 - **Risk:** medium-high
 - **Model / Effort:** implementer model #high
 - **Commit:** `feat(lewd-combat): gate actions by anatomy, skills, traits, and kinks`
+- **Status:** ✅ Done — 11d4506
 
 ### A4. Pair-level act/stance state machine and pairing-matrix actions
 - **Files:** `src/features/lewd-combat/lewd-combat-pairing.js`, `lewd-combat-states.js`, `lewd-combat-techniques.js`, `lewd-combat-engine.js`, `lewd-combat-markup.js`, `lewd-combat-ui.js`; tests `tests/lewd-combat-pairing.test.js`, `tests/lewd-combat-markup.test.js`.
