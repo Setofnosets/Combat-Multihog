@@ -662,6 +662,16 @@ function actionSummarySource(action) {
 }
 
 /**
+ * Non-authoritative model text (a taunt or intent) is recorded for the prose
+ * pass only. It is sanitized, capped, and never read by the math below.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function sanitizeLewdFlavor(value) {
+    return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, 240);
+}
+
+/**
  * Resolve one exchange. Validation happens before any roll or mutation, so a
  * rejected action leaves the state untouched.
  *
@@ -845,6 +855,10 @@ export function applyLewdAction(state, action, options = {}) {
         stateChanges: [],
         seed: state.seed,
     };
+    const flavor = sanitizeLewdFlavor(action?.flavor);
+    const intent = sanitizeLewdFlavor(action?.intent);
+    if (flavor) beat.flavor = flavor;
+    if (intent) beat.intent = intent;
 
     for (const target of targets) {
         const zone = defaultZone;
@@ -957,6 +971,8 @@ export function applyLewdAction(state, action, options = {}) {
         zones: [defaultZone],
         posture,
         source: actionSummarySource(action),
+        ...(flavor ? { flavor } : {}),
+        ...(intent ? { intent } : {}),
     });
 
     advanceRoundIfComplete(state);

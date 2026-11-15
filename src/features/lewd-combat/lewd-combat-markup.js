@@ -418,13 +418,14 @@ function renderLog(state, view) {
     const entries = log.map((beat, index) =>
         `<li class="rt-lc-log-entry" data-lc-log-entry data-lc-log-index="${index}">${renderBeats(beat)}</li>`).join('');
     const debugValue = latest || log.slice(-20);
+    const prose = text(view?.prose) || text(state?.prose?.text) || describeLewdBeat(latest, state);
     return `<section class="rt-lc-log-wrap" aria-label="Beat log">
         <h3 class="rt-lc-section-title">Beat log</h3>
         <ol class="rt-lc-log">${entries || '<li class="rt-lc-empty">No exchanges yet.</li>'}</ol>
     </section>
     <section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
         <h3 class="rt-lc-section-title">Scene</h3>
-        <p class="rt-lc-prose-text">${escapeHtml(describeLewdBeat(latest, state))}</p>
+        <p class="rt-lc-prose-text">${escapeHtml(prose)}</p>
     </section>
     <section class="rt-lc-debug${view?.showDebug ? ' is-open' : ''}" aria-label="Debug">
         <button type="button" class="rt-lc-btn rt-lc-debug-toggle" data-lc-action="toggle-debug" aria-expanded="${view?.showDebug ? 'true' : 'false'}" aria-label="Toggle debug details" title="Toggle debug JSON">Debug</button>

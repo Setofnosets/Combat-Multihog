@@ -40,6 +40,18 @@ const OVERLAY_ID = 'rt-lewd-combat-overlay';
 const HOST_ID = 'rt-lewd-combat-host';
 const MAX_AI_ITERATIONS = 12;
 
+/**
+ * Non-authoritative prose is queued per round and, while a narrator generation
+ * is running, held as pending beats until GENERATION_ENDED. It is never part of
+ * the board state math.
+ */
+const proseQueue = {
+    round: 0,
+    beats: [],
+    pending: [],
+    flushing: false,
+};
+
 const ui = {
     installed: false,
     overlay: null,
@@ -62,6 +74,7 @@ const ui = {
         error: '',
         showDebug: false,
         outcomeDismissed: false,
+        prose: '',
     },
 };
 
@@ -167,26 +180,166 @@ function setError(message) {
 }
 
 /**
- * Run the deterministic local policy for every AI participant that still owes
- * a turn. Guards at 12 iterations and persists once at the end.
- * @returns {object|null}
+ * Run every AI participant that still owes a turn. The dedicated agent is used
+ * when configured and the host is idle; any failure falls back to the local
+ * deterministic policy. Guards at 12 iterations and persists once at the end.
+ * @returns {Promise<object|null>}
  */
-function runAiTurns() {
+async function runAiTurns() {
     let state = readState();
     if (!state || state.status !== 'active') return state;
+    const settings = getSettings() || {};
+    let agent = null;
+    let prose = null;
+    try { agent = await import('./lewd-combat-agent.js'); } catch (_) { agent = null; }
+    try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
+    const busyNow = () => (typeof prose?.isNarratorBusy === 'function' ? prose.isNarratorBusy() : false);
     let changed = false;
     let iterations = 0;
-    while (state.status === 'active' && iterations < MAX_AI_ITERATIONS) {
-        const actor = (state.participants || []).find(participant =>
-            participant.ai && !participant.acted && !participant.spectator && !isOut(participant));
-        if (!actor) break;
-        const result = resolveLewdOpponentTurn(state);
-        iterations += 1;
-        if (!result.ok) break;
-        changed = true;
+    try {
+        while (state.status === 'active' && iterations < MAX_AI_ITERATIONS) {
+            const actor = (state.participants || []).find(participant =>
+                participant.ai && !participant.acted && !participant.spectator && !isOut(participant));
+            if (!actor) break;
+            const techniqueCount = arr(state.techniques).length;
+            let result = null;
+            if (agent && typeof agent.lewAgentConfigured === 'function'
+                && agent.lewAgentConfigured(settings) && !busyNow()) {
+                try {
+                    const proposal = await agent.requestLewdOpponentAction(state, actor, settings);
+                    if (proposal?.ok && proposal.actions?.length) {
+                        result = resolveLewdOpponentTurn(state, proposal.actions);
+                    }
+                } catch (_) {
+                    result = null;
+                }
+            }
+            if (!result || !result.ok) {
+                try {
+                    result = resolveLewdOpponentTurn(state);
+                } catch (_) {
+                    result = null;
+                }
+            }
+            iterations += 1;
+            if (!result?.ok) break;
+            changed = true;
+            // A compiled novel technique must survive even when no action
+            // resolved, otherwise the next turn would re-compile it.
+            if (arr(state.techniques).length !== techniqueCount) changed = true;
+        }
+    } catch (_) {
+        // A broken agent/connection must never break the board; whatever the
+        // local policy already resolved stays persisted.
     }
     if (changed) persist(state);
     return state;
+}
+
+function resetProseQueue() {
+    proseQueue.round = 0;
+    proseQueue.beats = [];
+    proseQueue.pending = [];
+    proseQueue.flushing = false;
+    ui.view.prose = '';
+}
+
+async function requestProse(state, beats) {
+    const list = arr(beats).filter(Boolean);
+    if (!state || !list.length) return { ok: false };
+    let prose = null;
+    try { prose = await import('./lewd-combat-prose.js'); } catch (_) { prose = null; }
+    if (!prose || typeof prose.generateLewdProse !== 'function') return { ok: false };
+    const settings = getSettings() || {};
+    const frequency = text(settings.lewdCombatProseFrequency) || 'per-exchange';
+    let result;
+    try {
+        result = await prose.generateLewdProse(state, list, settings, {
+            roundEnded: frequency === 'per-round',
+        });
+    } catch (error) {
+        result = { ok: false, error: error?.message || String(error) };
+    }
+    if (result?.ok && result.prose) {
+        state.prose = { text: result.prose, round: Number(state.round) || 1 };
+        ui.view.prose = result.prose;
+        persist(state);
+        return { ok: true };
+    }
+    if (result?.deferred) return { ok: false, deferred: true };
+    if (settings.debugMode && result?.error) toast('warning', result.error);
+    return { ok: false, deferred: false };
+}
+
+async function flushPendingProse() {
+    if (proseQueue.flushing || !proseQueue.pending.length) return;
+    const beats = proseQueue.pending.slice();
+    proseQueue.pending = [];
+    const state = readState();
+    if (!state) return;
+    proseQueue.flushing = true;
+    try {
+        const result = await requestProse(state, beats);
+        if (result?.deferred) proseQueue.pending = [...beats, ...proseQueue.pending];
+    } catch (_) {
+        // Prose is optional; never let the listener reject.
+    } finally {
+        proseQueue.flushing = false;
+    }
+    if (ui.overlayOpen) render();
+}
+
+/** Drop `wait` beats so a trailing wait never suppresses a whole batch. */
+function proseBeats(list) {
+    return arr(list).filter(beat => beat && text(beat.type) !== 'wait');
+}
+
+/**
+ * Non-authoritative prose for the exchange that just resolved. Frequency gates
+ * live here; `generateLewdProse` re-checks them. Never throws and never changes
+ * mechanics.
+ * @param {object|null} state
+ * @param {number} [previousRound]
+ */
+async function narrateAfterExchange(state, previousRound) {
+    try {
+        const settings = getSettings() || {};
+        const frequency = text(settings.lewdCombatProseFrequency) || 'per-exchange';
+        if (frequency === 'off') return;
+        if (!state || !arr(state.log).length) return;
+        const latest = state.log[state.log.length - 1];
+        if (!latest) return;
+
+        if (frequency === 'per-round') {
+            const roundChanged = proseQueue.round && proseQueue.round !== Number(state.round);
+            if (roundChanged || Number(previousRound) !== Number(state.round)) {
+                if (proseQueue.beats.length) {
+                    proseQueue.pending = [...proseQueue.pending, ...proseBeats(proseQueue.beats)];
+                    proseQueue.beats = [];
+                }
+                proseQueue.round = Number(state.round) || 1;
+                await flushPendingProse();
+            } else if (!proseQueue.round) {
+                proseQueue.round = Number(state.round) || 1;
+            }
+            proseQueue.beats.push(latest);
+            if (state.status !== 'active') {
+                const beats = proseBeats(proseQueue.beats);
+                proseQueue.beats = [];
+                proseQueue.round = 0;
+                if (beats.length) {
+                    proseQueue.pending = [...proseQueue.pending, ...beats];
+                    await flushPendingProse();
+                }
+            }
+            return;
+        }
+
+        proseQueue.pending = [...proseQueue.pending, ...proseBeats([latest])];
+        await flushPendingProse();
+    } catch (_) {
+        // Prose is optional; the templated sentence remains visible.
+    }
 }
 
 function loadStartCandidates() {
@@ -273,7 +426,7 @@ function checkedValues(root, attribute) {
         .map(input => input.value);
 }
 
-function startFromOverlay() {
+async function startFromOverlay() {
     const settings = getSettings() || {};
     const chatId = getActiveChatId();
     const gate = canStartLewdEncounter(settings, chatId);
@@ -286,6 +439,7 @@ function startFromOverlay() {
     const spectatorNames = checkedValues(ui.overlay, 'data-lc-start-spectator');
     const mode = ui.overlay?.querySelector('[data-lc-start-mode]')?.value || ui.view.startMode;
     ui.starting = true;
+    resetProseQueue();
     try {
         const result = createLewdEncounterFromContext(settings, safeContext(), {
             participantNames,
@@ -304,7 +458,9 @@ function startFromOverlay() {
         ui.view.targetIds = [];
         ui.view.error = '';
         persist(result.state);
-        runAiTurns();
+        const previousRound = result.state.round;
+        const next = await runAiTurns();
+        await narrateAfterExchange(next || result.state, previousRound);
         if (result.warnings?.length) toast('info', result.warnings[0]);
     } catch (error) {
         setError(error?.message || 'Could not start the Lewd Combat encounter.');
@@ -314,7 +470,7 @@ function startFromOverlay() {
     }
 }
 
-function resolveAction() {
+async function resolveAction() {
     if (ui.view.busy || ui.starting) return;
     const state = readState();
     if (!state || state.status !== 'active') {
@@ -322,6 +478,7 @@ function resolveAction() {
         render();
         return;
     }
+    const previousRound = state.round;
     const actor = currentActor(state);
     if (!actor) {
         setError('No player participant can act right now.');
@@ -365,7 +522,8 @@ function resolveAction() {
             ui.view.targetIds = [];
             ui.view.zone = '';
             persist(state);
-            runAiTurns();
+            const next = await runAiTurns();
+            await narrateAfterExchange(next || state, previousRound);
         }
     } catch (error) {
         setError(error?.message || 'The action could not be resolved.');
@@ -375,7 +533,7 @@ function resolveAction() {
     }
 }
 
-function simpleAction(type) {
+async function simpleAction(type) {
     if (ui.view.busy || ui.starting) return;
     const state = readState();
     if (!state || state.status !== 'active') {
@@ -383,6 +541,7 @@ function simpleAction(type) {
         render();
         return;
     }
+    const previousRound = state.round;
     const actor = currentActor(state)
         || state.participants.find(participant => !participant.spectator)
         || state.participants[0];
@@ -403,7 +562,10 @@ function simpleAction(type) {
             ui.view.targetIds = [];
             ui.view.zone = '';
             persist(state);
-            if (type !== 'stop') runAiTurns();
+            if (type !== 'stop') {
+                const next = await runAiTurns();
+                await narrateAfterExchange(next || state, previousRound);
+            }
         }
     } catch (error) {
         setError(error?.message || 'The action could not be resolved.');
@@ -622,6 +784,23 @@ function onOpenRequest(event) {
 }
 
 /**
+ * Flush held prose once the host finishes a generation. Only installed when
+ * SillyTavern's event bridge is actually available.
+ */
+function installProseFlushListener() {
+    try {
+        const ctx = globalThis.SillyTavern?.getContext?.();
+        const eventSource = ctx?.eventSource;
+        const eventTypes = ctx?.eventTypes || ctx?.event_types;
+        const ended = eventTypes?.GENERATION_ENDED;
+        if (!eventSource || typeof eventSource.on !== 'function' || !ended) return;
+        eventSource.on(ended, () => { flushPendingProse().catch(() => {}); });
+    } catch (_) {
+        // No host events: the templated sentence simply stays visible.
+    }
+}
+
+/**
  * Install the delegated listeners. Idempotent and safe to call before the
  * runtime bridge is ready.
  */
@@ -631,6 +810,7 @@ export function installLewdCombatUi() {
     ui.installed = true;
     document.addEventListener('keydown', onKeydown);
     document.addEventListener(LEWD_OPEN_EVENT, onOpenRequest);
+    installProseFlushListener();
 }
 
 /**
@@ -664,6 +844,7 @@ export function resetLewdCombatEncounter() {
     const chatId = getActiveChatId();
     const settings = getSettings();
     if (chatId && settings) removeLewdEncounterForChat(chatId, settings);
+    resetProseQueue();
     ui.view.actorId = '';
     ui.view.techniqueId = '';
     ui.view.posture = 'switch';
@@ -692,6 +873,7 @@ export function refreshLewdCombatUi() {
  * @param {string} [chatId]
  */
 export function onLewdCombatChatChanged(chatId = getActiveChatId()) {
+    resetProseQueue();
     ui.view.actorId = '';
     ui.view.techniqueId = '';
     ui.view.posture = 'switch';

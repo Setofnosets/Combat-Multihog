@@ -375,6 +375,34 @@ export const AGENT_CONNECTION_SETUPS = [
             openaiGroup: '#rpg_traditional_combat_openai_group',
         },
     },
+    {
+        key: 'lewd_combat',
+        label: 'Lewd Combat Agent',
+        settingsKeys: {
+            connectionSource: 'lewdCombatConnectionSource',
+            connectionProfileId: 'lewdCombatConnectionProfileId',
+            completionPresetId: 'lewdCombatCompletionPresetId',
+            ollamaUrl: 'lewdCombatOllamaUrl',
+            ollamaModel: 'lewdCombatOllamaModel',
+            openaiUrl: 'lewdCombatOpenaiUrl',
+            openaiKey: 'lewdCombatOpenaiKey',
+            openaiModel: 'lewdCombatOpenaiModel',
+        },
+        ui: {
+            source: '#rpg_lewd_combat_connection_source',
+            profile: '#rpg_lewd_combat_connection_profile',
+            preset: '#rpg_lewd_combat_completion_preset',
+            ollamaUrl: '#rpg_lewd_combat_ollama_url',
+            ollamaModel: '#rpg_lewd_combat_ollama_model',
+            openaiUrl: '#rpg_lewd_combat_openai_url',
+            openaiKey: '#rpg_lewd_combat_openai_key',
+            openaiModel: '#rpg_lewd_combat_openai_model',
+            openaiManual: '#rpg_lewd_combat_openai_model_manual',
+            profileGroup: '#rpg_lewd_combat_profile_group',
+            ollamaGroup: '#rpg_lewd_combat_ollama_group',
+            openaiGroup: '#rpg_lewd_combat_openai_group',
+        },
+    },
 ];
 
 /** @param {string} key */
