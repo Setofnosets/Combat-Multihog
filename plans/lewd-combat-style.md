@@ -372,7 +372,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): user technique compendium and compile-once cache`
 
 ### 6. Context builder, participant resolution, and start flow
-- **Status:** ✅ Done — `HASH_SENTINEL_U6` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
+- **Status:** ✅ Done — `30463df` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
 - **Files:** new `src/features/lewd-combat/lewd-combat-context.js`, `src/features/lewd-combat/lewd-combat-ui.js` (start/stop/reset/join portion); tests `tests/lewd-combat-context.test.js`.
 - **Depends on:** Steps 2, 4
 - **Parallelizable:** no
@@ -389,7 +389,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): participant resolution and multi-partner start flow`
 
 ### 7. Board UI and markup
-- **Status:** ✅ Done — `HASH_SENTINEL_U6` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
+- **Status:** ✅ Done — `30463df` (U6 combined commit: feat(lewd-combat): participant resolution and multi-partner board UI)
 - **Files:** new `src/features/lewd-combat/lewd-combat-markup.js`, `src/features/lewd-combat/lewd-combat-ui.js`, `style.css`; tests `tests/lewd-combat-markup.test.js`.
 - **Depends on:** Step 6
 - **Parallelizable:** no
