@@ -340,7 +340,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): deterministic stamina/arousal/poise engine`
 
 ### 4. Multi-partner pairings, stances, holds, and technique catalog
-- **Status:** ✅ Done — `__HASH__` (feat(lewd-combat): multi-partner pairings, stances, holds, and technique catalog)
+- **Status:** ✅ Done — `f064405` (feat(lewd-combat): multi-partner pairings, stances, holds, and technique catalog)
 - **Files:** new `src/features/lewd-combat/lewd-combat-techniques.js`, `src/features/lewd-combat/lewd-combat-states.js`, `src/features/lewd-combat/lewd-combat-pairing.js`; tests `tests/lewd-combat-techniques.test.js`, `tests/lewd-combat-pairing.test.js`.
 - **Depends on:** Step 3
 - **Parallelizable:** yes (with Step 5 once the schema is frozen)
