@@ -422,6 +422,86 @@ describe('lewd-combat-context', () => {
         expect(undelivered.resolution.deliveredAt).toBeGreaterThan(0);
     });
 
+    it('builds the full catalog at start and records the inferred action set', () => {
+        const memo = `${MEMO_NO_COMBAT}
+
+[LEWD_TECHNIQUES]
+- Memo Nip | technique | either | zones: neck | arousal: 1d4
+[/LEWD_TECHNIQUES]`;
+        const settings = makeSettings({
+            currentMemo: memo,
+            lewdCombatTechniqueCache: {
+                'cached-caress': {
+                    id: 'cached-caress',
+                    name: 'Cached Caress',
+                    category: 'technique',
+                    posture: 'either',
+                    zones: ['neck'],
+                    targetMode: 'single',
+                    check: { stat: 'cha', accuracy: 1 },
+                    arousal: '1d4',
+                    poise: '1d4',
+                },
+            },
+        });
+        const { state } = createLewdEncounterFromContext(settings, { chatId: 'catalog-chat' }, {
+            participantNames: ['Aria', 'Nyx'],
+            seed: 'catalog-seed',
+        });
+
+        const ids = state.techniques.map(entry => entry.id);
+        expect(ids).toContain('cached-caress');
+        expect(ids).toContain('memo-nip');
+        expect(ids).toContain('neck-kiss');
+
+        expect(state.inferredActions).toBeTruthy();
+        expect(state.inferredActions.source).toBe('deterministic');
+        expect(state.inferredActions.availableTechniqueIds).toContain('memo-nip');
+        expect(state.inferredActions.perParticipant).toHaveProperty(state.participants[0].id);
+    });
+
+    it('infers acts from a no-[COMBAT] named NPC profile and persists them through hydrate', () => {
+        const memo = `[CHARACTER]
+Aria: 24/24 HP | AC 14
+Attr: STR 10 DEX 14 CON 12 INT 10 WIS 12 CHA 16
+[/CHARACTER]
+
+[PARTY]
+- Nyx: 12/12 HP | AC 12
+Species: kitsune
+Body: Slim, silver-furred, with a long tail.
+[/PARTY]
+
+[LEWD]
+- Aria: anatomy=penis | skills=bondage
+- Nyx: anatomy=vagina,tail | kinks=bondage
+[/LEWD]`;
+        const { state } = createLewdEncounterFromContext(
+            makeSettings({ currentMemo: memo }),
+            { chatId: 'infer-start-chat' },
+            { participantNames: ['Aria', 'Nyx'], seed: 'infer-start-seed' },
+        );
+
+        const aria = state.participants.find(participant => participant.name === 'Aria');
+        const nyx = state.participants.find(participant => participant.name === 'Nyx');
+        const available = state.inferredActions.availableTechniqueIds;
+        expect(available).toContain('penetration-start');
+        expect(available).toContain('tighten-bindings');
+        expect(available).toContain('tail-wrap');
+
+        // Aria has no tail: tail acts are not in her personal list.
+        expect(state.inferredActions.perParticipant[aria.id].availableTechniqueIds).not.toContain('tail-wrap');
+        // Aria has the bondage skill: the follow-up is in her personal list.
+        expect(state.inferredActions.perParticipant[aria.id].availableTechniqueIds).toContain('tighten-bindings');
+        // Nyx has a tail.
+        expect(state.inferredActions.perParticipant[nyx.id].availableTechniqueIds).toContain('tail-wrap');
+
+        const restored = hydrateLewdState(serializeLewdState(state));
+        expect(restored.inferredActions.availableTechniqueIds).toEqual(state.inferredActions.availableTechniqueIds);
+        expect(restored.inferredActions.perParticipant[aria.id].availableTechniqueIds)
+            .toEqual(state.inferredActions.perParticipant[aria.id].availableTechniqueIds);
+    });
+
     it('resolves a legal opening exchange and leaves state untouched on an illegal one', () => {
         const { state } = createLewdEncounterFromContext(
             makeSettings(),
@@ -535,6 +615,17 @@ Body: A strange flipper and a soul.
         expect(() => collectLewdContext(settings, { chatId: 'garbage-anatomy' })).not.toThrow();
         const nyx = candidate(collectLewdContext(settings, { chatId: 'garbage-anatomy' }), 'Nyx');
         expect(nyx.profile.anatomy).toEqual([]);
+    });
+
+    it('drops a malformed inferredActions container on hydrate', () => {
+        const { state } = createLewdEncounterFromContext(
+            makeSettings(),
+            { chatId: 'lewd-chat' },
+            { participantNames: ['Aria', 'Bran'], seed: 'bad-inference-seed' },
+        );
+        const raw = serializeLewdState(state);
+        raw.inferredActions = ['not-an-object'];
+        expect(hydrateLewdState(raw).inferredActions).toBeUndefined();
     });
 
     it('round-trips participants, engagements, pools, seed, and roll count', () => {

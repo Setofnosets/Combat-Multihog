@@ -1674,6 +1674,26 @@ export function hydrateLewdState(raw) {
     // only preserves a stored record so a reload cannot drop it. No synthetic
     // null is added, so a fresh board round-trips byte-for-byte.
     if (!state.resolution || typeof state.resolution !== 'object') delete state.resolution;
+    // Inferred availability is encounter-scoped. Legacy boards have none; a
+    // stored set is preserved verbatim (it is recomputed on the next start).
+    if (state.inferredActions && typeof state.inferredActions === 'object' && !Array.isArray(state.inferredActions)) {
+        const inference = state.inferredActions;
+        inference.availableTechniqueIds = Array.isArray(inference.availableTechniqueIds)
+            ? inference.availableTechniqueIds.map(String)
+            : [];
+        inference.perParticipant = inference.perParticipant && typeof inference.perParticipant === 'object'
+            && !Array.isArray(inference.perParticipant)
+            ? inference.perParticipant
+            : {};
+        inference.novelTechniqueIds = Array.isArray(inference.novelTechniqueIds)
+            ? inference.novelTechniqueIds.map(String)
+            : [];
+        inference.diagnostics = Array.isArray(inference.diagnostics)
+            ? inference.diagnostics.map(String)
+            : [];
+    } else {
+        delete state.inferredActions;
+    }
 
     for (const participant of state.participants) {
         participant.status = Array.isArray(participant.status) ? participant.status : [];

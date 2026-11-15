@@ -536,6 +536,23 @@ function renderTechniques(legal, view) {
     return `${followUpHtml}${categoryHtml}`;
 }
 
+function renderInference(state, view) {
+    const inference = state?.inferredActions;
+    if (!inference || typeof inference !== 'object') return '';
+    const count = arr(inference.availableTechniqueIds).length;
+    const source = inference.source === 'agent'
+        ? 'AI-assisted'
+        : inference.source === 'deterministic-fallback'
+            ? 'offline fallback'
+            : 'profile prefilter';
+    const diagnostics = arr(inference.diagnostics).length;
+    const label = `${count} inferred action${count === 1 ? '' : 's'} · ${source}${diagnostics ? ` · ${diagnostics} diagnostic${diagnostics === 1 ? '' : 's'}` : ''}`;
+    return `<div class="rt-lc-inference" aria-label="Inferred actions">
+        <span class="rt-lc-inference-meta" title="${escapeHtml(label)}">${escapeHtml(label)}</span>
+        <button type="button" class="rt-lc-btn" data-lc-action="refresh-actions" aria-label="Refresh inferred actions" title="Re-run anatomy and skill inference for this encounter"${view?.busy || state?.status !== 'active' ? ' disabled' : ''}>Refresh actions</button>
+    </div>`;
+}
+
 function renderPairState(state, actor) {
     const edges = actor ? engagementsFor(state, actor) : [];
     if (!edges.length) {
@@ -649,6 +666,7 @@ function renderComposer(state, view) {
         <div class="rt-lc-actor-picker" role="group" aria-label="Actor">${actorButtons}</div>
         <div class="rt-lc-postures" role="group" aria-label="Posture">${renderPostureButtons(view, entry)}</div>
         ${renderPairState(state, actor)}
+        ${renderInference(state, view)}
         <div class="rt-lc-techniques">${renderTechniques(legal, view)}</div>
         <div class="rt-lc-pickers">
             ${renderZones(entry, view)}

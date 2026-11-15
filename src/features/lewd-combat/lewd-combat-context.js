@@ -14,6 +14,12 @@
  */
 
 import { LEWD_COMBAT_LABEL } from './lewd-combat-constants.js';
+import { buildLewdTechniqueCatalog } from './lewd-combat-compendium.js';
+import {
+    applyInferenceToState,
+    computeDeterministicInference,
+    reconcileInferenceWithRoster,
+} from './lewd-combat-inference.js';
 import {
     applyLewdAction,
     createLewdEncounterState,
@@ -687,6 +693,17 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
     const seed = options.seed != null && options.seed !== ''
         ? String(options.seed)
         : `${context.chatId || 'lewd'}:${Date.now()}`;
+    // A new encounter always sees the merged catalog: shipped + compile-once
+    // cache + user compendium + `[LEWD_TECHNIQUES]` from the current memo. Tests
+    // may still supply an explicit catalog to keep a fixture deterministic.
+    const catalog = Array.isArray(options.techniques)
+        ? {
+            techniques: options.techniques,
+            diagnostics: [],
+            error: '',
+            sources: { shipped: options.techniques.length, cache: 0, user: 0, memo: 0 },
+        }
+        : buildLewdTechniqueCatalog(settings, context.memo || '');
     const state = createLewdEncounterState({
         participants: seeds,
         seed,
@@ -694,7 +711,7 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
         mode: resolveLewdStartMode(options.mode),
         controlMode,
         id: options.id != null ? String(options.id) : `lewd-${seed}`,
-        techniques: options.techniques,
+        techniques: catalog.techniques,
     });
     state.title = text(options.title) || LEWD_COMBAT_LABEL;
     state.location = text(options.location) || context.location || '';
@@ -705,7 +722,24 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
         sources: Array.isArray(context.profileSources) ? [...context.profileSources] : [],
     };
 
+    // One-time, per-encounter availability pass. The deterministic prefilter is
+    // synchronous and always succeeds; an optional agent enrichment runs later
+    // through `refreshLewdActionInference` without ever blocking the board.
+    if (options.inferredActions && typeof options.inferredActions === 'object') {
+        applyInferenceToState(state, options.inferredActions);
+    } else if (options.inferActions !== false) {
+        const inference = computeDeterministicInference(state);
+        if (catalog.diagnostics?.length) {
+            inference.diagnostics.push(...catalog.diagnostics);
+        }
+        applyInferenceToState(state, inference);
+    }
+
     const warnings = [...context.warnings];
+    if (catalog.diagnostics?.length) {
+        warnings.push(...catalog.diagnostics.slice(0, 3));
+    }
+    if (catalog.error) warnings.push(`Technique compendium error: ${catalog.error}`);
     let opening = null;
     if (options.openingTechnique) {
         opening = applyLewdOpeningExchange(state, {

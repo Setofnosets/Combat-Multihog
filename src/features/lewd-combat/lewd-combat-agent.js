@@ -283,6 +283,13 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             stance: edge.stance?.label || edge.stance?.id || null,
             intensity: Number(edge.intensity) || 0,
         })),
+        inference: state?.inferredActions
+            ? {
+                source: state.inferredActions.source || 'deterministic',
+                availableCount: arr(state.inferredActions.availableTechniqueIds).length,
+                completedAt: Number(state.inferredActions.completedAt) || 0,
+            }
+            : null,
         legalActions: payloadLegalActions(legalEntries),
         disabledActions: payloadDisabledActions(legalEntries),
         recentActions: compactActionLog(state),
@@ -677,6 +684,21 @@ export async function requestLewdOpponentAction(state, unit, settings = {}, opti
                 const technique = resolved.technique;
                 if (!state.techniques.some(entry => entry?.id === technique.id)) {
                     state.techniques.push(technique);
+                }
+                // A freshly compiled technique must also join the encounter's
+                // inferred set, otherwise the catalog gate would hide it.
+                const inference = state.inferredActions;
+                if (inference && Array.isArray(inference.availableTechniqueIds)
+                    && !inference.availableTechniqueIds.includes(technique.id)) {
+                    inference.availableTechniqueIds.push(technique.id);
+                }
+                if (inference && Array.isArray(inference.novelTechniqueIds)
+                    && !inference.novelTechniqueIds.includes(technique.id)) {
+                    inference.novelTechniqueIds.push(technique.id);
+                }
+                if (inference) {
+                    inference.catalogSize = Array.isArray(state.techniques) ? state.techniques.length : inference.catalogSize;
+                    inference.completedAt = Date.now();
                 }
                 compiledTechnique = technique;
                 // A freshly compiled technique is now part of the legal catalog.

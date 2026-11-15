@@ -1426,6 +1426,13 @@ export function listLegalActions(state, unit, options = {}) {
         : Array.isArray(state?.techniques)
             ? state.techniques
             : LEWD_TECHNIQUES;
+    // The per-encounter inference set scopes what the composer and the AI may
+    // see. An absent/empty set means legacy behavior (whole catalog); the engine
+    // still performs the full legality check below either way.
+    const inferredIds = Array.isArray(state?.inferredActions?.availableTechniqueIds)
+        && state.inferredActions.availableTechniqueIds.length
+        ? new Set(state.inferredActions.availableTechniqueIds.map(String))
+        : null;
     const actorReasons = [];
     if (!state || state.status !== 'active') actorReasons.push('Encounter is not active.');
     if (!actor) actorReasons.push('Participant not found.');
@@ -1435,7 +1442,9 @@ export function listLegalActions(state, unit, options = {}) {
         if (actor.acted) actorReasons.push('This participant has already acted this round.');
     }
 
-    return catalog.filter(Boolean).map(technique => {
+    return catalog
+        .filter(technique => technique && (!inferredIds || inferredIds.has(String(technique.id))))
+        .map(technique => {
         const reasons = [...actorReasons];
         const requirementReasons = [];
         const actorRequirementReason = techniqueActorRequirementReason(state, actor, technique);

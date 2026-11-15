@@ -29,6 +29,30 @@ Rules:
 - Use the supplied voices and tones, and keep the prose continuous with the previous scene prose.
 - Return prose text only. No JSON, no headings, and no quotes around the whole reply.`;
 
+export const DEFAULT_LEWD_INFERENCE_PROMPT = `You are the Lewd Combat action scout. You do not resolve anything; you only help decide which acts are visible for this encounter.
+
+Rules:
+- Use the supplied participant profiles, anatomy, skills, kinks, source skills/traits, and the deterministic candidate list.
+- Never infer genitals from gender alone. An absent organ means the act is unavailable, not a guess.
+- availableTechniqueIds may only contain ids from the candidate list; do not invent ids.
+- novelTechniques is optional. Only propose an act when it is supported by a participant's visible anatomy/skill and fits the tone. Include name, description, category, zones, targetMode, actType, actRole, requires, applies, arousal, and poise in the canonical technique shape when you can.
+- Keep the list tight and relevant; do not repeat candidates with no change.
+- Return only one JSON object shaped like {"availableTechniqueIds":[...],"novelTechniques":[...]} and nothing else. No prose, no markdown fence.`;
+
+export const LEWD_INFERENCE_JSON_SCHEMA = Object.freeze({
+    type: 'object',
+    strict: false,
+    additionalProperties: true,
+    properties: {
+        availableTechniqueIds: { type: 'array', items: { type: 'string' } },
+        novelTechniques: {
+            type: 'array',
+            items: { type: 'object', additionalProperties: true },
+        },
+    },
+    required: ['availableTechniqueIds'],
+});
+
 export const DEFAULT_LEWD_OUTCOME_PROMPT = `[LEWD COMBAT RESULT — AUTHORITATIVE]
 This intimate scene has already been resolved on the Lewd Combat board. Treat this result as authoritative over stale State Memo or chat history.
 Encounter: {{title}}

@@ -304,6 +304,30 @@ describe('lewd-combat-markup', () => {
         expect(playerAll).not.toContain('data-lc-control="ai"');
     });
 
+    it('renders the inferred action strip with a refresh button', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'enemy', profile: profile('Bran') },
+        ]);
+        // A legacy board without inference has no strip.
+        expect(buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') }))
+            .not.toContain('rt-lc-inference');
+        state.inferredActions = {
+            stateId: state.id,
+            completedAt: 1,
+            source: 'deterministic-fallback',
+            availableTechniqueIds: ['neck-kiss'],
+            perParticipant: {},
+            diagnostics: ['offline'],
+        };
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+        expect(html).toContain('rt-lc-inference');
+        expect(html).toContain('data-lc-action="refresh-actions"');
+        expect(html).toContain('1 inferred action');
+        expect(html).toContain('offline fallback');
+        expect(html).toContain('1 diagnostic');
+    });
+
     it('exports the UI lifecycle functions without touching the DOM at import', () => {
         expect(typeof ui.installLewdCombatUi).toBe('function');
         expect(typeof ui.openLewdCombatBoard).toBe('function');

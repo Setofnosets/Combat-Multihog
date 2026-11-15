@@ -37,6 +37,7 @@ import {
     resolveLewdControlMode,
     resolveLewdStartMode,
 } from './lewd-combat-context.js';
+import { reconcileInferenceWithRoster } from './lewd-combat-inference.js';
 import {
     getLewdEncounterForChat,
     removeLewdEncounterForChat,
@@ -48,6 +49,10 @@ import { saveSettings } from '../../app/runtime-bridge.js';
 const OVERLAY_ID = 'rt-lewd-combat-overlay';
 const HOST_ID = 'rt-lewd-combat-host';
 const MAX_AI_ITERATIONS = 12;
+// Bound on the optional start-of-encounter agent enrichment. The deterministic
+// prefilter is synchronous and already on the board; a slow/hung connection must
+// never delay the board, so the enrichment is raced against this budget.
+const INFERENCE_TIMEOUT_MS = 8000;
 
 /**
  * Non-authoritative prose is queued per round and, while a narrator generation
@@ -152,6 +157,67 @@ function persist(state) {
     notifyChanged();
 }
 
+/**
+ * Agent-enrich the encounter-scoped availability set. The deterministic
+ * prefilter already ran at creation; a missing/broken/hung agent leaves it
+ * intact. The wait is bounded so a stalled connection can never freeze the
+ * board (the plan requires that inference never blocks the board).
+ * @param {object|null} state
+ * @returns {Promise<object|null>}
+ */
+async function inferActionsFor(state) {
+    if (!state || state.status !== 'active') return state;
+    try {
+        const inference = await import('./lewd-combat-inference.js');
+        if (typeof inference.refreshLewdActionInference !== 'function') return state;
+        const settings = getSettings() || {};
+        const timeoutMs = INFERENCE_TIMEOUT_MS;
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        let cancelled = false;
+        let timer = null;
+        const timeout = new Promise(resolve => {
+            timer = setTimeout(() => {
+                cancelled = true;
+                try { controller?.abort(); } catch (_) { /* ignore */ }
+                resolve(null);
+            }, timeoutMs);
+            if (typeof timer?.unref === 'function') timer.unref();
+        });
+        const run = inference.refreshLewdActionInference(state, settings, {
+            signal: controller?.signal,
+            // A late result for an aborted/closed board must not mutate or
+            // repaint it; the timeout marks the attempt as stale.
+            shouldApply: () => !cancelled && state.status === 'active',
+        }).catch(() => null);
+        const result = await Promise.race([run, timeout]);
+        if (timer) clearTimeout(timer);
+        if (result && !cancelled) persist(state);
+    } catch (_) {
+        // Inference is optional; the board keeps the deterministic set.
+    }
+    return state;
+}
+
+async function refreshActions() {
+    const state = readState();
+    if (!state || state.status !== 'active') return;
+    ui.view.busy = true;
+    ui.view.error = '';
+    render();
+    try {
+        await inferActionsFor(state);
+        const count = Array.isArray(state.inferredActions?.availableTechniqueIds)
+            ? state.inferredActions.availableTechniqueIds.length
+            : 0;
+        toast('info', `Inferred ${count} action${count === 1 ? '' : 's'} for this encounter.`);
+    } catch (error) {
+        setError(error?.message || 'Could not refresh the inferred actions.');
+    } finally {
+        ui.view.busy = false;
+        render();
+    }
+}
+
 function isOut(participant) {
     return !!participant?.atMercy || !!participant?.surrendered;
 }
@@ -224,8 +290,8 @@ async function runAiTurns() {
             if (!actor) break;
             const techniqueCount = arr(state.techniques).length;
             let result = null;
-            if (agent && typeof agent.lewAgentConfigured === 'function'
-                && agent.lewAgentConfigured(settings) && !busyNow()) {
+            if (agent && typeof agent.lewdAgentConfigured === 'function'
+                && agent.lewdAgentConfigured(settings) && !busyNow()) {
                 try {
                     const proposal = await agent.requestLewdOpponentAction(state, actor, settings);
                     if (proposal?.ok && proposal.actions?.length) {
@@ -568,8 +634,12 @@ export async function startLewdCombatFromNarrator(args = {}) {
         ui.view.zone = '';
         ui.view.targetIds = [];
         ui.view.error = '';
+        // The board opens with the deterministic set immediately; the optional
+        // agent enrichment is bounded and repaints when it returns.
         openLewdCombatBoard();
         notifyChanged();
+        await inferActionsFor(result.state);
+        render();
         const names = (result.state.participants || [])
             .filter(participant => !participant.spectator)
             .map(participant => participant.name)
@@ -720,6 +790,7 @@ async function startFromOverlay() {
         ui.view.targetIds = [];
         ui.view.error = '';
         persist(result.state);
+        await inferActionsFor(result.state);
         const previousRound = result.state.round;
         const next = await runAiTurns();
         await narrateAfterExchange(next || result.state, previousRound);
@@ -886,6 +957,10 @@ function moveParticipant(unitId, spectator) {
         if (!result.ok) {
             setError(result.reason || 'That participant cannot change seats.');
         } else {
+            // A participant joining or leaving changes which acts are visible;
+            // union a fresh deterministic pass so the newcomer is not hidden
+            // behind a stale availability set.
+            reconcileInferenceWithRoster(state);
             ui.view.error = '';
             persist(state);
         }
@@ -978,6 +1053,9 @@ function handleAction(action, element) {
             break;
         case 'select-actor':
             selectActor(element);
+            break;
+        case 'refresh-actions':
+            refreshActions();
             break;
         case 'toggle-debug':
             ui.view.showDebug = !ui.view.showDebug;

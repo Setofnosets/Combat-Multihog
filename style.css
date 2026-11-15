@@ -13553,6 +13553,24 @@ body.rt-tc-modal-open {
     font-size: 11px;
 }
 
+.rt-lc-inference {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 9px;
+    border: 1px dashed var(--tc-border);
+    border-radius: 8px;
+    color: var(--tc-muted);
+    font-size: 11px;
+}
+
+.rt-lc-inference-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .rt-lc-pair-row {
     display: block;
     overflow: hidden;
