@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** draft (decisions resolved 2026-11-15; awaiting build approval)
+- **Status:** in progress — B1, B2, B3 implemented and green; next: B4/B5
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
@@ -78,6 +78,7 @@
 - **Risk:** medium
 - **Model / Effort:** implementer model #medium
 - **Commit:** `fix(lewd-combat): make encounter finish idempotent and persist a resolution record`
+- **Status:** ✅ Done — 7aa243c
 
 ### B2. Retrigger guards, cooldown, and explicit new encounter
 - **Files:** `src/features/lewd-combat/lewd-combat-context.js`, `lewd-combat-ui.js`, `lewd-combat-store.js`; `narrative-hooks.js`; `src/features/combat/combat-board-reset.js`; `src/state/defaults.js`, `src/state/settings.js`, `settings.html`; tests `tests/lewd-combat-tool.test.js`, `tests/lewd-combat-context.test.js`.
@@ -95,6 +96,7 @@
 - **Risk:** medium-high
 - **Model / Effort:** implementer model #high
 - **Commit:** `fix(lewd-combat): latch ended encounters and stop immediate retriggers`
+- **Status:** ✅ Done — 7aa243c
 
 ### B3. Prose transcript, per-actor prose, and stale-render guard
 - **Files:** `src/features/lewd-combat/lewd-combat-ui.js`, `lewd-combat-prose.js`, `lewd-combat-markup.js`, `lewd-combat-engine.js`, `style.css`; tests `tests/lewd-combat-prose.test.js`, `tests/lewd-combat-markup.test.js`.
@@ -111,6 +113,7 @@
 - **Risk:** medium
 - **Model / Effort:** implementer model #medium
 - **Commit:** `fix(lewd-combat): keep a prose transcript and narrate every exchange beat`
+- **Status:** ✅ Done — 7aa243c
 
 ### B4. Control modes and side resolution without `[COMBAT]`
 - **Files:** `src/features/lewd-combat/lewd-combat-context.js`, `lewd-combat-engine.js`, `lewd-combat-ui.js`, `lewd-combat-markup.js`, `lewd-combat-agent.js`; `narrative-hooks.js`; `src/state/defaults.js`, `src/state/settings.js`; tests `tests/lewd-combat-context.test.js`, `tests/lewd-combat-tool.test.js`.
