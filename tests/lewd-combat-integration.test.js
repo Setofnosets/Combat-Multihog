@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
     applyLewdAction,
@@ -21,6 +21,11 @@ import {
 } from '../src/features/lewd-combat/lewd-combat-store.js';
 import { clearPendingNarration, getPendingNarration } from '../src/features/tactical-combat/tactical-combat-store.js';
 import { buildDefaultSettings } from '../src/state/defaults.js';
+import { resetLewdCombatEncounter } from '../src/features/lewd-combat/lewd-combat-ui.js';
+
+afterEach(() => {
+    vi.restoreAllMocks();
+});
 
 function profile(name, overrides = {}) {
     return {
@@ -201,6 +206,28 @@ describe('Lewd Combat end-to-end integration', () => {
         expect(withTrait.drain).toBe(1);
         expect(withTrait.maxStamina).toBe(4);
         expect(state.participants.every(participant => participant.stamina <= participant.maxStamina)).toBe(true);
+    });
+
+    it('reset clears the board, its resolution, and the lewd pending narration together', () => {
+        const settings = prepareSettings();
+        const state = createState(settings);
+        state.chatId = 'vitest-reset';
+        state.status = 'ended';
+        state.outcome = 'surrendered';
+        setLewdEncounterForChat('vitest-reset', state, settings, { persist: false });
+        const payload = queueLewdOutcome(state, settings, { persist: false });
+        expect(payload.kind).toBe('lewd');
+        expect(getPendingNarration(settings, 'vitest-reset')).not.toBeNull();
+
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: { rpg_tracker: settings },
+            chatId: 'vitest-reset',
+        });
+
+        resetLewdCombatEncounter();
+
+        expect(getLewdEncounterForChat('vitest-reset', settings)).toBeNull();
+        expect(getPendingNarration(settings, 'vitest-reset')).toBeNull();
     });
 
     it('keeps the module inert when disabled', () => {

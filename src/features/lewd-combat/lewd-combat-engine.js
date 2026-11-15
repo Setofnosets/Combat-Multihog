@@ -279,6 +279,10 @@ function NUMBER(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
+function textValue(value) {
+    return String(value ?? '').trim();
+}
+
 function holdDefenseBonus(state, participant) {
     let bonus = 0;
     for (const edge of state.engagements) {
@@ -482,6 +486,12 @@ function addStateChange(changes, participant) {
 }
 
 function pushLog(state, beat) {
+    // Beats carry a stable, monotonic id so the prose cursor survives the log
+    // trimming its oldest entries.
+    if (beat && typeof beat === 'object' && !beat.id) {
+        state.beatSeq = (Number(state.beatSeq) || 0) + 1;
+        beat.id = `${textValue(state.id) || 'lewd'}:beat:${state.beatSeq}`;
+    }
     state.log.push(beat);
     if (state.log.length > LOG_LIMIT) state.log.splice(0, state.log.length - LOG_LIMIT);
 }
@@ -521,6 +531,7 @@ function endEncounter(state, outcome, extra = {}) {
     state.status = 'ended';
     state.outcome = outcome;
     state.endedRound = state.round;
+    state.endedAt = Number(extra.endedAt) || Date.now();
     state.endReason = extra.reason || outcome;
     if (extra.winnerIds) state.winnerIds = extra.winnerIds;
     if (extra.winnerSide) state.winnerSide = extra.winnerSide;
@@ -633,7 +644,14 @@ export function createLewdEncounterState(options = {}) {
         actionLog: [],
         outcome: null,
         summary: '',
+        endedAt: 0,
         stopped: false,
+        prose: null,
+        proseLog: [],
+        proseSeq: 0,
+        beatSeq: 0,
+        lastNarratedLogIndex: -1,
+        narratedBeatIds: [],
     };
 
     const input = Array.isArray(options.participants) ? options.participants : [];
@@ -1276,6 +1294,102 @@ export function resolveLewdOpponentTurn(state, actions = [], options = {}) {
     return applyLewdAction(state, { type: 'wait', unitId: actor.id, source: 'ai' }, options);
 }
 
+/** Cap the prose transcript so a long scene cannot grow the saved board without bound. */
+export const LEWD_PROSE_LOG_LIMIT = 50;
+
+/**
+ * Stable id for a log entry. Beats may not carry their own id, so the board id
+ * plus the log index is the identity used by the prose transcript.
+ *
+ * @param {object} state
+ * @param {object} beat
+ * @param {number} index
+ * @returns {string}
+ */
+export function lewdBeatId(state, beat, index) {
+    const id = textValue(beat?.id);
+    if (id) return id;
+    return `${textValue(state?.id) || 'lewd'}:beat:${Number(index) || 0}`;
+}
+
+/**
+ * Normalize the prose transcript fields on a board. Safe to call repeatedly.
+ * @param {object} state
+ * @returns {object|null}
+ */
+export function ensureLewdProseState(state) {
+    if (!state || typeof state !== 'object') return null;
+    state.proseLog = Array.isArray(state.proseLog) ? state.proseLog.slice(-LEWD_PROSE_LOG_LIMIT) : [];
+    state.proseSeq = Math.max(0, Number(state.proseSeq) || 0);
+    state.beatSeq = Math.max(0, Number(state.beatSeq) || 0);
+    state.lastNarratedLogIndex = Number.isFinite(Number(state.lastNarratedLogIndex))
+        ? Number(state.lastNarratedLogIndex)
+        : -1;
+    state.narratedBeatIds = Array.isArray(state.narratedBeatIds)
+        ? state.narratedBeatIds.map(String)
+        : [];
+    if (!state.prose || typeof state.prose !== 'object') state.prose = null;
+    return state;
+}
+
+/**
+ * Append one prose transcript entry (model prose or deterministic fallback).
+ * Newest last, capped, and mirrored to `state.prose` for compatibility.
+ *
+ * @param {object} state
+ * @param {object} entry
+ * @returns {object|null}
+ */
+export function appendLewdProseEntry(state, entry = {}) {
+    if (!state || typeof state !== 'object') return null;
+    ensureLewdProseState(state);
+    state.proseSeq += 1;
+    const round = Math.max(1, Number(entry.round) || Number(state.round) || 1);
+    const beatIds = Array.isArray(entry.beatIds) ? entry.beatIds.map(String).filter(Boolean) : [];
+    const item = {
+        id: textValue(entry.id) || `${textValue(state.id) || 'lewd'}:prose:${state.proseSeq}`,
+        stateId: textValue(entry.stateId) || textValue(state.id),
+        chatId: textValue(entry.chatId) || textValue(state.chatId),
+        round,
+        exchangeId: textValue(entry.exchangeId) || `${textValue(state.id) || 'lewd'}:${round}:${beatIds[0] || state.proseSeq}`,
+        actorIds: Array.isArray(entry.actorIds) ? entry.actorIds.map(String).filter(Boolean) : [],
+        beatIds,
+        text: String(entry.text ?? '').trim(),
+        source: textValue(entry.source) || 'model',
+        createdAt: Number(entry.createdAt) || Date.now(),
+    };
+    state.proseLog = [...state.proseLog, item].slice(-LEWD_PROSE_LOG_LIMIT);
+    state.prose = { text: item.text, round: item.round };
+    return item;
+}
+
+/**
+ * Advance the narrated cursor after prose (or a deterministic fallback) covers
+ * every log entry up to `upToIndex`.
+ *
+ * @param {object} state
+ * @param {number} upToIndex
+ * @param {string[]} [beatIds]
+ * @returns {object|null}
+ */
+export function markLewdBeatsNarrated(state, upToIndex, beatIds = []) {
+    if (!state || typeof state !== 'object') return null;
+    ensureLewdProseState(state);
+    state.lastNarratedLogIndex = Math.max(
+        state.lastNarratedLogIndex,
+        Number(upToIndex) || 0,
+    );
+    const seen = new Set(state.narratedBeatIds);
+    for (const id of Array.isArray(beatIds) ? beatIds : []) {
+        const value = textValue(id);
+        if (value) seen.add(value);
+    }
+    // The sentinel set is an aid for debugging/back-compat, not the cursor; cap
+    // it so a very long board does not accumulate forever.
+    state.narratedBeatIds = [...seen].slice(-200);
+    return state;
+}
+
 /**
  * Deep-clone the board for storage. Preserves seed, rollCount, RNG state,
  * profiles, stances, holds, engagements, and both logs.
@@ -1320,6 +1434,18 @@ export function hydrateLewdState(raw) {
     state.log = Array.isArray(state.log) ? state.log : [];
     state.actionLog = Array.isArray(state.actionLog) ? state.actionLog : [];
     state.stopped = !!state.stopped;
+    ensureLewdProseState(state);
+    for (const beat of state.log) {
+        if (beat && typeof beat === 'object' && !beat.id) {
+            state.beatSeq += 1;
+            beat.id = `${textValue(state.id) || 'lewd'}:beat:${state.beatSeq}`;
+        }
+    }
+    state.endedAt = Math.max(0, Number(state.endedAt) || 0);
+    // The resolution latch is written once by `finishEncounterIfEnded`; hydrate
+    // only preserves a stored record so a reload cannot drop it. No synthetic
+    // null is added, so a fresh board round-trips byte-for-byte.
+    if (!state.resolution || typeof state.resolution !== 'object') delete state.resolution;
 
     for (const participant of state.participants) {
         participant.status = Array.isArray(participant.status) ? participant.status : [];

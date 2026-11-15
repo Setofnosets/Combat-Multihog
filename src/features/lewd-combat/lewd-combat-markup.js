@@ -412,21 +412,36 @@ function renderBeats(beat) {
     return `${round} ${escapeHtml(type || 'beat')}`;
 }
 
+function renderProse(state, view) {
+    const proseLog = arr(state?.proseLog).filter(entry => text(entry?.text));
+    if (proseLog.length) {
+        const entries = proseLog.map(entry =>
+            `<p class="rt-lc-prose-entry rt-lc-prose-text" data-lc-prose-entry data-lc-prose-id="${escapeHtml(entry.id)}" data-lc-prose-source="${escapeHtml(entry.source || 'model')}" data-lc-prose-round="${escapeHtml(entry.round)}">${escapeHtml(entry.text)}</p>`).join('');
+        return `<section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
+        <h3 class="rt-lc-section-title">Scene</h3>
+        <div class="rt-lc-prose-scroll" data-lc-prose-scroll>${entries}</div>
+    </section>`;
+    }
+    const log = arr(state?.log);
+    const latest = log.length ? log[log.length - 1] : null;
+    const prose = text(view?.prose) || text(state?.prose?.text) || describeLewdBeat(latest, state);
+    return `<section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
+        <h3 class="rt-lc-section-title">Scene</h3>
+        <p class="rt-lc-prose-text">${escapeHtml(prose)}</p>
+    </section>`;
+}
+
 function renderLog(state, view) {
     const log = arr(state?.log);
     const latest = log.length ? log[log.length - 1] : null;
     const entries = log.map((beat, index) =>
         `<li class="rt-lc-log-entry" data-lc-log-entry data-lc-log-index="${index}">${renderBeats(beat)}</li>`).join('');
     const debugValue = latest || log.slice(-20);
-    const prose = text(view?.prose) || text(state?.prose?.text) || describeLewdBeat(latest, state);
     return `<section class="rt-lc-log-wrap" aria-label="Beat log">
         <h3 class="rt-lc-section-title">Beat log</h3>
         <ol class="rt-lc-log">${entries || '<li class="rt-lc-empty">No exchanges yet.</li>'}</ol>
     </section>
-    <section class="rt-lc-prose" aria-live="polite" aria-label="Scene prose">
-        <h3 class="rt-lc-section-title">Scene</h3>
-        <p class="rt-lc-prose-text">${escapeHtml(prose)}</p>
-    </section>
+    ${renderProse(state, view)}
     <section class="rt-lc-debug${view?.showDebug ? ' is-open' : ''}" aria-label="Debug">
         <button type="button" class="rt-lc-btn rt-lc-debug-toggle" data-lc-action="toggle-debug" aria-expanded="${view?.showDebug ? 'true' : 'false'}" aria-label="Toggle debug details" title="Toggle debug JSON">Debug</button>
         ${view?.showDebug ? `<pre class="rt-lc-debug-json">${escapeHtml(JSON.stringify(debugValue, null, 2))}</pre>` : ''}
@@ -589,7 +604,8 @@ function renderEnded(state) {
         <h3 class="rt-lc-section-title">Outcome: ${escapeHtml(titleCase(outcome))}</h3>
         <p class="rt-lc-summary-text">${escapeHtml(text(state?.summary) || 'The encounter has ended.')}</p>
         <div class="rt-lc-composer-actions">
-            <button type="button" class="rt-lc-btn rt-lc-btn-primary" data-lc-action="reset" aria-label="Reset the encounter" title="Reset">Reset</button>
+            <button type="button" class="rt-lc-btn rt-lc-btn-primary" data-lc-action="new-encounter" aria-label="Start a new Lewd Combat encounter" title="New encounter">New encounter</button>
+            <button type="button" class="rt-lc-btn" data-lc-action="reset" aria-label="Reset the encounter" title="Reset">Reset</button>
             <button type="button" class="rt-lc-btn" data-lc-action="close" aria-label="Close Lewd Combat" title="Close">Close</button>
         </div>
     </section>`;

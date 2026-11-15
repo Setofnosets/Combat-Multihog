@@ -195,6 +195,49 @@ export function buildLewdOutcomePayload(state, options = {}) {
 }
 
 /**
+ * Build the durable resolution recorded on an ended board. Pure.
+ *
+ * @param {object} state
+ * @param {{ now?: number }} [options]
+ * @returns {object|null}
+ */
+export function buildLewdResolution(state, options = {}) {
+    if (!state || !state.status || state.status === 'active') return null;
+    const participants = Array.isArray(state.participants) ? state.participants : [];
+    const ids = predicate => participants
+        .filter(participant => !participant?.spectator && predicate(participant))
+        .map(participant => participant.id)
+        .filter(id => id != null);
+    return {
+        stateId: state.id ?? '',
+        endedAt: Number(state.endedAt) || Number(options.now) || Date.now(),
+        consumedAt: 0,
+        consumedFor: '',
+        deliveredAt: 0,
+        outcome: state.outcome || '',
+        winnerIds: Array.isArray(state.winnerIds) ? [...state.winnerIds] : [],
+        atMercyIds: ids(participant => !!participant.atMercy),
+        surrenderedIds: ids(participant => !!participant.surrendered),
+        source: 'lewd',
+    };
+}
+
+/**
+ * Ensure the board carries exactly one resolution object. Existing records are
+ * never replaced, so repeated finish calls cannot duplicate or reset the latch.
+ *
+ * @param {object} state
+ * @param {{ now?: number }} [options]
+ * @returns {object|null}
+ */
+export function ensureLewdResolution(state, options = {}) {
+    if (!state || state.status === 'active') return null;
+    if (state.resolution && typeof state.resolution === 'object') return state.resolution;
+    state.resolution = buildLewdResolution(state, options);
+    return state.resolution;
+}
+
+/**
  * Queue exactly one lewd result for the next narrator generation. Idempotent.
  *
  * @param {object} state
@@ -209,11 +252,14 @@ export function queueLewdOutcome(state, settings, options = {}) {
     }
 
     const payload = buildLewdOutcomePayload(state, options);
+    const now = Date.now();
     setPendingNarration(settings, payload, { persist: false });
     state.finalization = {
         ...(state.finalization || {}),
         narrationQueued: true,
-        queuedAt: Date.now(),
+        queuedAt: now,
+        finalizing: true,
+        finalizingStartedAt: now,
         payload,
         outcome: payload.outcome,
     };

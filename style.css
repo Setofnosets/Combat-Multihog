@@ -13772,6 +13772,26 @@ body.rt-tc-modal-open {
     line-height: 1.6;
 }
 
+/* Chronological prose transcript: one entry per exchange, newest at the bottom. */
+.rt-lc-prose-scroll {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.rt-lc-prose-entry {
+    flex: 0 0 auto;
+}
+
+.rt-lc-prose-entry[data-lc-prose-source="fallback"] {
+    opacity: 0.85;
+    font-style: normal;
+}
+
 .rt-lc-debug {
     display: flex;
     flex-direction: column;

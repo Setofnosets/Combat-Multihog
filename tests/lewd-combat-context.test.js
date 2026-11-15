@@ -4,7 +4,11 @@ import {
     buildLewdParticipantSeeds,
     canStartLewdEncounter,
     collectLewdContext,
+    consumeDeliveredLewdResolution,
+    consumeLewdResolution,
     createLewdEncounterFromContext,
+    isLewdStartLatched,
+    markLewdResolutionDelivered,
     resolveLewdStartMode,
 } from '../src/features/lewd-combat/lewd-combat-context.js';
 import {
@@ -183,6 +187,77 @@ describe('lewd-combat-context', () => {
         expect(resolveLewdStartMode('group')).toBe('group');
         expect(resolveLewdStartMode('nonsense')).toBe('duel');
         expect(resolveLewdStartMode()).toBe('duel');
+    });
+
+    it('latches an unconsumed resolution, honours the cooldown, and clears on manual consumption', () => {
+        const chatId = 'latch-chat';
+        const settings = makeSettings({
+            lewdCombatByChat: {},
+            lewdCombatPostEncounterCooldownMs: 60000,
+        });
+        const ended = {
+            id: 'lewd-latch',
+            status: 'ended',
+            endedAt: Date.now(),
+            outcome: 'atMercy',
+            winnerIds: ['aria'],
+            participants: [],
+            resolution: {
+                stateId: 'lewd-latch',
+                endedAt: Date.now(),
+                consumedAt: 0,
+                consumedFor: '',
+                deliveredAt: 0,
+                outcome: 'atMercy',
+                winnerIds: ['aria'],
+                atMercyIds: ['bran'],
+                surrenderedIds: [],
+                source: 'lewd',
+            },
+        };
+        setLewdEncounterForChat(chatId, ended, settings, { persist: false });
+
+        const blocked = canStartLewdEncounter(settings, chatId);
+        expect(blocked.ok).toBe(false);
+        expect(blocked.reason).toMatch(/not been acknowledged/i);
+        expect(isLewdStartLatched(settings, chatId).latched).toBe(true);
+
+        // Manual consumption clears the latch and bypasses the cooldown.
+        consumeLewdResolution(settings, chatId, { reason: 'manual', persist: false });
+        expect(canStartLewdEncounter(settings, chatId).ok).toBe(true);
+
+        // Automatic consumption still honours the safety cooldown.
+        const auto = {
+            ...ended,
+            resolution: {
+                ...ended.resolution,
+                consumedAt: 0,
+                consumedFor: '',
+                deliveredAt: Date.now(),
+            },
+        };
+        setLewdEncounterForChat(chatId, auto, settings, { persist: false });
+        consumeDeliveredLewdResolution(settings, chatId, { persist: false });
+        expect(auto.resolution.consumedFor).toBe('user-turn');
+        expect(canStartLewdEncounter(settings, chatId).ok).toBe(false);
+
+        const expired = {
+            ...auto,
+            endedAt: Date.now() - 61000,
+            resolution: { ...auto.resolution, endedAt: Date.now() - 61000 },
+        };
+        setLewdEncounterForChat(chatId, expired, settings, { persist: false });
+        expect(canStartLewdEncounter(settings, chatId).ok).toBe(true);
+
+        // Only delivered resolutions are consumed by the user turn.
+        const undelivered = {
+            ...ended,
+            resolution: { ...ended.resolution, deliveredAt: 0 },
+        };
+        setLewdEncounterForChat(chatId, undelivered, settings, { persist: false });
+        expect(consumeDeliveredLewdResolution(settings, chatId, { persist: false })).toBeNull();
+        expect(markLewdResolutionDelivered(settings, chatId, 'lewd-latch', { persist: false })).toBe(true);
+        expect(undelivered.resolution.deliveredAt).toBeGreaterThan(0);
     });
 
     it('resolves a legal opening exchange and leaves state untouched on an illegal one', () => {

@@ -1668,6 +1668,8 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'lewdCombatProseFrequency',
     'lewdCombatRoundCap',
     'lewdCombatMaxPartners',
+    'lewdCombatPostEncounterLatch',
+    'lewdCombatPostEncounterCooldownMs',
     'lewdCombatTechniqueCompendiumJson',
     'lewdCombatTechniqueCache',
     'lewdCombatCompilerPrompt',

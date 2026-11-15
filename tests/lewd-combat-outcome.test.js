@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
     applyLewdAction,
     createLewdEncounterState,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
+import { finishEncounterIfEnded } from '../src/features/lewd-combat/lewd-combat-ui.js';
 import {
     buildLewdNarrationBlock,
     buildLewdOutcomePayload,
@@ -99,6 +100,10 @@ function endedState() {
     return state;
 }
 
+afterEach(() => {
+    vi.restoreAllMocks();
+});
+
 function openStateWithOutcome(outcome, participants, extra = {}) {
     return {
         status: 'ended',
@@ -181,6 +186,39 @@ describe('lewd combat outcome payload', () => {
         expect(second).toBe(first);
         expect(getPendingNarration(settings, 'chat-A').createdAt).toBe(first.createdAt);
         expect(settings.currentMemo).toBe(memoBefore);
+    });
+
+    it('writes one resolution, marks finalizing, and finishes idempotently', async () => {
+        const settings = { lewdCombatByChat: {} };
+        const state = endedState();
+        state.chatId = 'vitest-chat';
+        settings.lewdCombatByChat['vitest-chat'] = state;
+        vi.spyOn(SillyTavern, 'getContext').mockReturnValue({
+            extensionSettings: { rpg_tracker: settings },
+            chatId: 'vitest-chat',
+        });
+
+        const first = await finishEncounterIfEnded(state, { autoNarrate: false });
+        expect(first.ok).toBe(true);
+        expect(state.resolution).toMatchObject({
+            stateId: state.id,
+            consumedAt: 0,
+            consumedFor: '',
+            outcome: 'surrendered',
+            source: 'lewd',
+        });
+        expect(state.resolution.surrenderedIds).toEqual(['bran']);
+        expect(state.finalization.narrationQueued).toBe(true);
+        expect(state.finalization.finalizing).toBe(true);
+        expect(state.finalization.finalizingStartedAt).toBeGreaterThan(0);
+
+        const queued = getPendingNarration(settings, 'vitest-chat');
+        const resolutionRef = state.resolution;
+        const second = await finishEncounterIfEnded(state, { autoNarrate: false });
+        expect(second.ok).toBe(true);
+        expect(state.resolution).toBe(resolutionRef);
+        expect(getPendingNarration(settings, 'vitest-chat')).toBe(queued);
+        expect(getPendingNarration(settings, 'vitest-chat').createdAt).toBe(queued.createdAt);
     });
 
     it('renders the lewd block through buildNarrationBlock and keeps tactical rendering intact', () => {

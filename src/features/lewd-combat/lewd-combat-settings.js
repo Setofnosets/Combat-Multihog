@@ -109,6 +109,13 @@ export function normalizeLewdCombatSettings(settings = {}) {
             : LEWD_COMBAT_DEFAULTS.proseFrequency,
         lewdCombatRoundCap: clampInt(settings.lewdCombatRoundCap, 1, 60, LEWD_COMBAT_DEFAULTS.roundCap),
         lewdCombatMaxPartners: clampInt(settings.lewdCombatMaxPartners, 1, 4, LEWD_COMBAT_DEFAULTS.maxPartners),
+        lewdCombatPostEncounterLatch: settings.lewdCombatPostEncounterLatch !== false,
+        lewdCombatPostEncounterCooldownMs: clampInt(
+            settings.lewdCombatPostEncounterCooldownMs,
+            0,
+            600000,
+            LEWD_COMBAT_DEFAULTS.postEncounterCooldownMs,
+        ),
     };
 }
 
@@ -154,6 +161,10 @@ export function syncLewdCombatSettingsUi(settings) {
     if (roundCap) roundCap.value = String(normalized.lewdCombatRoundCap);
     const maxPartners = el('rpg_lewd_combat_max_partners');
     if (maxPartners) maxPartners.value = String(normalized.lewdCombatMaxPartners);
+    const latch = el('rpg_lewd_combat_post_encounter_latch');
+    if (latch) latch.checked = normalized.lewdCombatPostEncounterLatch;
+    const cooldown = el('rpg_lewd_combat_post_encounter_cooldown');
+    if (cooldown) cooldown.value = String(Math.round(normalized.lewdCombatPostEncounterCooldownMs / 1000));
 
     const compendium = el('rpg_lewd_combat_compendium');
     if (compendium && document.activeElement !== compendium) {
@@ -259,6 +270,28 @@ export function bindLewdCombatSettings(settings, saveSettings) {
     const maxPartners = el('rpg_lewd_combat_max_partners');
     maxPartners?.addEventListener('change', () => {
         settings.lewdCombatMaxPartners = clampInt(maxPartners.value, 1, 4, LEWD_COMBAT_DEFAULTS.maxPartners);
+        save(settings, saveSettings);
+        syncLewdCombatSettingsUi(settings);
+    });
+
+    const latch = el('rpg_lewd_combat_post_encounter_latch');
+    latch?.addEventListener('change', () => {
+        settings.lewdCombatPostEncounterLatch = !!latch.checked;
+        save(settings, saveSettings);
+        dispatchChanged();
+    });
+
+    const cooldown = el('rpg_lewd_combat_post_encounter_cooldown');
+    cooldown?.addEventListener('change', () => {
+        // An explicitly cleared field means "no cooldown", not "restore 60s".
+        const raw = String(cooldown.value ?? '').trim();
+        const seconds = raw === '' ? 0 : Number(raw);
+        settings.lewdCombatPostEncounterCooldownMs = clampInt(
+            (Number.isFinite(seconds) ? seconds : 0) * 1000,
+            0,
+            600000,
+            LEWD_COMBAT_DEFAULTS.postEncounterCooldownMs,
+        );
         save(settings, saveSettings);
         syncLewdCombatSettingsUi(settings);
     });

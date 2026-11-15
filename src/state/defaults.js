@@ -288,6 +288,8 @@ export function buildDefaultSettings() {
         lewdCombatProseFrequency: "per-exchange",
         lewdCombatRoundCap: 12,
         lewdCombatMaxPartners: 2,
+        lewdCombatPostEncounterLatch: true,
+        lewdCombatPostEncounterCooldownMs: 60000,
         lewdCombatTechniqueCompendiumJson: DEFAULT_LEWD_TECHNIQUE_COMPENDIUM_JSON,
         lewdCombatTechniqueCache: {},
         lewdCombatCompilerPrompt: DEFAULT_LEWD_COMPILER_PROMPT,

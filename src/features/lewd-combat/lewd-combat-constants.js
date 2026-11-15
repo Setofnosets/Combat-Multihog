@@ -41,6 +41,8 @@ export const LEWD_COMBAT_DEFAULTS = Object.freeze({
     proseFrequency: 'per-exchange',
     roundCap: 12,
     maxPartners: 2,
+    postEncounterLatch: true,
+    postEncounterCooldownMs: 60000,
 });
 
 export const LEWD_EXPLICITNESS_OPTIONS = Object.freeze(['explicit', 'suggestive', 'fade-to-black']);

@@ -174,8 +174,32 @@ describe('lewd-combat-markup', () => {
         expect(html.toLowerCase()).toContain('at mercy');
         expect(html).toContain('Aria wins the encounter');
         expect(html).not.toContain('data-lc-action="resolve"');
+        expect(html).toContain('data-lc-action="new-encounter"');
         expect(html).toContain('data-lc-action="reset"');
         expect(html).toContain('data-lc-action="close"');
+    });
+
+    it('renders a capped prose transcript with per-entry data attributes', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        state.proseLog = [1, 2, 3].map(index => ({
+            id: `prose-${index}`,
+            stateId: state.id,
+            round: 1,
+            text: `Beat number ${index}.`,
+            source: index === 3 ? 'fallback' : 'model',
+        }));
+
+        const html = buildLewdCombatMarkup(state, {});
+
+        expect(html).toContain('rt-lc-prose-scroll');
+        expect((html.match(/data-lc-prose-entry/g) || [])).toHaveLength(3);
+        expect(html).toContain('data-lc-prose-id="prose-1"');
+        expect(html).toContain('data-lc-prose-source="fallback"');
+        expect(html.indexOf('Beat number 1.')).toBeLessThan(html.indexOf('Beat number 3.'));
+        expect(html).toContain('rt-lc-log');
     });
 
     it('exports the UI lifecycle functions without touching the DOM at import', () => {
