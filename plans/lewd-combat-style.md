@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U3 complete; next: U4 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `__U3__`)
+- **Status:** in progress — U3 complete; next: U4 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -321,7 +321,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): add LEWD block schema and profile parser`
 
 ### 3. Deterministic engine core (Stamina, Arousal, Poise, climax)
-- **Status:** ✅ Done — `__U3__` (feat(lewd-combat): deterministic stamina/arousal/poise engine)
+- **Status:** ✅ Done — `7a83799` (feat(lewd-combat): deterministic stamina/arousal/poise engine)
 - **Files:** new `src/features/lewd-combat/lewd-combat-engine.js`; tests `tests/lewd-combat-engine.test.js`.
 - **Depends on:** Step 2
 - **Parallelizable:** no
