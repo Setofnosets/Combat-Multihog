@@ -515,6 +515,103 @@ describe('action resolution', () => {
     });
 });
 
+describe('capability gating', () => {
+    const anatomyTechnique = {
+        id: 'penis-gate',
+        name: 'Penis Gate',
+        category: 'technique',
+        posture: 'either',
+        zones: ['genitals'],
+        targetMode: 'single',
+        tags: [],
+        check: { stat: 'cha', accuracy: 100 },
+        arousal: '5',
+        poise: '0',
+        requires: { anatomy: { all: [], any: ['penis'] } },
+    };
+    const receptiveTechnique = {
+        ...anatomyTechnique,
+        id: 'receptive-gate',
+        name: 'Receptive Gate',
+        requires: { targetAnatomy: { all: [], any: ['penis'] } },
+    };
+    const combinedTechnique = {
+        ...anatomyTechnique,
+        id: 'combined-gate',
+        requires: { anatomy: { all: [], any: ['penis'] }, targetAnatomy: { all: [], any: ['vagina'] } },
+    };
+
+    it('rejects an anatomy-gated technique for an actor without anatomy', () => {
+        const state = fixture();
+        const before = JSON.stringify(state);
+        const result = act(state, {
+            type: 'technique',
+            unitId: 'aria',
+            techniqueId: 'penis-gate',
+            targetIds: ['bran'],
+            zone: 'genitals',
+        }, [anatomyTechnique]);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain('Set anatomy in [LEWD]');
+        expect(JSON.stringify(state)).toBe(before);
+    });
+
+    it('rejects a receptive action whose only target lacks the anatomy', () => {
+        const state = fixture();
+        const before = JSON.stringify(state);
+        const result = act(state, {
+            type: 'technique',
+            unitId: 'aria',
+            techniqueId: 'receptive-gate',
+            targetIds: ['bran'],
+            zone: 'genitals',
+        }, [receptiveTechnique]);
+        expect(result.ok).toBe(false);
+        expect(result.reason).toContain('Set anatomy in [LEWD]');
+        expect(JSON.stringify(state)).toBe(before);
+    });
+
+    it('succeeds with a direct technique object when both anatomies are present', () => {
+        const state = fixture({ aria: { anatomy: ['penis'] }, bran: { anatomy: ['vagina'] } });
+        const result = act(state, {
+            type: 'technique',
+            unitId: 'aria',
+            technique: combinedTechnique,
+            targetIds: ['bran'],
+            zone: 'genitals',
+        }, [combinedTechnique]);
+        expect(result.ok).toBe(true);
+        expect(result.beat.targets.map(target => target.name)).toContain('Bran');
+    });
+
+    it('falls back deterministically when an AI action fails capability gating', () => {
+        const state = fixture();
+        const result = resolveLewdOpponentTurn(state, [{
+            unitId: 'bran',
+            type: 'technique',
+            techniqueId: 'penetration-start',
+            targetIds: ['aria'],
+        }]);
+        expect(result.ok).toBe(true);
+        expect(state.actionLog.some(entry =>
+            entry.type === 'rejected-ai-action'
+            && String(entry.reason).includes('Set anatomy in [LEWD]'))).toBe(true);
+    });
+
+    it('still resolves a neutral technique for an actor with no anatomy', () => {
+        const state = fixture();
+        const result = act(state, {
+            type: 'technique',
+            unitId: 'aria',
+            techniqueId: 'neck-kiss',
+            targetIds: ['bran'],
+            zone: 'neck',
+        });
+        expect(result.ok).toBe(true);
+        expect(result.beat.technique.id).toBe('neck-kiss');
+    });
+});
+
 describe('climaxes and stamina', () => {
     it('drains one stamina, resets arousal, and applies overstimulated', () => {
         const state = fixture();

@@ -226,7 +226,7 @@ describe('explicit act catalog', () => {
     });
 
     it('lists act metadata and gates bondage follow-ups on the act', () => {
-        const state = fixture();
+        const state = fixture({ aria: { skills: ['bondage'] } });
         const entry = listLegalActions(state, 'aria').find(candidate => candidate.id === 'penetration-start');
         expect(entry.actType).toBe('penetration');
         expect(entry.actRole).toBe('give');
@@ -307,6 +307,116 @@ describe('listLegalActions', () => {
         const legal = listLegalActions(state, 'aria');
         expect(legal.every(entry => entry.disabled)).toBe(true);
         expect(legal[0].reasons).toContain('This participant has already acted this round.');
+    });
+});
+
+describe('deterministic requirement gating', () => {
+    const base = () => ({
+        id: 'penis-gate',
+        name: 'Penis Gate',
+        category: 'technique',
+        zones: ['genitals'],
+        targetMode: 'single',
+        arousal: '1',
+        poise: '0',
+    });
+
+    it('gates a genital technique on declared actor anatomy', () => {
+        const custom = { ...base(), requires: { anatomy: { all: [], any: ['penis'] } } };
+        const unknown = listLegalActions(fixture({ techniques: [custom] }), 'aria')[0];
+        expect(unknown.disabled).toBe(true);
+        expect(unknown.reasons.join(' ')).toContain('Set anatomy in [LEWD]');
+
+        const withPenis = listLegalActions(
+            fixture({ aria: { anatomy: ['penis'] }, techniques: [custom] }),
+            'aria',
+        )[0];
+        expect(withPenis.disabled).toBe(false);
+
+        const withVagina = listLegalActions(
+            fixture({ aria: { anatomy: ['vagina'] }, techniques: [custom] }),
+            'aria',
+        )[0];
+        expect(withVagina.disabled).toBe(true);
+        expect(withVagina.reasons).toContain('Requires penis.');
+        expect(withVagina.reasons.join(' ')).not.toContain('Set anatomy');
+    });
+
+    it('blocks genital acts but not neutral techniques when anatomy is unknown', () => {
+        const genital = { ...base(), requires: { anatomy: { all: [], any: ['penis'] } } };
+        const neutral = { ...base(), id: 'neutral-touch', name: 'Neutral Touch', requires: {} };
+        const legal = listLegalActions(fixture({ techniques: [genital, neutral] }), 'aria');
+        expect(legal.find(entry => entry.id === 'penis-gate').disabled).toBe(true);
+        expect(legal.find(entry => entry.id === 'neutral-touch').disabled).toBe(false);
+    });
+
+    it('reports tail, skill, trait, and kink requirement reasons', () => {
+        const tail = { ...base(), id: 'tail-gate', requires: { anatomy: { all: [], any: ['tail'] } } };
+        const unknown = listLegalActions(fixture({ techniques: [tail] }), 'aria')[0];
+        expect(unknown.reasons).toContain('Requires tail. Set anatomy in [LEWD].');
+
+        const knownMissing = listLegalActions(
+            fixture({ aria: { anatomy: ['vagina'] }, techniques: [tail] }),
+            'aria',
+        )[0];
+        expect(knownMissing.reasons).toContain('Requires tail.');
+        expect(knownMissing.reasons.join(' ')).not.toContain('Set anatomy');
+
+        const skill = { ...base(), id: 'skill-gate', requires: { skill: ['bondage'] } };
+        expect(listLegalActions(fixture({ techniques: [skill] }), 'aria')[0].reasons)
+            .toContain('Requires bondage skill.');
+
+        const trait = { ...base(), id: 'trait-gate', requires: { trait: ['tail'] } };
+        expect(listLegalActions(fixture({ techniques: [trait] }), 'aria')[0].reasons)
+            .toContain('Requires tail trait.');
+
+        const kink = { ...base(), id: 'kink-gate', requires: { kink: ['praise'] } };
+        expect(listLegalActions(fixture({ techniques: [kink] }), 'aria')[0].reasons)
+            .toContain('Requires praise kink.');
+
+        const satisfied = listLegalActions(
+            fixture({
+                aria: { skills: ['bondage'], sourceTraits: ['tail'], kinks: ['praise'] },
+                techniques: [skill, trait, kink],
+            }),
+            'aria',
+        );
+        expect(satisfied.every(entry => !entry.disabled)).toBe(true);
+    });
+
+    it('filters only the target without receptive anatomy in a group action', () => {
+        const group = {
+            ...base(),
+            id: 'receptive-group',
+            name: 'Receptive Group',
+            targetMode: 'group',
+            requires: { targetAnatomy: { all: [], any: ['penis'] } },
+        };
+        const state = fixture({
+            mode: 'group',
+            speccy: true,
+            bran: { anatomy: ['penis'] },
+            techniques: [group],
+        });
+        const entry = listLegalActions(state, 'aria')[0];
+        expect(entry.targets.find(target => target.id === 'bran').disabled).toBe(false);
+        const cora = entry.targets.find(target => target.id === 'cora');
+        expect(cora.disabled).toBe(true);
+        expect(cora.reasons.join(' ')).toContain('Set anatomy in [LEWD]');
+    });
+
+    it('normalizes requires.targetAnatomy shapes and rejects unknown tags', () => {
+        expect(validateLewdTechnique({ ...base(), requires: { targetAnatomy: 'Penis' } })
+            .technique.requires.targetAnatomy).toEqual({ all: ['penis'], any: [] });
+        expect(validateLewdTechnique({ ...base(), requires: { targetAnatomy: ['vagina', 'anus'] } })
+            .technique.requires.targetAnatomy).toEqual({ all: ['vagina', 'anus'], any: [] });
+        expect(validateLewdTechnique({
+            ...base(),
+            requires: { targetAnatomy: { all: ['tail'], any: ['penis', 'vagina'] } },
+        }).technique.requires.targetAnatomy).toEqual({ all: ['tail'], any: ['penis', 'vagina'] });
+        const bad = validateLewdTechnique({ ...base(), requires: { targetAnatomy: { any: ['flipper'] } } });
+        expect(bad.ok).toBe(false);
+        expect(bad.errors.join(' ')).toContain('Unknown anatomy tag');
     });
 });
 

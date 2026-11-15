@@ -38,6 +38,8 @@ import {
 import {
     LEWD_TECHNIQUES,
     listLegalActions,
+    techniqueActorRequirementReason,
+    techniqueTargetRequirementReason,
 } from './lewd-combat-techniques.js';
 import {
     attemptEscape,
@@ -881,6 +883,10 @@ export function applyLewdAction(state, action, options = {}) {
     if (techniqueUsesRemaining(actor, technique) <= 0) {
         return { ok: false, reason: 'No uses remaining for this technique.' };
     }
+    const actorRequirementReason = techniqueActorRequirementReason(state, actor, technique);
+    if (actorRequirementReason) {
+        return { ok: false, reason: actorRequirementReason };
+    }
 
     const resolved = resolveTargets(state, actor, technique, action);
     if (resolved.error) return { ok: false, reason: resolved.error };
@@ -898,6 +904,11 @@ export function applyLewdAction(state, action, options = {}) {
     const targets = [];
     const excluded = [...(resolved.excluded || [])];
     for (const target of resolved.targets) {
+        const targetRequirementReason = techniqueTargetRequirementReason(state, actor, target, technique);
+        if (targetRequirementReason) {
+            excluded.push({ id: target.id, name: target.name, reason: targetRequirementReason });
+            continue;
+        }
         if (!requiresHoldCheck(state, actor, target, technique)) {
             excluded.push({ id: target.id, name: target.name, reason: 'Requires a hold.' });
             continue;

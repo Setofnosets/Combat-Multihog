@@ -168,6 +168,16 @@ function payloadLegalActions(entries) {
         });
 }
 
+function payloadDisabledActions(entries) {
+    return arr(entries)
+        .filter(entry => entry && arr(entry.requirementReasons).length)
+        .map(entry => ({
+            id: entry.id,
+            name: entry.name,
+            reasons: arr(entry.requirementReasons).map(String),
+        }));
+}
+
 function payloadProfiles(state) {
     const profiles = {};
     for (const participant of arr(state?.participants)) {
@@ -274,6 +284,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             intensity: Number(edge.intensity) || 0,
         })),
         legalActions: payloadLegalActions(legalEntries),
+        disabledActions: payloadDisabledActions(legalEntries),
         recentActions: compactActionLog(state),
         knownProfiles: payloadProfiles(state),
         rules: {
@@ -282,6 +293,7 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
                 RULE_TEXT,
                 'The engine owns all Arousal, Poise, and Stamina math; never compute or state results.',
                 'Use only ids, names, targets, zones, and postures from the legalActions list.',
+                'Only use legalActions; a technique in disabledActions is illegal and its reasons explain why.',
                 'Respect every hard limit in knownProfiles.',
                 'Return only one JSON object shaped like {"actions":[...]}.',
             ],

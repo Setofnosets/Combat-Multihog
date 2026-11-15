@@ -126,6 +126,23 @@ describe('lewd-combat-agent', () => {
         expect(payload.rules.constraints.join(' ')).toContain('Never invent numbers, targets, body zones, or outcomes.');
     });
 
+    it('lists requirement-disabled actions with reasons while legalActions excludes them', () => {
+        const state = makeState();
+        const actor = unit(state, 'Bran');
+        const payload = buildLewdAgentPayload(state, actor);
+
+        const disabled = payload.disabledActions.find(entry => entry.id === 'penetration-start');
+        expect(disabled).toBeTruthy();
+        expect(disabled.reasons.join(' ')).toContain('Set anatomy in [LEWD]');
+        expect(payload.legalActions.some(entry => entry.id === 'penetration-start')).toBe(false);
+        expect(payload.legalActions.find(entry => entry.id === 'neck-kiss').effects.requires)
+            .toBeTypeOf('object');
+
+        const prompts = buildLewdAgentPrompts(state, actor);
+        expect(prompts.user).toContain('disabledActions');
+        expect(prompts.user).toContain('illegal');
+    });
+
     it('exposes anatomy, skills, kinks, and source tags without leaking provenance', () => {
         const state = createLewdEncounterState({
             seed: 'agent-profile-seed',

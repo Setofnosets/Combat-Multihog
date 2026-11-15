@@ -21,6 +21,7 @@
  *     hold: string|true|null, stance: string|null, overwhelmed: boolean,
  *     act: string|null, actType: string|null, actRole: string|null,
  *     anatomy: { all: string[], any: string[] }|null,
+ *     targetAnatomy: { all: string[], any: string[] }|null,
  *     skill: string[]|null, trait: string[]|null, kink: string[]|null,
  *   },
  *   applies: {
@@ -42,10 +43,13 @@
 
 import {
     DEFAULT_ZONE_SENSITIVITY,
+    hasCapability,
+    hasKnownAnatomy,
     isBlockedByLimits,
     normalizeLewdAnatomy,
     normalizeLewdName,
     normalizeLewdZone,
+    participantCapabilityTokens,
 } from './lewd-combat-profile.js';
 import { canEngageWith } from './lewd-combat-pairing.js';
 
@@ -121,7 +125,7 @@ function splitList(value) {
 
 const REQUIREMENT_KEYS = [
     'hold', 'stance', 'overwhelmed',
-    'act', 'actType', 'actRole', 'anatomy', 'skill', 'trait', 'kink',
+    'act', 'actType', 'actRole', 'anatomy', 'targetAnatomy', 'skill', 'trait', 'kink',
 ];
 const APPLICATION_KEYS = ['status', 'stance', 'act'];
 
@@ -157,10 +161,11 @@ function requirementTokens(value) {
 }
 
 /**
- * Normalize `requires.anatomy`: a string, a string array (all-of), or
- * `{ all, any }`. Every tag must be a canonical anatomy tag.
+ * Normalize an anatomy requirement: a string, a string array (all-of), or
+ * `{ all, any }`. Every tag must be a canonical anatomy tag. Used for both
+ * `requires.anatomy` (actor) and `requires.targetAnatomy` (receptive target).
  */
-function requirementAnatomy(value, errors) {
+function requirementAnatomy(value, errors, field = 'requires.anatomy') {
     if (value == null || value === '') return null;
     const all = [];
     const any = [];
@@ -181,7 +186,7 @@ function requirementAnatomy(value, errors) {
         for (const tag of asArray(value.all)) addTag(tag, all);
         for (const tag of asArray(value.any)) addTag(tag, any);
     } else {
-        errors.push('requires.anatomy must be a string, a string array, or { all, any }.');
+        errors.push(`${field} must be a string, a string array, or { all, any }.`);
     }
     if (!all.length && !any.length) return null;
     return { all, any };
@@ -313,6 +318,11 @@ export function validateLewdTechnique(raw) {
         errors.push(`Unknown actRole "${rawRequires.actRole}".`);
     }
     const requiresAnatomy = requirementAnatomy(rawRequires.anatomy, errors);
+    const requiresTargetAnatomy = requirementAnatomy(
+        rawRequires.targetAnatomy,
+        errors,
+        'requires.targetAnatomy',
+    );
     const requiresSkill = requirementTokens(rawRequires.skill);
     const requiresTrait = requirementTokens(rawRequires.trait);
     const requiresKink = requirementTokens(rawRequires.kink);
@@ -461,6 +471,7 @@ export function validateLewdTechnique(raw) {
                 actType: requiresActType,
                 actRole: requiresActRole,
                 anatomy: requiresAnatomy,
+                targetAnatomy: requiresTargetAnatomy,
                 skill: requiresSkill,
                 trait: requiresTrait,
                 kink: requiresKink,
@@ -764,7 +775,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'intimacy'],
         actType: 'penetration', actRole: 'give',
         check: { stat: 'cha', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
-        requires: { anatomy: { any: ['penis', 'vagina', 'tail'] } },
+        requires: { anatomy: { any: ['penis', 'vagina', 'tail'] }, targetAnatomy: { any: ['vagina', 'anus', 'tail'] } },
         applies: { act: { id: 'penetration' } },
         ai: { priority: 3 },
     }),
@@ -774,7 +785,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'submission'],
         actType: 'penetration', actRole: 'receive',
         arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
-        requires: { anatomy: { any: ['vagina', 'anus'] } },
+        requires: { anatomy: { any: ['vagina', 'anus'] }, targetAnatomy: { any: ['penis', 'vagina', 'tail'] } },
         applies: { act: { id: 'penetration', role: 'receive' } },
         ai: { priority: 2, conditions: ['role:submissive'] },
     }),
@@ -846,6 +857,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['mouth', 'genitals'], targetMode: 'single', tags: ['oral', 'intimacy'],
         actType: 'oral', actRole: 'give',
         check: { stat: 'cha', accuracy: 1 }, arousal: '1d8+2', poise: '1d4',
+        requires: { targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
         applies: { act: { id: 'oral' } },
         ai: { priority: 3 },
     }),
@@ -875,7 +887,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['mouth', 'genitals'], targetMode: 'pair', tags: ['oral', 'intimacy'],
         actType: 'oral', actRole: 'mutual',
         arousal: '1d8+2', poise: '1d4',
-        requires: { anatomy: { any: ['penis', 'vagina', 'vulva', 'anus'] } },
+        requires: { anatomy: { any: ['penis', 'vagina', 'vulva', 'anus'] }, targetAnatomy: { any: ['penis', 'vagina', 'vulva', 'anus'] } },
         applies: { act: { id: 'oral', role: 'mutual', intensity: 2 } },
         ai: { priority: 3 },
     }),
@@ -887,7 +899,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['manual'],
         actType: 'manual', actRole: 'give',
         arousal: '1d6+2', poise: '1d4',
-        requires: { anatomy: { any: ['penis', 'vagina'] } },
+        requires: { anatomy: { any: ['penis', 'vagina'] }, targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
         applies: { act: { id: 'manual' } },
         ai: { priority: 2 },
     }),
@@ -907,6 +919,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'pair', tags: ['masturbation', 'intimacy'],
         actType: 'masturbation', actRole: 'mutual',
         arousal: '1d8+2', poise: '1d4',
+        requires: { targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
         applies: { act: { id: 'masturbation', role: 'mutual' } },
         ai: { priority: 3 },
     }),
@@ -916,7 +929,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['breasts'], targetMode: 'single', tags: ['manual', 'intimacy'],
         actType: 'manual', actRole: 'give',
         arousal: '1d8+2', poise: '1d4',
-        requires: { anatomy: 'breasts' },
+        requires: { anatomy: 'breasts', targetAnatomy: 'penis' },
         applies: { act: { id: 'paizuri', type: 'manual' } },
         ai: { priority: 2 },
     }),
@@ -1000,7 +1013,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['tail', 'genitals'], targetMode: 'single', tags: ['tail', 'penetration'],
         actType: 'penetration', actRole: 'give',
         check: { stat: 'dex', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
-        requires: { anatomy: 'tail', act: 'penetration' },
+        requires: { anatomy: 'tail', act: 'penetration', targetAnatomy: { any: ['vagina', 'anus', 'tail'] } },
         applies: { act: { id: 'tail-penetration', type: 'penetration' } },
         ai: { priority: 3 },
     }),
@@ -1164,15 +1177,96 @@ function actRequirementReason(state, actor, target, technique) {
     return '';
 }
 
+function anatomyRequirementShape(requirement) {
+    if (!requirement) return null;
+    if (typeof requirement === 'string' || Array.isArray(requirement)) {
+        const all = asArray(requirement).map(normalizeLewdAnatomy).filter(Boolean);
+        return all.length ? { all, any: [] } : null;
+    }
+    if (typeof requirement !== 'object') return null;
+    const all = asArray(requirement.all).map(normalizeLewdAnatomy).filter(Boolean);
+    const any = asArray(requirement.any).map(normalizeLewdAnatomy).filter(Boolean);
+    return all.length || any.length ? { all, any } : null;
+}
+
+function anatomyRequirementMet(participant, requirement) {
+    if (!participant || !requirement) return true;
+    const tokens = participantCapabilityTokens(participant);
+    const hasTag = tag => tokens.has(tag);
+    const allMet = (requirement.all || []).every(hasTag);
+    const anyList = requirement.any || [];
+    const anyMet = !anyList.length || anyList.some(hasTag);
+    return allMet && anyMet;
+}
+
+function anatomyRequirementLabel(requirement) {
+    const parts = [];
+    if (requirement?.all?.length) parts.push(requirement.all.join(' and '));
+    if (requirement?.any?.length) parts.push(requirement.any.join(' or '));
+    return parts.join(' and ') || 'anatomy';
+}
+
+function anatomyGateReason(participant, rawRequirement) {
+    const requirement = anatomyRequirementShape(rawRequirement);
+    if (!requirement) return '';
+    if (anatomyRequirementMet(participant, requirement)) return '';
+    const label = anatomyRequirementLabel(requirement);
+    return hasKnownAnatomy(participant)
+        ? `Requires ${label}.`
+        : `Requires ${label}. Set anatomy in [LEWD].`;
+}
+
+/**
+ * Why the actor cannot use a technique right now, or '' when they can.
+ * Checks anatomy, then skill, trait, and kink requirements in that order.
+ * Pure; act requirements stay on the target surface (`actRequirementReason`).
+ */
+export function techniqueActorRequirementReason(state, actor, technique) {
+    void state;
+    if (!actor) return '';
+    const required = technique?.requires || {};
+    if (required.anatomy) {
+        const reason = anatomyGateReason(actor, required.anatomy);
+        if (reason) return reason;
+    }
+    for (const token of requirementTokens(required.skill) || []) {
+        if (!hasCapability(actor, 'skill', token)) return `Requires ${token} skill.`;
+    }
+    for (const token of requirementTokens(required.trait) || []) {
+        if (!hasCapability(actor, 'trait', token)) return `Requires ${token} trait.`;
+    }
+    for (const token of requirementTokens(required.kink) || []) {
+        if (!hasCapability(actor, 'kink', token)) return `Requires ${token} kink.`;
+    }
+    return '';
+}
+
+/**
+ * Why the target cannot receive a technique right now, or '' when they can.
+ * Only `requires.targetAnatomy` is checked here; act and hold gating live in
+ * their own helpers. Unknown target anatomy makes genital acts unavailable.
+ */
+export function techniqueTargetRequirementReason(state, actor, target, technique) {
+    void state;
+    void actor;
+    const required = technique?.requires?.targetAnatomy;
+    if (!required || !target) return '';
+    return anatomyGateReason(target, required);
+}
+
 function targetEntriesFor(state, actor, technique) {
     const mode = technique.targetMode || 'single';
     if (mode === 'self') {
+        const reasons = [];
+        const targetAnatomyReason = techniqueTargetRequirementReason(state, actor, actor, technique);
+        if (targetAnatomyReason) reasons.push(targetAnatomyReason);
         return [{
             id: actor.id,
             name: actor.name,
             self: true,
-            disabled: false,
-            reasons: [],
+            disabled: reasons.length > 0,
+            reasons,
+            requirementReasons: [...reasons],
             zones: [...(technique.zones || [])],
         }];
     }
@@ -1186,6 +1280,7 @@ function targetEntriesFor(state, actor, technique) {
     }
     return pool.map(target => {
         const reasons = [];
+        const requirementReasons = [];
         if (!isActive(target)) reasons.push('Target is out of the encounter.');
         const blocked = isBlockedByLimits(target.profile, [
             ...(technique.tags || []),
@@ -1196,7 +1291,15 @@ function targetEntriesFor(state, actor, technique) {
             reasons.push(`Requires hold: ${technique.requires.hold === true ? 'any hold' : technique.requires.hold}.`);
         }
         const actReason = actRequirementReason(state, actor, target, technique);
-        if (actReason) reasons.push(actReason);
+        if (actReason) {
+            reasons.push(actReason);
+            requirementReasons.push(actReason);
+        }
+        const targetAnatomyReason = techniqueTargetRequirementReason(state, actor, target, technique);
+        if (targetAnatomyReason) {
+            reasons.push(targetAnatomyReason);
+            requirementReasons.push(targetAnatomyReason);
+        }
         if (technique.requires?.overwhelmed && !(Number(target.overwhelmedUntilRound) >= Number(state.round))) {
             reasons.push('Requires an overwhelmed target.');
         }
@@ -1208,6 +1311,7 @@ function targetEntriesFor(state, actor, technique) {
             name: target.name,
             disabled: reasons.length > 0,
             reasons,
+            requirementReasons,
             zones: [...(technique.zones || [])],
         };
     });
@@ -1241,6 +1345,12 @@ export function listLegalActions(state, unit, options = {}) {
 
     return catalog.filter(Boolean).map(technique => {
         const reasons = [...actorReasons];
+        const requirementReasons = [];
+        const actorRequirementReason = techniqueActorRequirementReason(state, actor, technique);
+        if (actorRequirementReason) {
+            reasons.push(actorRequirementReason);
+            requirementReasons.push(actorRequirementReason);
+        }
         if (!stanceMatches(actor, technique)) {
             reasons.push(`Requires stance: ${technique.requires.stance}.`);
         }
@@ -1248,6 +1358,11 @@ export function listLegalActions(state, unit, options = {}) {
             reasons.push('No uses remaining for this technique.');
         }
         const targets = actor ? targetEntriesFor(state, actor, technique) : [];
+        for (const target of targets) {
+            for (const reason of target.requirementReasons || []) {
+                if (!requirementReasons.includes(reason)) requirementReasons.push(reason);
+            }
+        }
         if (technique.targetMode !== 'self' && !targets.some(target => !target.disabled)) {
             reasons.push('No legal targets.');
         }
@@ -1260,6 +1375,7 @@ export function listLegalActions(state, unit, options = {}) {
             actRole: technique.actRole ?? null,
             disabled: reasons.length > 0,
             reasons,
+            requirementReasons,
             posture: defaultPosture(technique),
             postures: allowedPostures(technique),
             zones: [...(technique.zones || [])],

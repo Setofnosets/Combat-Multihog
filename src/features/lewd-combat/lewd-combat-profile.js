@@ -221,6 +221,93 @@ function normalizeToken(token, { stripNo = false } = {}) {
         .trim();
 }
 
+const CAPABILITY_FIELDS = Object.freeze(['skills', 'sourceSkills', 'kinks', 'sourceTraits', 'anatomy']);
+
+function capabilityTokensFor(participant, fields) {
+    const profile = participant?.profile && typeof participant.profile === 'object'
+        ? participant.profile
+        : {};
+    const tokens = new Set();
+    for (const field of fields) {
+        for (const source of [participant?.[field], profile[field]]) {
+            for (const item of asList(source)) {
+                const raw = item && typeof item === 'object' ? item.name ?? item.id : item;
+                const token = normalizeToken(raw);
+                if (token) tokens.add(token);
+                // Anatomy aliases (`pussy`, `cock`, `bondage gear`) also match
+                // their canonical anatomy tag.
+                const anatomy = normalizeLewdAnatomy(raw);
+                if (anatomy) tokens.add(anatomy);
+            }
+        }
+    }
+    return tokens;
+}
+
+/**
+ * Every capability token a participant has declared, normalized for matching.
+ * Pure: reads plain data and returns a fresh Set. Never infers a body.
+ *
+ * @param {object} participant
+ * @returns {Set<string>}
+ */
+export function participantCapabilityTokens(participant) {
+    return capabilityTokensFor(participant, CAPABILITY_FIELDS);
+}
+
+/**
+ * True when the participant declares one capability token of the given kind.
+ * `kind` accepts `anatomy`, `skill`, `trait`, or `kink`; anything else searches
+ * every capability bucket. Pure and case-insensitive.
+ *
+ * @param {object} participant
+ * @param {'anatomy'|'skill'|'trait'|'kink'|string} kind
+ * @param {string} token
+ * @returns {boolean}
+ */
+export function hasCapability(participant, kind, token) {
+    const field = String(kind ?? '').trim().toLowerCase();
+    const fields = field === 'anatomy'
+        ? ['anatomy']
+        : field === 'skill' || field === 'skills'
+            ? ['skills', 'sourceSkills']
+            : field === 'trait' || field === 'traits'
+                ? ['sourceTraits']
+                : field === 'kink' || field === 'kinks'
+                    ? ['kinks']
+                    : CAPABILITY_FIELDS;
+    const tokens = capabilityTokensFor(participant, fields);
+    const key = normalizeToken(token);
+    if (key && tokens.has(key)) return true;
+    const anatomy = normalizeLewdAnatomy(token);
+    return !!anatomy && tokens.has(anatomy);
+}
+
+/**
+ * True only when a participant has a real anatomy declaration. A missing or
+ * explicitly-empty anatomy list is unknown; inferred-empty is unknown too.
+ * Provenance anatomy keys count as known even if the list is empty.
+ *
+ * @param {object} participant
+ * @returns {boolean}
+ */
+export function hasKnownAnatomy(participant) {
+    const profile = participant?.profile && typeof participant.profile === 'object'
+        ? participant.profile
+        : {};
+    if (asList(participant?.anatomy).length || asList(profile.anatomy).length) return true;
+    const provenance = participant?.provenance && typeof participant.provenance === 'object'
+        ? participant.provenance
+        : profile.provenance && typeof profile.provenance === 'object'
+            ? profile.provenance
+            : {};
+    const anatomyProvenance = provenance.anatomy;
+    return !!anatomyProvenance
+        && typeof anatomyProvenance === 'object'
+        && !Array.isArray(anatomyProvenance)
+        && Object.keys(anatomyProvenance).length > 0;
+}
+
 function phraseIncludes(haystack, needle) {
     if (!haystack || !needle) return false;
     return ` ${haystack} `.includes(` ${needle} `);
