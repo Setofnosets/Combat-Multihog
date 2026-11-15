@@ -13541,6 +13541,29 @@ body.rt-tc-modal-open {
     gap: 8px;
 }
 
+.rt-lc-pair-state {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px 9px;
+    border: 1px solid var(--tc-border);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--tc-muted);
+    font-size: 11px;
+}
+
+.rt-lc-pair-row {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rt-lc-followups .rt-lc-technique-category {
+    color: var(--tc-accent);
+}
+
 .rt-lc-technique-group {
     display: flex;
     flex-direction: column;

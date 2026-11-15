@@ -10,6 +10,7 @@ import {
     LEWD_POSTURES,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
 import * as ui from '../src/features/lewd-combat/lewd-combat-ui.js';
+import { upsertEngagement } from '../src/features/lewd-combat/lewd-combat-pairing.js';
 
 function profile(name, overrides = {}) {
     return {
@@ -104,6 +105,52 @@ describe('lewd-combat-markup', () => {
         expect(staminaPips(3, 3)).toBe('●●●');
         expect(staminaPips(1, 3)).toBe('●○○');
         expect(describeLewdBeat(null)).toMatch(/no exchange yet/i);
+    });
+
+    it('renders pair act state in the matrix and composer with follow-up groups', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', stats: { cha: 16, chaMod: 3 }, profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        const ariaId = participantId(state, 'Aria');
+        const branId = participantId(state, 'Bran');
+        upsertEngagement(state, ariaId, branId, {
+            act: { id: 'penetration', type: 'penetration', role: 'give' },
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 1,
+            bindingsStartedRound: 1,
+            pairStance: { id: 'entwined', label: 'Entwined', roundsLeft: 3 },
+        });
+
+        const html = buildLewdCombatMarkup(state, { actorId: ariaId });
+
+        // Matrix cell carries the act ladder, restraint, and pair stance.
+        expect(html).toContain('rt-lc-matrix');
+        expect(html).toContain('penetration 2');
+        expect(html).toContain('bindings 1');
+        expect(html.toLowerCase()).toContain('entwined');
+
+        // Composer pair header above the technique buttons.
+        expect(html).toContain('rt-lc-pair-state');
+        expect(html).toContain('Pair: Aria');
+        expect(html).toContain('act: penetration');
+        expect(html).toContain('intensity 2');
+        expect(html).toContain('stance: Entwined');
+
+        // Follow-up techniques are grouped under the act label.
+        expect(html).toContain('Follow-ups · Penetration');
+        expect(html).toContain('data-lc-technique="thrust-harder"');
+    });
+
+    it('renders a not-paired composer state when the actor is unengaged', () => {
+        const state = makeState([
+            { name: 'Aria', side: 'player', profile: profile('Aria') },
+            { name: 'Bran', side: 'player', profile: profile('Bran') },
+        ]);
+        const html = buildLewdCombatMarkup(state, { actorId: participantId(state, 'Aria') });
+        expect(html).toContain('rt-lc-pair-state');
+        expect(html).toContain('Pair: not paired');
     });
 
     it('escapes script tags in participant names, titles, and prose', () => {

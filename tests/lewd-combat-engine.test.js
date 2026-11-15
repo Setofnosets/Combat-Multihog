@@ -8,6 +8,7 @@ import {
     hydrateLewdState,
     joinParticipant,
     LEWD_POSTURES,
+    listLegalActions,
     resolveLewdOpponentTurn,
     rollLewdDice,
     serializeLewdState,
@@ -15,6 +16,7 @@ import {
     stopLewdEncounter,
     surrenderParticipant,
 } from '../src/features/lewd-combat/lewd-combat-engine.js';
+import { upsertEngagement } from '../src/features/lewd-combat/lewd-combat-pairing.js';
 
 afterEach(() => {
     vi.restoreAllMocks();
@@ -512,6 +514,179 @@ describe('action resolution', () => {
         });
         expect(auraResult.ok).toBe(true);
         expect(auraResult.beat.targets.map(target => target.name)).toEqual(['Bran']);
+    });
+});
+
+describe('pair-level act and bindings state', () => {
+    const pairState = state => state.engagements.find(edge => pairKeyOf(edge) === 'aria|bran');
+    const pairKeyOf = edge => [edge.a, edge.b].sort().join('|');
+    const allowAnotherAction = state => {
+        state.participants.find(participant => participant.id === 'aria').acted = false;
+    };
+
+    it('starts, raises (clamped), lowers, and clears a penetration act', () => {
+        const state = fixture({ aria: { anatomy: ['penis'] }, bran: { anatomy: ['vagina'] } });
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        bran.poise = 0;
+        bran.maxArousal = 100;
+        bran.arousal = 0;
+        const start = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'penetration-start', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        });
+        expect(start.ok).toBe(true);
+        const edge = pairState(state);
+        expect(edge).toMatchObject({
+            act: 'penetration', actType: 'penetration', actRole: 'give', actIntensity: 1, actStartedRound: 1,
+        });
+        expect(start.beat.targets[0].pair).toMatchObject({ act: 'penetration', actIntensity: 1 });
+        expect(start.beat.stateChanges.join(' ')).toContain('penetration intensity 1');
+
+        allowAnotherAction(state);
+        const harder = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'thrust-harder', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        });
+        expect(harder.ok).toBe(true);
+        expect(pairState(state).actIntensity).toBe(2);
+
+        pairState(state).actIntensity = 5;
+        allowAnotherAction(state);
+        expect(applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'thrust-harder', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        }).ok).toBe(true);
+        expect(pairState(state).actIntensity).toBe(5);
+
+        allowAnotherAction(state);
+        const slower = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'slow-down', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        });
+        expect(slower.ok).toBe(true);
+        expect(pairState(state).actIntensity).toBe(4);
+
+        allowAnotherAction(state);
+        const withdraw = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'withdraw', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        });
+        expect(withdraw.ok).toBe(true);
+        expect(pairState(state).act).toBeNull();
+        expect(pairState(state).actIntensity).toBe(0);
+    });
+
+    it('raises and clears bindings and gates tease-bound on them', () => {
+        const state = fixture({ aria: { anatomy: ['bondage-gear'], skills: ['bondage'] } });
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        bran.poise = 0;
+        bran.maxArousal = 100;
+        bran.arousal = 0;
+        const teaseAtZero = listLegalActions(state, 'aria').find(entry => entry.id === 'tease-bound');
+        expect(teaseAtZero.disabled).toBe(true);
+        expect(teaseAtZero.targets[0].reasons.join(' ')).toContain('Requires bindings 1.');
+
+        const tie = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'tie-bindings', targetIds: ['bran'], zone: 'hands', posture: 'lead',
+        });
+        expect(tie.ok).toBe(true);
+        expect(pairState(state)).toMatchObject({
+            act: 'bondage', actIntensity: 1, bindings: 1, bindingsStartedRound: 1,
+        });
+        allowAnotherAction(state);
+        expect(listLegalActions(state, 'aria').find(entry => entry.id === 'tease-bound').disabled).toBe(false);
+
+        allowAnotherAction(state);
+        const tighten = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'tighten-bindings', targetIds: ['bran'], zone: 'hands', posture: 'lead',
+        });
+        expect(tighten.ok).toBe(true);
+        expect(pairState(state).bindings).toBe(2);
+        expect(pairState(state).actIntensity).toBe(1);
+
+        allowAnotherAction(state);
+        const release = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'release-bindings', targetIds: ['bran'], zone: 'hands',
+        });
+        expect(release.ok).toBe(true);
+        expect(pairState(state).act).toBeNull();
+        expect(pairState(state).bindings).toBe(0);
+        expect(pairState(state).bindingsStartedRound).toBe(0);
+    });
+
+    it('writes a pair stance to the edge and both participants', () => {
+        const state = fixture({ aria: { anatomy: ['penis'] }, bran: { anatomy: ['vagina'] } });
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        bran.poise = 0;
+        bran.maxArousal = 100;
+        bran.arousal = 0;
+        expect(applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'penetration-start', targetIds: ['bran'], zone: 'genitals', posture: 'lead',
+        }).ok).toBe(true);
+
+        allowAnotherAction(state);
+        const positioned = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'change-position', targetIds: ['bran'], zone: 'genitals',
+        });
+        expect(positioned.ok).toBe(true);
+        const edge = pairState(state);
+        expect(edge.pairStance).toMatchObject({ id: 'entwined', label: 'Entwined' });
+        expect(edge.stance).toBe(edge.pairStance);
+        expect(state.participants.find(participant => participant.id === 'aria').stance).toMatchObject({ id: 'entwined' });
+        expect(state.participants.find(participant => participant.id === 'bran').stance).toMatchObject({ id: 'entwined' });
+        expect(positioned.beat.targets[0].pair.pairStance).toMatchObject({ id: 'entwined' });
+    });
+
+    it("scopes applies.stance.target='target' to the target only", () => {
+        const targetStance = {
+            id: 'guarded-touch', name: 'Guarded Touch', category: 'technique', posture: 'either',
+            zones: ['neck'], targetMode: 'single',
+            check: { stat: 'cha', accuracy: 100 }, arousal: '0', poise: '0',
+            applies: { stance: { id: 'guarded', label: 'Guarded', target: 'target' } },
+        };
+        const state = fixture();
+        const result = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'guarded-touch', targetIds: ['bran'], zone: 'neck',
+        }, { techniques: [targetStance] });
+        expect(result.ok).toBe(true);
+        expect(state.participants.find(participant => participant.id === 'bran').stance).toMatchObject({ id: 'guarded' });
+        expect(state.participants.find(participant => participant.id === 'aria').stance).toBeNull();
+    });
+
+    it('leaves other pairs untouched and never mutates pair state on a miss', () => {
+        const state = fixture({
+            mode: 'group',
+            aria: { anatomy: ['penis'] },
+            bran: { anatomy: ['vagina'] },
+            extra: [{ id: 'cora', name: 'Cora', side: 'opponent', profile: profile('Cora') }],
+        });
+        const bran = state.participants.find(participant => participant.id === 'bran');
+        bran.poise = 0;
+        bran.maxArousal = 100;
+        bran.arousal = 0;
+        upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'penetration', type: 'penetration', role: 'give' }, actIntensity: 1, actStartedRound: 1,
+        });
+        const coraEdge = upsertEngagement(state, 'aria', 'cora', {
+            act: { id: 'oral', type: 'oral' }, actIntensity: 2, actStartedRound: 1, bindings: 1,
+        });
+        const coraBefore = JSON.stringify(coraEdge);
+
+        const result = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'change-position', targetIds: ['bran'], zone: 'genitals',
+        });
+        expect(result.ok).toBe(true);
+        expect(JSON.stringify(coraEdge)).toBe(coraBefore);
+
+        const missTechnique = {
+            id: 'miss-pair', name: 'Miss Pair', category: 'technique', posture: 'either',
+            zones: ['genitals'], targetMode: 'single',
+            check: { stat: 'cha', accuracy: -100 }, arousal: '0', poise: '0',
+            applies: { act: { id: 'penetration', intensity: 5 }, bindingsDelta: 2 },
+        };
+        const before = JSON.stringify(pairState(state));
+        state.participants.find(participant => participant.id === 'aria').acted = false;
+        const miss = applyLewdAction(state, {
+            type: 'technique', unitId: 'aria', techniqueId: 'miss-pair', targetIds: ['bran'], zone: 'genitals',
+        }, { techniques: [missTechnique] });
+        expect(miss.ok).toBe(true);
+        expect(miss.beat.targets[0].hit).toBe(false);
+        expect(JSON.stringify(pairState(state))).toBe(before);
     });
 });
 

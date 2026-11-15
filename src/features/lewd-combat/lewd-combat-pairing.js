@@ -79,14 +79,66 @@ export function refreshEngagedWith(state) {
     }
 }
 
+/** Default pair-state fields for a fresh (or legacy) engagement edge. */
+export function engagementDefaults() {
+    return {
+        act: null,
+        actType: null,
+        actRole: null,
+        actIntensity: 0,
+        actStartedRound: 0,
+        bindings: 0,
+        bindingsStartedRound: 0,
+        pairStance: null,
+    };
+}
+
+function actIdOf(value) {
+    if (value == null) return null;
+    if (typeof value === 'object') return String(value.id ?? value.type ?? '') || null;
+    return String(value) || null;
+}
+
+/** Write the pair-state keys present in `patch` onto an edge. */
+function applyEngagementPatch(edge, patch) {
+    if ('act' in patch) {
+        if (patch.act == null) {
+            edge.act = null;
+            edge.actType = null;
+            edge.actRole = null;
+            edge.actIntensity = 0;
+            edge.actStartedRound = 0;
+        } else {
+            const source = typeof patch.act === 'object' ? patch.act : { id: patch.act };
+            edge.act = actIdOf(source);
+            if ('type' in source) edge.actType = source.type || null;
+            if ('role' in source) edge.actRole = source.role || null;
+            if (source.intensity != null && !('actIntensity' in patch)) {
+                edge.actIntensity = Math.min(5, Math.max(0, Number(source.intensity) || 0));
+            }
+        }
+    }
+    if ('actType' in patch) edge.actType = patch.actType || null;
+    if ('actRole' in patch) edge.actRole = patch.actRole || null;
+    if ('actIntensity' in patch) edge.actIntensity = Math.min(5, Math.max(0, Number(patch.actIntensity) || 0));
+    if ('actStartedRound' in patch) edge.actStartedRound = Math.max(0, Number(patch.actStartedRound) || 0);
+    if ('bindings' in patch) edge.bindings = Math.min(5, Math.max(0, Number(patch.bindings) || 0));
+    if ('bindingsStartedRound' in patch) {
+        edge.bindingsStartedRound = Math.max(0, Number(patch.bindingsStartedRound) || 0);
+    }
+    if ('pairStance' in patch) edge.pairStance = patch.pairStance;
+}
+
 /**
- * Create or refresh the edge between two participants. A patch may set `hold`
- * or `stance` explicitly; `hold: null` removes the edge's hold.
+ * Create or refresh the edge between two participants. A patch may set `hold`,
+ * `stance`, or the pair-level act/bindings state explicitly; `hold: null`
+ * removes the edge's hold and `act: null` clears the active act without
+ * touching bindings.
  *
  * @param {object} state
  * @param {string|object} a
  * @param {string|object} b
- * @param {{ hold?: object|null, stance?: object|null }} [patch]
+ * @param {object} [patch]
  * @returns {object|null}
  */
 export function upsertEngagement(state, a, b, patch = {}) {
@@ -104,12 +156,14 @@ export function upsertEngagement(state, a, b, patch = {}) {
             sinceRound: round,
             refreshedRound: round,
             intensity: 0,
+            ...engagementDefaults(),
         };
         state.engagements = Array.isArray(state.engagements) ? state.engagements : [];
         state.engagements.push(edge);
     }
     if ('hold' in patch) edge.hold = patch.hold;
     if ('stance' in patch) edge.stance = patch.stance;
+    applyEngagementPatch(edge, patch);
     edge.refreshedRound = round;
     edge.intensity = Math.min(5, (Number(edge.intensity) || 0) + 1);
     refreshEngagedWith(state);
@@ -128,8 +182,19 @@ export function expireEngagements(state, currentRound = state?.round, ttl = 1) {
     state.engagements = (state.engagements || []).filter(edge => {
         const refreshed = Number(edge.refreshedRound ?? edge.sinceRound) || 0;
         const keep = round - refreshed <= ttl;
-        if (!keep) removed.push(edge);
-        return keep;
+        if (!keep) {
+            removed.push(edge);
+            return false;
+        }
+        // A surviving edge that was not refreshed in the current round loses a
+        // step of restraint and act intensity. The act itself is never cleared
+        // here; only an explicit withdraw/release or edge removal does that.
+        if (refreshed < round) {
+            edge.bindings = Math.max(0, (Number(edge.bindings) || 0) - 1);
+            edge.actIntensity = Math.max(0, (Number(edge.actIntensity) || 0) - 1);
+            if (edge.bindings === 0) edge.bindingsStartedRound = 0;
+        }
+        return true;
     });
     refreshEngagedWith(state);
     return removed;
@@ -220,6 +285,8 @@ export function buildPairingMatrix(state) {
             const a = participants[i];
             const b = participants[j];
             const edge = findEngagement(state, a.id, b.id);
+            const actSource = edge?.act;
+            const act = typeof actSource === 'object' ? (actSource?.id ?? null) : (actSource ?? null);
             cells.push({
                 a: a.id,
                 b: b.id,
@@ -229,6 +296,14 @@ export function buildPairingMatrix(state) {
                 sinceRound: edge?.sinceRound ?? null,
                 refreshedRound: edge?.refreshedRound ?? null,
                 intensity: edge?.intensity ?? 0,
+                act: act ?? null,
+                actType: edge?.actType ?? (typeof actSource === 'object' ? actSource?.type ?? null : null),
+                actRole: edge?.actRole ?? (typeof actSource === 'object' ? actSource?.role ?? null : null),
+                actIntensity: edge?.actIntensity ?? 0,
+                actStartedRound: edge?.actStartedRound ?? 0,
+                bindings: edge?.bindings ?? 0,
+                bindingsStartedRound: edge?.bindingsStartedRound ?? 0,
+                pairStance: edge?.pairStance ?? null,
             });
         }
     }

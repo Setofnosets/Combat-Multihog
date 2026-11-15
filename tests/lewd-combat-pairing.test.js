@@ -124,6 +124,91 @@ describe('engagement edges', () => {
         const empty = matrix.cells.find(entry => pairKey(entry.a, entry.b) === pairKey('aria', 'cora'));
         expect(empty.engaged).toBe(false);
     });
+
+    it('writes pair-level act, bindings, and stance state and clears the act independently', () => {
+        const state = board();
+        const stance = { id: 'entwined', label: 'Entwined', roundsLeft: 3 };
+        const edge = upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'penetration', type: 'penetration', role: 'give' },
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 2,
+            bindingsStartedRound: 1,
+            pairStance: stance,
+        });
+        expect(edge).toMatchObject({
+            act: 'penetration',
+            actType: 'penetration',
+            actRole: 'give',
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 2,
+            bindingsStartedRound: 1,
+            pairStance: stance,
+        });
+
+        upsertEngagement(state, 'aria', 'bran', { act: null });
+        expect(edge.act).toBeNull();
+        expect(edge.actType).toBeNull();
+        expect(edge.actRole).toBeNull();
+        expect(edge.actIntensity).toBe(0);
+        expect(edge.actStartedRound).toBe(0);
+        // Clearing the act never touches restraint or the pair stance.
+        expect(edge.bindings).toBe(2);
+        expect(edge.bindingsStartedRound).toBe(1);
+        expect(edge.pairStance).toBe(stance);
+    });
+
+    it('exposes the new pair fields on pairing-matrix cells', () => {
+        const state = board();
+        const stance = { id: 'entwined', label: 'Entwined', roundsLeft: 3 };
+        upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'penetration', type: 'penetration', role: 'give' },
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 1,
+            bindingsStartedRound: 1,
+            pairStance: stance,
+        });
+        const matrix = buildPairingMatrix(state);
+        const cell = matrix.cells.find(entry => pairKey(entry.a, entry.b) === pairKey('aria', 'bran'));
+        expect(cell).toMatchObject({
+            act: 'penetration',
+            actType: 'penetration',
+            actRole: 'give',
+            actIntensity: 2,
+            actStartedRound: 1,
+            bindings: 1,
+            bindingsStartedRound: 1,
+            pairStance: stance,
+        });
+    });
+
+    it('decays bindings and act intensity on stale edges only', () => {
+        const state = board();
+        upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'penetration', type: 'penetration' },
+            actIntensity: 3,
+            bindings: 1,
+            bindingsStartedRound: 1,
+        });
+
+        state.round = 2;
+        upsertEngagement(state, 'aria', 'cora', {
+            act: { id: 'oral', type: 'oral' },
+            actIntensity: 3,
+            bindings: 2,
+            bindingsStartedRound: 2,
+        });
+
+        expect(expireEngagements(state, 2)).toHaveLength(0);
+        const stale = findEngagement(state, 'aria', 'bran');
+        const fresh = findEngagement(state, 'aria', 'cora');
+        expect(stale).toMatchObject({ actIntensity: 2, bindings: 0, bindingsStartedRound: 0 });
+        expect(fresh).toMatchObject({ actIntensity: 3, bindings: 2, bindingsStartedRound: 2 });
+        // The act id survives the decay; only an explicit clear removes it.
+        expect(stale.act).toBe('penetration');
+    });
 });
 
 describe('stances and holds', () => {

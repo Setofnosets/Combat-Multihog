@@ -157,6 +157,7 @@ describe('explicit act catalog', () => {
 
         upsertEngagement(state, 'aria', 'bran');
         state.engagements[0].act = 'penetration';
+        state.engagements[0].actIntensity = 1;
         const afterString = listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder');
         expect(afterString.disabled).toBe(false);
 
@@ -220,9 +221,10 @@ describe('explicit act catalog', () => {
         expect(byId('withdraw').applies.act).toBeNull();
         expect(byId('release-bindings').applies.act).toBeNull();
         expect(byId('penetration-start').applies.act).toMatchObject({
-            id: 'penetration', type: 'penetration', role: 'give',
+            id: 'penetration', type: 'penetration', role: 'give', intensity: 1,
         });
-        expect(byId('thrust-harder').applies.act).toMatchObject({ id: 'penetration', intensity: 2 });
+        expect(byId('thrust-harder').applies.act).toBeUndefined();
+        expect(byId('thrust-harder').applies.intensityDelta).toBe(1);
     });
 
     it('lists act metadata and gates bondage follow-ups on the act', () => {
@@ -238,6 +240,7 @@ describe('explicit act catalog', () => {
 
         upsertEngagement(state, 'aria', 'bran');
         state.engagements[0].act = { id: 'bondage', type: 'bondage', role: 'give' };
+        state.engagements[0].bindings = 1;
         expect(listLegalActions(state, 'aria').find(candidate => candidate.id === 'tighten-bindings').disabled)
             .toBe(false);
     });
@@ -252,6 +255,104 @@ describe('explicit act catalog', () => {
         expect(byId('tie-bindings').hold).toMatchObject({ id: 'bound' });
         expect(byId('tighten-bindings').requires.act).toBe('bondage');
         expect(byId('tie-bindings').requires.anatomy).toMatchObject({ all: ['bondage-gear'] });
+    });
+
+    it('gates thrust-harder on an active penetration act at intensity 1', () => {
+        const state = fixture();
+        const before = listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder');
+        expect(before.disabled).toBe(true);
+        expect(before.targets.find(target => target.id === 'bran').reasons.join(' '))
+            .toContain('Requires active act: penetration.');
+
+        upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'penetration', type: 'penetration', role: 'give' },
+        });
+        const atZero = listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder');
+        expect(atZero.disabled).toBe(true);
+        expect(atZero.targets.find(target => target.id === 'bran').reasons.join(' '))
+            .toContain('Requires act intensity 1.');
+
+        state.engagements[0].actIntensity = 1;
+        expect(listLegalActions(state, 'aria').find(entry => entry.id === 'thrust-harder').disabled).toBe(false);
+    });
+
+    it('requires bindings for tighten-bindings and validates level requirements', () => {
+        const state = fixture({ aria: { skills: ['bondage'] } });
+        upsertEngagement(state, 'aria', 'bran', {
+            act: { id: 'bondage', type: 'bondage', role: 'give' },
+        });
+        const noBindings = listLegalActions(state, 'aria').find(entry => entry.id === 'tighten-bindings');
+        expect(noBindings.disabled).toBe(true);
+        expect(noBindings.targets[0].reasons.join(' ')).toContain('Requires bindings 1.');
+
+        state.engagements[0].bindings = 1;
+        expect(listLegalActions(state, 'aria').find(entry => entry.id === 'tighten-bindings').disabled).toBe(false);
+
+        const valid = validateLewdTechnique({
+            ...base(),
+            requires: { minIntensity: 2, bindings: 1, pairStance: 'entwined' },
+        });
+        expect(valid.ok).toBe(true);
+        expect(valid.technique.requires).toMatchObject({ minIntensity: 2, bindings: 1, pairStance: 'entwined' });
+
+        const bad = validateLewdTechnique({
+            ...base(),
+            requires: { minIntensity: 6, bindings: -1, pairStance: 3 },
+        });
+        expect(bad.ok).toBe(false);
+        expect(bad.errors.join(' ')).toContain('requires.minIntensity');
+        expect(bad.errors.join(' ')).toContain('requires.bindings');
+        expect(bad.errors.join(' ')).toContain('requires.pairStance');
+    });
+
+    it('gates a technique on the pair stance', () => {
+        const custom = {
+            ...base(),
+            id: 'pair-stance-gate',
+            name: 'Pair Stance Gate',
+            requires: { pairStance: 'entwined' },
+        };
+        const state = fixture({ techniques: [custom] });
+        upsertEngagement(state, 'aria', 'bran', { pairStance: { id: 'guarded', label: 'Guarded' } });
+        const denied = listLegalActions(state, 'aria', { techniques: [custom] })[0];
+        expect(denied.disabled).toBe(true);
+        expect(denied.targets[0].reasons.join(' ')).toContain('Requires pair stance: entwined.');
+
+        state.engagements[0].pairStance = { id: 'entwined', label: 'Entwined' };
+        expect(listLegalActions(state, 'aria', { techniques: [custom] })[0].disabled).toBe(false);
+    });
+
+    it('normalizes pair-state applications and stance targeting', () => {
+        const applied = validateLewdTechnique({
+            ...base(),
+            applies: {
+                intensityDelta: 2,
+                bindingsDelta: -1,
+                bindings: 3,
+                pairStance: 'entwined',
+                stance: { id: 'guarded', target: 'pair' },
+            },
+        });
+        expect(applied.ok).toBe(true);
+        expect(applied.technique.applies.intensityDelta).toBe(2);
+        expect(applied.technique.applies.bindingsDelta).toBe(-1);
+        expect(applied.technique.applies.bindings).toBe(3);
+        expect(applied.technique.applies.pairStance).toMatchObject({ id: 'entwined' });
+        expect(applied.technique.applies.stance).toMatchObject({ id: 'guarded', target: 'pair' });
+
+        const defaultTarget = validateLewdTechnique({ ...base(), applies: { stance: { id: 'teasing' } } });
+        expect(defaultTarget.technique.applies.stance.target).toBe('actor');
+
+        const badTarget = validateLewdTechnique({
+            ...base(),
+            applies: { stance: { id: 'teasing', target: 'everyone' } },
+        });
+        expect(badTarget.ok).toBe(false);
+        expect(badTarget.errors.join(' ')).toContain('Unknown stance target');
+
+        expect(validateLewdTechnique({ ...base(), applies: { intensityDelta: 9 } }).ok).toBe(false);
+        expect(validateLewdTechnique({ ...base(), applies: { bindings: 6 } }).ok).toBe(false);
+        expect(validateLewdTechnique({ ...base(), applies: { bindingsDelta: -9 } }).ok).toBe(false);
     });
 });
 

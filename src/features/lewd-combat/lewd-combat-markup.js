@@ -11,7 +11,7 @@ import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
 import { LEWD_POSTURES, lewdParticipantControl } from './lewd-combat-engine.js';
 import { LEWD_ZONES } from './lewd-combat-profile.js';
-import { buildPairingMatrix, holdsOn } from './lewd-combat-pairing.js';
+import { buildPairingMatrix, engagementsFor, holdsOn } from './lewd-combat-pairing.js';
 import { LEWD_TECHNIQUE_CATEGORIES, listLegalActions } from './lewd-combat-techniques.js';
 import { resolveLewdControlMode } from './lewd-combat-context.js';
 
@@ -366,9 +366,15 @@ function renderMatrix(state) {
                 || (entry.a === column.id && entry.b === row.id)) || null;
             const bits = [];
             if (cell?.engaged) {
-                bits.push(cell.hold?.label || cell.hold?.id || 'Engaged');
-                if (cell.stance?.label || cell.stance?.id) bits.push(cell.stance.label || cell.stance.id);
-                bits.push(`Int ${Number(cell.intensity) || 0}`);
+                if (cell.hold) bits.push(cell.hold?.label || cell.hold?.id || 'Engaged');
+                const act = text(cell.act) || text(cell.actType);
+                if (act) bits.push(`${act}${Number(cell.actIntensity) ? ` ${Number(cell.actIntensity)}` : ''}`);
+                if (Number(cell.bindings) > 0) bits.push(`bindings ${Number(cell.bindings)}`);
+                const pairStance = cell.pairStance ? (cell.pairStance.label || cell.pairStance.id) : '';
+                if (pairStance) bits.push(pairStance);
+                else if (cell.stance?.label || cell.stance?.id) bits.push(cell.stance.label || cell.stance.id);
+                if (Number(cell.intensity)) bits.push(`Int ${Number(cell.intensity)}`);
+                if (!bits.length) bits.push('Engaged');
             }
             return `<td class="rt-lc-matrix-cell${cell?.engaged ? ' is-engaged' : ''}" data-lc-pair-a="${escapeHtml(row.id)}" data-lc-pair-b="${escapeHtml(column.id)}" title="${escapeHtml(`${row.name} × ${column.name}: ${bits.length ? bits.join(' · ') : 'not paired'}`)}">${bits.length ? escapeHtml(bits.join(' · ')) : '—'}</td>`;
         }).join('');
@@ -488,6 +494,18 @@ function renderPostureButtons(view, entry) {
     }).join('');
 }
 
+function techniqueButton(entry, selectedId) {
+    const reasons = arr(entry.reasons);
+    const selected = selectedId === entry.id || selectedId === entry.name;
+    const title = reasons.length ? reasons.join(' · ') : `${entry.name} (${entry.category})`;
+    const uses = entry.usesRemaining === Infinity ? 'at will' : `${entry.usesRemaining} left`;
+    return `<button type="button" class="rt-lc-btn rt-lc-technique${selected ? ' is-selected' : ''}" data-lc-technique="${escapeHtml(entry.id)}" aria-pressed="${selected ? 'true' : 'false'}" aria-label="${escapeHtml(`${entry.name}: ${title}`)}" title="${escapeHtml(title)}"${entry.disabled ? ' disabled' : ''}>
+                <span class="rt-lc-technique-name">${escapeHtml(entry.name)}</span>
+                <span class="rt-lc-technique-meta">${escapeHtml(entry.posture)} · ${escapeHtml(uses)}</span>
+                ${reasons.length ? `<span class="rt-lc-technique-reasons">${escapeHtml(reasons.join(' '))}</span>` : ''}
+            </button>`;
+}
+
 function renderTechniques(legal, view) {
     const selectedId = text(view?.techniqueId);
     if (!legal.length) {
@@ -495,26 +513,49 @@ function renderTechniques(legal, view) {
     }
     const groups = new Map();
     for (const category of LEWD_TECHNIQUE_CATEGORIES) groups.set(category, []);
+    const followUps = new Map();
     for (const entry of legal) {
+        const required = entry.technique?.requires || {};
+        if (required.act || required.actType) {
+            const act = text(required.act || required.actType) || 'act';
+            if (!followUps.has(act)) followUps.set(act, []);
+            followUps.get(act).push(entry);
+            continue;
+        }
         const category = LEWD_TECHNIQUE_CATEGORIES.includes(entry.category) ? entry.category : 'technique';
         if (!groups.has(category)) groups.set(category, []);
         groups.get(category).push(entry);
     }
-    return [...groups.entries()].map(([category, entries]) => {
+    const followUpHtml = [...followUps.entries()].map(([act, entries]) =>
+        `<div class="rt-lc-technique-group rt-lc-followups"><h4 class="rt-lc-technique-category">Follow-ups · ${escapeHtml(titleCase(act))}</h4>${entries.map(entry => techniqueButton(entry, selectedId)).join('')}</div>`).join('');
+    const categoryHtml = [...groups.entries()].map(([category, entries]) => {
         if (!entries.length) return '';
-        const buttons = entries.map(entry => {
-            const reasons = arr(entry.reasons);
-            const selected = selectedId === entry.id || selectedId === entry.name;
-            const title = reasons.length ? reasons.join(' · ') : `${entry.name} (${entry.category})`;
-            const uses = entry.usesRemaining === Infinity ? 'at will' : `${entry.usesRemaining} left`;
-            return `<button type="button" class="rt-lc-btn rt-lc-technique${selected ? ' is-selected' : ''}" data-lc-technique="${escapeHtml(entry.id)}" aria-pressed="${selected ? 'true' : 'false'}" aria-label="${escapeHtml(`${entry.name}: ${title}`)}" title="${escapeHtml(title)}"${entry.disabled ? ' disabled' : ''}>
-                <span class="rt-lc-technique-name">${escapeHtml(entry.name)}</span>
-                <span class="rt-lc-technique-meta">${escapeHtml(entry.posture)} · ${escapeHtml(uses)}</span>
-                ${reasons.length ? `<span class="rt-lc-technique-reasons">${escapeHtml(reasons.join(' '))}</span>` : ''}
-            </button>`;
-        }).join('');
+        const buttons = entries.map(entry => techniqueButton(entry, selectedId)).join('');
         return `<div class="rt-lc-technique-group"><h4 class="rt-lc-technique-category">${escapeHtml(titleCase(category))}</h4>${buttons}</div>`;
     }).join('');
+    return `${followUpHtml}${categoryHtml}`;
+}
+
+function renderPairState(state, actor) {
+    const edges = actor ? engagementsFor(state, actor) : [];
+    if (!edges.length) {
+        return '<div class="rt-lc-pair-state" aria-label="Pair state"><span class="rt-lc-pair-row">Pair: not paired</span></div>';
+    }
+    const rows = edges.map(edge => {
+        const otherId = edge.a === actor.id ? edge.b : edge.a;
+        const other = (state?.participants || []).find(participant => participant.id === otherId);
+        const bits = [];
+        const act = text(typeof edge.act === 'object' && edge.act ? edge.act.id ?? edge.act.type : edge.act)
+            || text(edge.actType);
+        if (act) bits.push(`act: ${act}`);
+        if (Number(edge.actIntensity) > 0) bits.push(`intensity ${Number(edge.actIntensity)}`);
+        if (Number(edge.bindings) > 0) bits.push(`bindings ${Number(edge.bindings)}`);
+        const stance = edge.pairStance?.label || edge.pairStance?.id || edge.stance?.label || edge.stance?.id;
+        if (stance) bits.push(`stance: ${stance}`);
+        const label = `Pair: ${text(actor.name)} ↔ ${text(other?.name) || otherId}${bits.length ? ` · ${bits.join(' · ')}` : ''}`;
+        return `<span class="rt-lc-pair-row" title="${escapeHtml(label)}">${escapeHtml(label)}</span>`;
+    }).join('');
+    return `<div class="rt-lc-pair-state" aria-label="Pair state">${rows}</div>`;
 }
 
 function defaultTargets(state, actor) {
@@ -607,6 +648,7 @@ function renderComposer(state, view) {
         <h3 class="rt-lc-section-title">Action</h3>
         <div class="rt-lc-actor-picker" role="group" aria-label="Actor">${actorButtons}</div>
         <div class="rt-lc-postures" role="group" aria-label="Posture">${renderPostureButtons(view, entry)}</div>
+        ${renderPairState(state, actor)}
         <div class="rt-lc-techniques">${renderTechniques(legal, view)}</div>
         <div class="rt-lc-pickers">
             ${renderZones(entry, view)}

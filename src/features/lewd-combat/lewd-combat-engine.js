@@ -48,6 +48,7 @@ import {
     isOverwhelmed,
     markOverwhelmed,
     normalizeHold,
+    normalizePairStance,
     normalizeStance,
     poiseEscapeBonus,
     tickOverwhelmed,
@@ -364,6 +365,112 @@ function holdDefenseBonus(state, participant) {
 
 function engage(state, actor, target, patch = {}) {
     return upsertEngagement(state, actor.id, target.id, patch);
+}
+
+function edgeActId(edge) {
+    const source = edge?.act;
+    if (source == null) return null;
+    if (typeof source === 'object') return source.id ?? source.type ?? null;
+    return source;
+}
+
+function pairStanceKey(stance) {
+    if (!stance) return '';
+    return String(stance.id ?? stance.label ?? '').toLowerCase();
+}
+
+function pairStateSnapshot(edge) {
+    return {
+        act: edgeActId(edge),
+        actType: edge?.actType ?? null,
+        actRole: edge?.actRole ?? null,
+        actIntensity: Number(edge?.actIntensity) || 0,
+        bindings: Number(edge?.bindings) || 0,
+        pairStance: pairStanceKey(edge?.pairStance),
+    };
+}
+
+function pairStateSummary(edge) {
+    const parts = [];
+    const act = edgeActId(edge);
+    const intensity = Number(edge?.actIntensity) || 0;
+    if (act) parts.push(`${String(act)}${intensity ? ` intensity ${intensity}` : ''}`);
+    if ((Number(edge?.bindings) || 0) > 0) parts.push(`bindings ${Number(edge.bindings)}`);
+    if (edge?.pairStance) parts.push(edge.pairStance.label || edge.pairStance.id);
+    return parts;
+}
+
+/**
+ * Apply a technique's pair-level effects to one engagement edge. Mutates only
+ * the edge; callers decide whether the action hit. Returns true when the edge's
+ * pair state changed.
+ */
+function applyPairEffects(state, edge, technique, entry, before = pairStateSnapshot(edge)) {
+    if (!edge) return false;
+    const applies = technique?.applies || {};
+
+    if ('act' in applies) {
+        if (applies.act == null) {
+            edge.act = null;
+            edge.actType = null;
+            edge.actRole = null;
+            edge.actIntensity = 0;
+            edge.actStartedRound = 0;
+        } else {
+            const source = typeof applies.act === 'object' ? applies.act : { id: applies.act };
+            const previousId = edgeActId(edge);
+            const hadAct = !!previousId || !!edge.actType || !!edge.actRole
+                || (Number(edge.actIntensity) || 0) > 0;
+            const nextId = source.id ?? source.type ?? previousId ?? null;
+            const nextType = source.type ?? technique.actType ?? edge.actType ?? null;
+            const nextRole = source.role ?? technique.actRole ?? edge.actRole ?? null;
+            const nextIntensity = source.intensity != null
+                ? clamp(source.intensity, 0, 5, 1)
+                : (hadAct ? (Number(edge.actIntensity) || 0) : 1);
+            const idChanged = String(previousId ?? '') !== String(nextId ?? '');
+            edge.act = nextId ? String(nextId) : null;
+            edge.actType = nextType ? String(nextType) : null;
+            edge.actRole = nextRole ? String(nextRole) : null;
+            edge.actIntensity = clamp(nextIntensity, 0, 5, 0);
+            if (idChanged || !hadAct) edge.actStartedRound = state.round;
+        }
+    }
+
+    if (applies.intensityDelta != null && edge.act) {
+        edge.actIntensity = clamp((Number(edge.actIntensity) || 0) + Number(applies.intensityDelta), 0, 5, 0);
+    }
+
+    if (applies.bindings != null || applies.bindingsDelta != null) {
+        const previous = Number(edge.bindings) || 0;
+        const next = applies.bindings != null
+            ? clamp(applies.bindings, 0, 5, 0)
+            : clamp(previous + Number(applies.bindingsDelta), 0, 5, 0);
+        edge.bindings = next;
+        if (previous === 0 && next > 0) edge.bindingsStartedRound = state.round;
+        if (next === 0) edge.bindingsStartedRound = 0;
+    }
+
+    if ('pairStance' in applies && applies.pairStance != null) {
+        const stance = normalizePairStance(applies.pairStance, 3);
+        if (stance) {
+            stance.appliedRound = state.round;
+            edge.pairStance = stance;
+            edge.stance = stance;
+        }
+    }
+
+    const changed = JSON.stringify(before) !== JSON.stringify(pairStateSnapshot(edge));
+    if (changed) {
+        entry.pair = {
+            act: edge.act,
+            actType: edge.actType,
+            actIntensity: edge.actIntensity,
+            bindings: edge.bindings,
+            pairStance: edge.pairStance,
+        };
+    }
+
+    return changed;
 }
 
 function applyStatus(state, participant, status) {
@@ -1011,20 +1118,47 @@ export function applyLewdAction(state, action, options = {}) {
                 entry.status = applyStatus(state, target, technique.applies.status);
             }
 
+            let edge = null;
+            let pairBefore = null;
+            if (target.id !== actor.id) {
+                const hold = normalizeHold(technique.hold, technique);
+                edge = engage(state, actor, target, hold ? { hold } : {});
+                pairBefore = pairStateSnapshot(edge);
+                if (hold) entry.hold = hold.label;
+            }
+
             if (technique.applies?.stance) {
                 const stance = normalizeStance(technique.applies.stance, 3);
                 if (stance) {
-                    actor.stance = stance;
-                    entry.stance = stance.label;
+                    const stanceTarget = technique.applies.stance.target || 'actor';
+                    if (stanceTarget === 'actor') {
+                        actor.stance = stance;
+                        entry.stance = stance.label;
+                    } else if (stanceTarget === 'target') {
+                        if (target.id !== actor.id) {
+                            target.stance = { ...stance };
+                            entry.stance = stance.label;
+                        }
+                    } else if (stanceTarget === 'pair') {
+                        actor.stance = { ...stance };
+                        entry.stance = stance.label;
+                        if (target.id !== actor.id) {
+                            target.stance = { ...stance };
+                            if (edge) {
+                                const pairStance = { ...stance, appliedRound: state.round };
+                                edge.stance = pairStance;
+                                edge.pairStance = pairStance;
+                            }
+                        }
+                    }
                 }
             }
 
-            const hold = normalizeHold(technique.hold, technique);
-            if (hold) {
-                engage(state, actor, target, { hold });
-                entry.hold = hold.label;
-            } else if (target.id !== actor.id) {
-                engage(state, actor, target);
+            if (edge && applyPairEffects(state, edge, technique, entry, pairBefore)) {
+                const parts = pairStateSummary(edge);
+                beat.stateChanges.push(
+                    `${actor.name} ↔ ${target.name}: ${parts.length ? parts.join(', ') : 'act ended'}.`,
+                );
             }
 
             if (target.arousal >= target.maxArousal) {
@@ -1512,6 +1646,19 @@ export function hydrateLewdState(raw) {
         : LEWD_TECHNIQUES;
     state.participants = Array.isArray(state.participants) ? state.participants : [];
     state.engagements = Array.isArray(state.engagements) ? state.engagements : [];
+    for (const edge of state.engagements) {
+        if (!edge || typeof edge !== 'object') continue;
+        // Legacy edges predate the pair-level state; backfill safe defaults so
+        // the matrix, composer, and gating never read undefined.
+        if (edge.act === undefined) edge.act = null;
+        if (edge.actType === undefined) edge.actType = null;
+        if (edge.actRole === undefined) edge.actRole = null;
+        if (edge.actIntensity == null || !Number.isFinite(Number(edge.actIntensity))) edge.actIntensity = 0;
+        if (edge.actStartedRound == null || !Number.isFinite(Number(edge.actStartedRound))) edge.actStartedRound = 0;
+        if (edge.bindings == null || !Number.isFinite(Number(edge.bindings))) edge.bindings = 0;
+        if (edge.bindingsStartedRound == null || !Number.isFinite(Number(edge.bindingsStartedRound))) edge.bindingsStartedRound = 0;
+        if (edge.pairStance === undefined) edge.pairStance = null;
+    }
     state.log = Array.isArray(state.log) ? state.log : [];
     state.actionLog = Array.isArray(state.actionLog) ? state.actionLog : [];
     state.stopped = !!state.stopped;

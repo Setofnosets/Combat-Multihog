@@ -65,6 +65,19 @@ export function normalizeStance(stance, fallbackRounds = 3) {
     };
 }
 
+/** Normalize a pair-level stance. Same shape and rules as a participant stance. */
+export function normalizePairStance(value, fallbackRounds = 3) {
+    return normalizeStance(value, fallbackRounds);
+}
+
+/** Remove the pair stance from an engagement edge. */
+export function clearPairStance(edge) {
+    if (!edge) return null;
+    const previous = edge.pairStance || null;
+    edge.pairStance = null;
+    return previous;
+}
+
 /** Apply a stance, replacing any current stance. */
 export function applyStance(participant, stance, options = {}) {
     if (!participant) return null;

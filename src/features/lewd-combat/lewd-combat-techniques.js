@@ -52,6 +52,7 @@ import {
     participantCapabilityTokens,
 } from './lewd-combat-profile.js';
 import { canEngageWith } from './lewd-combat-pairing.js';
+import { normalizePairStance } from './lewd-combat-states.js';
 
 export const LEWD_TECHNIQUE_CATEGORIES = Object.freeze([
     'stance', 'hold', 'technique', 'counter', 'finisher', 'tease', 'command', 'recover', 'submit',
@@ -126,8 +127,11 @@ function splitList(value) {
 const REQUIREMENT_KEYS = [
     'hold', 'stance', 'overwhelmed',
     'act', 'actType', 'actRole', 'anatomy', 'targetAnatomy', 'skill', 'trait', 'kink',
+    'minIntensity', 'bindings', 'pairStance',
 ];
-const APPLICATION_KEYS = ['status', 'stance', 'act'];
+const APPLICATION_KEYS = [
+    'status', 'stance', 'act', 'intensityDelta', 'bindingsDelta', 'bindings', 'pairStance',
+];
 
 function lowerOrNull(value) {
     const text = String(value ?? '').trim().toLowerCase();
@@ -158,6 +162,17 @@ function requirementTokens(value) {
         }
     }
     return tokens.length ? tokens : null;
+}
+
+/** Validate an optional integer requirement level in the 0–5 band. */
+function requirementLevel(value, field, errors) {
+    if (value == null || value === '') return null;
+    const number = Number(value);
+    if (!Number.isInteger(number) || number < 0 || number > 5) {
+        errors.push(`${field} must be an integer 0-5 (got "${value}").`);
+        return null;
+    }
+    return number;
 }
 
 /**
@@ -317,6 +332,16 @@ export function validateLewdTechnique(raw) {
     if (requiresActRole && !LEWD_ACT_ROLES.includes(requiresActRole)) {
         errors.push(`Unknown actRole "${rawRequires.actRole}".`);
     }
+    const requiresMinIntensity = requirementLevel(rawRequires.minIntensity, 'requires.minIntensity', errors);
+    const requiresBindings = requirementLevel(rawRequires.bindings, 'requires.bindings', errors);
+    let requiresPairStance = null;
+    if (rawRequires.pairStance != null && rawRequires.pairStance !== '') {
+        if (typeof rawRequires.pairStance !== 'string') {
+            errors.push('requires.pairStance must be a string id or label.');
+        } else {
+            requiresPairStance = lowerOrNull(rawRequires.pairStance);
+        }
+    }
     const requiresAnatomy = requirementAnatomy(rawRequires.anatomy, errors);
     const requiresTargetAnatomy = requirementAnatomy(
         rawRequires.targetAnatomy,
@@ -352,12 +377,17 @@ export function validateLewdTechnique(raw) {
         const stanceSource = typeof rawApplies.stance === 'string' ? { label: rawApplies.stance } : rawApplies.stance;
         const label = String(stanceSource?.label ?? stanceSource?.name ?? stanceSource?.id ?? '').trim();
         if (!label) errors.push('Applied stance needs a label.');
+        const target = String(stanceSource?.target ?? 'actor').trim().toLowerCase();
+        if (!['actor', 'target', 'pair'].includes(target)) {
+            errors.push(`Unknown stance target "${stanceSource?.target ?? ''}".`);
+        }
         applies.stance = {
             id: slug(stanceSource?.id || label),
             label: label || 'Stance',
             poiseBonus: Number(stanceSource?.poiseBonus) || 0,
             accuracyBonus: Number(stanceSource?.accuracyBonus) || 0,
             roundsLeft: clamp(stanceSource?.roundsLeft ?? stanceSource?.rounds ?? 3, 1, 99, 3),
+            target: ['actor', 'target', 'pair'].includes(target) ? target : 'actor',
         };
     }
     if ('act' in rawApplies) {
@@ -386,6 +416,36 @@ export function validateLewdTechnique(raw) {
                 applies.act = applied;
             }
         }
+    }
+
+    if (rawApplies.intensityDelta != null) {
+        const value = Number(rawApplies.intensityDelta);
+        if (!Number.isFinite(value) || value < -5 || value > 5) {
+            errors.push(`intensityDelta must be a number between -5 and 5 (got "${rawApplies.intensityDelta}").`);
+        } else {
+            applies.intensityDelta = value;
+        }
+    }
+    if (rawApplies.bindingsDelta != null) {
+        const value = Number(rawApplies.bindingsDelta);
+        if (!Number.isFinite(value) || value < -5 || value > 5) {
+            errors.push(`bindingsDelta must be a number between -5 and 5 (got "${rawApplies.bindingsDelta}").`);
+        } else {
+            applies.bindingsDelta = value;
+        }
+    }
+    if (rawApplies.bindings != null) {
+        const value = Number(rawApplies.bindings);
+        if (!Number.isFinite(value) || value < 0 || value > 5) {
+            errors.push(`bindings must be a number between 0 and 5 (got "${rawApplies.bindings}").`);
+        } else {
+            applies.bindings = value;
+        }
+    }
+    if (rawApplies.pairStance != null) {
+        const stance = normalizePairStance(rawApplies.pairStance, 3);
+        if (!stance) errors.push('Applied pair stance needs a label.');
+        else applies.pairStance = stance;
     }
 
     let hold = null;
@@ -470,6 +530,9 @@ export function validateLewdTechnique(raw) {
                 act: requiresAct,
                 actType: requiresActType,
                 actRole: requiresActRole,
+                minIntensity: requiresMinIntensity,
+                bindings: requiresBindings,
+                pairStance: requiresPairStance,
                 anatomy: requiresAnatomy,
                 targetAnatomy: requiresTargetAnatomy,
                 skill: requiresSkill,
@@ -776,7 +839,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'penetration', actRole: 'give',
         check: { stat: 'cha', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
         requires: { anatomy: { any: ['penis', 'vagina', 'tail'] }, targetAnatomy: { any: ['vagina', 'anus', 'tail'] } },
-        applies: { act: { id: 'penetration' } },
+        applies: { act: { id: 'penetration', intensity: 1 } },
         ai: { priority: 3 },
     }),
     technique({
@@ -796,7 +859,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'penetration', actRole: 'give',
         arousal: '1d8+2', poise: '1d4', staminaDrain: 1,
         requires: { act: 'penetration' },
-        applies: { act: { id: 'penetration', intensity: 1 } },
+        applies: { act: { id: 'penetration' }, intensityDelta: 0 },
         ai: { priority: 3 },
     }),
     technique({
@@ -805,8 +868,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'dominance'],
         actType: 'penetration', actRole: 'give',
         check: { stat: 'str', accuracy: 1 }, arousal: '2d6+3', poise: '1d6', staminaDrain: 2,
-        requires: { act: 'penetration' },
-        applies: { act: { id: 'penetration', intensity: 2 } },
+        requires: { act: 'penetration', minIntensity: 1 },
+        applies: { intensityDelta: 1 },
         ai: { priority: 4 },
     }),
     technique({
@@ -815,8 +878,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'teasing'],
         actType: 'penetration', actRole: 'give',
         arousal: '1d6+1', poise: '1d4',
-        requires: { act: 'penetration' },
-        applies: { act: { id: 'penetration', intensity: 1 } },
+        requires: { act: 'penetration', minIntensity: 1 },
+        applies: { intensityDelta: -1 },
         ai: { priority: 2 },
     }),
     technique({
@@ -825,8 +888,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals'], targetMode: 'single', tags: ['penetration', 'dominance'],
         actType: 'penetration', actRole: 'give',
         check: { stat: 'str', accuracy: 2 }, arousal: '2d8+4', poise: '1d6', staminaDrain: 2,
-        requires: { act: 'penetration' },
-        applies: { act: { id: 'penetration', intensity: 3 } },
+        requires: { act: 'penetration', minIntensity: 2 },
+        applies: { intensityDelta: 1 },
         ai: { priority: 4, conditions: ['overwhelmed'] },
     }),
     technique({
@@ -846,7 +909,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'penetration', actRole: 'mutual',
         arousal: '1d6', poise: '1d4',
         requires: { act: 'penetration' },
-        applies: { stance: { id: 'entwined', label: 'Entwined', poiseBonus: 1 } },
+        applies: { stance: { id: 'entwined', label: 'Entwined', poiseBonus: 1, target: 'pair' } },
         ai: { priority: 2 },
     }),
 
@@ -858,7 +921,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'oral', actRole: 'give',
         check: { stat: 'cha', accuracy: 1 }, arousal: '1d8+2', poise: '1d4',
         requires: { targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
-        applies: { act: { id: 'oral' } },
+        applies: { act: { id: 'oral', intensity: 1 } },
         ai: { priority: 3 },
     }),
     technique({
@@ -877,8 +940,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['throat', 'mouth'], targetMode: 'single', tags: ['oral', 'dominance'],
         actType: 'oral', actRole: 'give',
         check: { stat: 'str', accuracy: 1 }, arousal: '1d10+3', poise: '1d6', staminaDrain: 1,
-        requires: { actType: 'oral' },
-        applies: { act: { id: 'oral', intensity: 2 } },
+        requires: { actType: 'oral', minIntensity: 1 },
+        applies: { intensityDelta: 1 },
         ai: { priority: 3 },
     }),
     technique({
@@ -900,7 +963,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'manual', actRole: 'give',
         arousal: '1d6+2', poise: '1d4',
         requires: { anatomy: { any: ['penis', 'vagina'] }, targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
-        applies: { act: { id: 'manual' } },
+        applies: { act: { id: 'manual', intensity: 1 } },
         ai: { priority: 2 },
     }),
     technique({
@@ -909,8 +972,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['genitals', 'thighs'], targetMode: 'single', tags: ['manual', 'teasing'],
         actType: 'manual', actRole: 'give',
         arousal: '1d6+1', poise: '1d4',
-        requires: { actType: 'manual' },
-        applies: { act: { id: 'manual', intensity: 1 } },
+        requires: { actType: 'manual', minIntensity: 1 },
+        applies: { intensityDelta: 0 },
         ai: { priority: 2 },
     }),
     technique({
@@ -920,7 +983,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'masturbation', actRole: 'mutual',
         arousal: '1d8+2', poise: '1d4',
         requires: { targetAnatomy: { any: ['penis', 'vagina', 'vulva'] } },
-        applies: { act: { id: 'masturbation', role: 'mutual' } },
+        applies: { act: { id: 'masturbation', role: 'mutual', intensity: 1 } },
         ai: { priority: 3 },
     }),
     technique({
@@ -930,7 +993,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'manual', actRole: 'give',
         arousal: '1d8+2', poise: '1d4',
         requires: { anatomy: 'breasts', targetAnatomy: 'penis' },
-        applies: { act: { id: 'paizuri', type: 'manual' } },
+        applies: { act: { id: 'paizuri', type: 'manual', intensity: 1 } },
         ai: { priority: 2 },
     }),
     technique({
@@ -939,7 +1002,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['thighs', 'genitals'], targetMode: 'single', tags: ['manual', 'intimacy'],
         actType: 'manual', actRole: 'give',
         arousal: '1d6+2', poise: '1d4',
-        applies: { act: { id: 'intercrural', type: 'manual' } },
+        applies: { act: { id: 'intercrural', type: 'manual', intensity: 1 } },
         ai: { priority: 2 },
     }),
 
@@ -952,7 +1015,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         check: { stat: 'dex', accuracy: 1 }, arousal: '1d4', poise: '1d6',
         requires: { anatomy: 'bondage-gear' },
         hold: { id: 'bound', label: 'Bound', poiseBonus: 3, escapeDC: 14 },
-        applies: { act: { id: 'bondage' } },
+        applies: { act: { id: 'bondage', intensity: 1 }, bindingsDelta: 1 },
         ai: { priority: 2 },
     }),
     technique({
@@ -961,8 +1024,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['hands'], targetMode: 'single', tags: ['bondage', 'dominance'],
         actType: 'bondage', actRole: 'give',
         arousal: '1d4', poise: '1d6',
-        requires: { act: 'bondage', skill: 'bondage' },
-        applies: { act: { id: 'bondage', intensity: 2 } },
+        requires: { act: 'bondage', bindings: 1, skill: 'bondage' },
+        applies: { bindingsDelta: 1 },
         ai: { priority: 3 },
     }),
     technique({
@@ -971,8 +1034,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['hands'], targetMode: 'single', tags: ['bondage'],
         actType: 'bondage', actRole: 'receive',
         arousal: '1d4', poise: '1d4',
-        requires: { act: 'bondage' },
-        applies: { act: { id: 'bondage', intensity: 1 } },
+        requires: { bindings: 1 },
+        applies: { bindingsDelta: -1 },
         ai: { priority: 1 },
     }),
     technique({
@@ -981,7 +1044,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['full_body', 'neck'], targetMode: 'single', tags: ['bondage', 'teasing'],
         actType: 'bondage', actRole: 'give',
         arousal: '1d6+2', poise: '1d4',
-        requires: { act: 'bondage' },
+        requires: { bindings: 1 },
         applies: { status: { label: 'Bound', rounds: 2, sensitivityBonus: 0.1 } },
         ai: { priority: 3 },
     }),
@@ -991,8 +1054,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['hands'], targetMode: 'single', tags: ['bondage'],
         actType: 'bondage', actRole: 'give',
         arousal: '0', poise: '1d4',
-        requires: { act: 'bondage' },
-        applies: { act: null },
+        requires: { bindings: 1 },
+        applies: { act: null, bindingsDelta: -5 },
         ai: { priority: 1 },
     }),
 
@@ -1004,7 +1067,7 @@ export const LEWD_TECHNIQUES = Object.freeze([
         actType: 'other', actRole: 'give',
         arousal: '1d4', poise: '1d4',
         requires: { anatomy: 'tail' },
-        applies: { act: { id: 'tail-wrap', type: 'other' } },
+        applies: { act: { id: 'tail-wrap', type: 'other', intensity: 1 } },
         ai: { priority: 2 },
     }),
     technique({
@@ -1013,8 +1076,8 @@ export const LEWD_TECHNIQUES = Object.freeze([
         zones: ['tail', 'genitals'], targetMode: 'single', tags: ['tail', 'penetration'],
         actType: 'penetration', actRole: 'give',
         check: { stat: 'dex', accuracy: 1 }, arousal: '2d6+2', poise: '1d6', staminaDrain: 2,
-        requires: { anatomy: 'tail', act: 'penetration', targetAnatomy: { any: ['vagina', 'anus', 'tail'] } },
-        applies: { act: { id: 'tail-penetration', type: 'penetration' } },
+        requires: { anatomy: 'tail', act: 'penetration', minIntensity: 1, targetAnatomy: { any: ['vagina', 'anus', 'tail'] } },
+        applies: { act: { id: 'tail-penetration', type: 'penetration', intensity: 2 } },
         ai: { priority: 3 },
     }),
 ]);
@@ -1141,21 +1204,41 @@ function engagementAct(edge) {
 
 /**
  * Declarative act gating for one target: an edge must exist between actor and
- * target carrying a matching act/actType/actRole. Pure; never mutates state.
+ * target carrying a matching act/actType/actRole, plus any intensity, bindings,
+ * or pair-stance requirement. Pure; never mutates state.
  */
+function pairStanceMatches(edge, required) {
+    const stance = edge?.pairStance;
+    if (!stance) return false;
+    const key = String(required ?? '').trim().toLowerCase();
+    if (!key) return true;
+    return String(stance.id ?? '').toLowerCase() === key
+        || String(stance.label ?? '').toLowerCase() === key;
+}
+
 function actRequirementReason(state, actor, target, technique) {
     const required = technique?.requires || {};
     const act = required.act;
     const actType = required.actType;
     const role = required.actRole;
-    if ((!act && !actType && !role) || target?.id === actor?.id) return '';
+    const minIntensity = required.minIntensity;
+    const minBindings = required.bindings;
+    const pairStance = required.pairStance;
+    const hasLevel = value => value != null && value !== '';
+    if ((!act && !actType && !role && !hasLevel(minIntensity) && !hasLevel(minBindings) && !pairStance)
+        || target?.id === actor?.id) {
+        return '';
+    }
     const edge = (state?.engagements || []).find(candidate =>
         (candidate.a === actor.id && candidate.b === target.id)
         || (candidate.a === target.id && candidate.b === actor.id)) || null;
     if (!edge) {
-        return act || actType
-            ? `Requires active act: ${act || actType}.`
-            : `Requires act role: ${role}.`;
+        if (act || actType) return `Requires active act: ${act || actType}.`;
+        if (role) return `Requires act role: ${role}.`;
+        if (hasLevel(minIntensity)) return `Requires act intensity ${minIntensity}.`;
+        if (hasLevel(minBindings)) return `Requires bindings ${minBindings}.`;
+        if (pairStance) return `Requires pair stance: ${pairStance}.`;
+        return '';
     }
     const current = engagementAct(edge);
     // `act` matches the edge act id or type, and `actType` matches either, so a
@@ -1173,6 +1256,15 @@ function actRequirementReason(state, actor, target, technique) {
     }
     if (role && role !== 'mutual' && current.role !== role) {
         return `Requires act role: ${role}.`;
+    }
+    if (hasLevel(minIntensity) && (Number(edge.actIntensity) || 0) < minIntensity) {
+        return `Requires act intensity ${minIntensity}.`;
+    }
+    if (hasLevel(minBindings) && (Number(edge.bindings) || 0) < minBindings) {
+        return `Requires bindings ${minBindings}.`;
+    }
+    if (pairStance && !pairStanceMatches(edge, pairStance)) {
+        return `Requires pair stance: ${pairStance}.`;
     }
     return '';
 }
