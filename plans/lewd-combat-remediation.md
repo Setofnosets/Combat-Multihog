@@ -214,6 +214,7 @@
 - **Risk:** high (engine + UI)
 - **Model / Effort:** implementer model #high
 - **Commit:** `feat(lewd-combat): add pair-level act state and follow-up actions to the pairing matrix`
+- **Status:** ✅ Done — cbf3ebe
 
 ### A5. Start-of-combat AI action inference and surfacing
 - **Files:** new `src/features/lewd-combat/lewd-combat-inference.js`; modify `lewd-combat-context.js`, `lewd-combat-compendium.js`, `lewd-combat-agent.js`, `lewd-combat-prompts.js`, `lewd-combat-ui.js`; tests `tests/lewd-combat-agent.test.js`, `tests/lewd-combat-context.test.js`.
