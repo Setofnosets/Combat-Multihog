@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** draft (all design questions resolved 2026-11-14; builder-handoff split added; awaiting build approval)
+- **Status:** in progress — U1 (Step 1) complete (`1d4767e`); next: U2 / Step 2 (all design questions resolved 2026-11-14; builder-handoff split added; build approved)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -286,6 +286,7 @@ Remaining assumptions:
 > Builder-agent packaging: the 13 review-sized steps below are grouped into nine build units (U1–U9) in the “Builder Handoff” section at the end of this plan. Steps 6+7, 8+9, 10+11, and 12+13 are grouped because they share a demoable checkpoint or a single integration owner.
 
 ### 1. Module scaffold, settings, and secondary-board routing
+- **Status:** ✅ Done — `1d4767e` (feat(lewd-combat): scaffold secondary board, settings toggle, and per-chat store)
 - **Files:** new `src/features/lewd-combat/lewd-combat-constants.js`, `src/features/lewd-combat/lewd-combat-store.js`; modify `src/features/combat/combat-mode.js`, `src/features/combat/combat-ui-router.js`, `src/features/combat/combat-board-reset.js`, `src/features/combat/combat-mode-settings.js`, `src/state/defaults.js`, `src/state/settings.js`, `index.js`, `settings.html`, `style.css`, `tests/combat-board-reset.test.js`.
 - **Depends on:** none
 - **Parallelizable:** no (integration spine)
@@ -302,6 +303,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): scaffold secondary board, settings toggle, and per-chat store`
 
 ### 2. `[LEWD]` block schema and profile parser
+- **Status:** ☐ Pending
 - **Files:** new `src/features/lewd-combat/lewd-combat-profile.js`; modify `constants.js` (`BLOCK_ORDER`, `NO_PAGINATE`), `src/state/defaults.js` (`blockOrder`, stock prompt/module text), `src/state/module-instructions.js` (LEWD module instruction), `src/state/schema-sections.js` (optional `sec_desires`); tests `tests/lewd-combat-profile.test.js`.
 - **Depends on:** Step 1
 - **Parallelizable:** yes (with Step 3 once the schema is frozen)
