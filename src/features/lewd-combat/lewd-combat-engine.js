@@ -28,6 +28,31 @@ import {
     preferenceMultiplier,
     zoneMultiplier,
 } from './lewd-combat-profile.js';
+import {
+    canEngageWith,
+    expireEngagements,
+    findEngagement,
+    refreshEngagedWith,
+    upsertEngagement,
+} from './lewd-combat-pairing.js';
+import {
+    LEWD_TECHNIQUES,
+    listLegalActions,
+} from './lewd-combat-techniques.js';
+import {
+    attemptEscape,
+    expireStanceOnPostureChange,
+    experienceEscapeBonus,
+    isOverwhelmed,
+    markOverwhelmed,
+    normalizeHold,
+    normalizeStance,
+    poiseEscapeBonus,
+    tickOverwhelmed,
+    tickStance,
+} from './lewd-combat-states.js';
+
+export { listLegalActions } from './lewd-combat-techniques.js';
 
 export const LEWD_STATE_FORMAT = 'lewd-combat';
 export const LEWD_STATE_VERSION = 1;
@@ -241,43 +266,6 @@ function normalizeStatusEntry(status) {
     };
 }
 
-function normalizeStance(stance, fallbackRounds = 3) {
-    if (!stance) return null;
-    if (typeof stance === 'string') {
-        return { id: slug(stance), label: stance, poiseBonus: 0, roundsLeft: fallbackRounds };
-    }
-    const label = String(stance.label || stance.name || stance.id || 'Stance');
-    return {
-        ...stance,
-        id: slug(stance.id || label),
-        label,
-        poiseBonus: Number(stance.poiseBonus) || 0,
-        roundsLeft: clamp(stance.roundsLeft ?? stance.rounds ?? fallbackRounds, 1, 99, fallbackRounds),
-    };
-}
-
-function normalizeHold(hold, technique) {
-    if (!hold) return null;
-    if (typeof hold === 'string') {
-        return {
-            id: slug(hold),
-            label: hold,
-            poiseBonus: 0,
-            accuracyBonus: 0,
-            escapeDC: clamp(technique?.escapeDC ?? technique?.hold?.dc ?? 12, 1, 40, 12),
-        };
-    }
-    const label = String(hold.label || hold.name || hold.id || technique?.name || 'Hold');
-    return {
-        ...hold,
-        id: slug(hold.id || label),
-        label,
-        poiseBonus: Number(hold.poiseBonus) || 0,
-        accuracyBonus: Number(hold.accuracyBonus) || 0,
-        escapeDC: clamp(hold.escapeDC ?? hold.dc ?? technique?.escapeDC ?? 12, 1, 40, 12),
-    };
-}
-
 function stancePoiseBonus(participant) {
     return Number(participant?.stance?.poiseBonus) || 0;
 }
@@ -291,11 +279,6 @@ function NUMBER(value) {
     return Number.isFinite(number) ? number : 0;
 }
 
-function findEngagement(state, aId, bId) {
-    return state.engagements.find(edge =>
-        (edge.a === aId && edge.b === bId) || (edge.a === bId && edge.b === aId)) || null;
-}
-
 function holdDefenseBonus(state, participant) {
     let bonus = 0;
     for (const edge of state.engagements) {
@@ -306,40 +289,8 @@ function holdDefenseBonus(state, participant) {
     return bonus;
 }
 
-function refreshEngagedWith(state) {
-    for (const participant of state.participants) participant.engagedWith = [];
-    for (const edge of state.engagements) {
-        const a = findParticipant(state, edge.a);
-        const b = findParticipant(state, edge.b);
-        if (a && !a.engagedWith.includes(b.id)) a.engagedWith.push(b.id);
-        if (b && !b.engagedWith.includes(a.id)) b.engagedWith.push(a.id);
-    }
-}
-
 function engage(state, actor, target, patch = {}) {
-    let edge = findEngagement(state, actor.id, target.id);
-    if (!edge) {
-        edge = {
-            a: actor.id,
-            b: target.id,
-            hold: null,
-            stance: null,
-            sinceRound: state.round,
-            refreshedRound: state.round,
-            intensity: 0,
-        };
-        state.engagements.push(edge);
-    }
-    if ('hold' in patch) edge.hold = patch.hold;
-    if ('stance' in patch) edge.stance = patch.stance;
-    edge.refreshedRound = state.round;
-    edge.intensity = Math.min(5, (Number(edge.intensity) || 0) + 1);
-    refreshEngagedWith(state);
-    return edge;
-}
-
-function isOverwhelmed(state, participant) {
-    return Number(participant?.overwhelmedUntilRound) >= state.round;
+    return upsertEngagement(state, actor.id, target.id, patch);
 }
 
 function applyStatus(state, participant, status) {
@@ -438,13 +389,20 @@ function resolveTargets(state, actor, technique, action) {
         if (!target) return { targets: [], excluded: [], error: 'Target not found.' };
         if (target.id === actor.id) return { targets: [], excluded: [], error: 'Choose another participant.' };
         if (!isActive(target)) return { targets: [], excluded: [], error: 'Target is out of the encounter.' };
+        if (!canEngageWith(state, actor.id, target.id, state.maxPartners)) {
+            return {
+                targets: [],
+                excluded: [{ id: target.id, name: target.name, reason: `Partner limit reached (${state.maxPartners}).` }],
+                error: `Partner limit reached (${state.maxPartners}).`,
+            };
+        }
         return { targets: mode === 'pair' ? [target, actor] : [target], excluded: [] };
     }
     if (mode === 'group') {
         const pool = requested.length
             ? requested.map(id => findParticipant(state, id)).filter(Boolean)
-            : state.participants.filter(p => isActive(p) && p.id !== actor.id);
-        return { targets: pool.filter(participant => isActive(participant) && participant.id !== actor.id), excluded: [] };
+            : state.participants.filter(p => p.id !== actor.id);
+        return filterMultiTargets(state, actor, pool);
     }
     // aura: everyone currently engaged with the actor, else every active opponent.
     const engaged = (actor.engagedWith || [])
@@ -452,8 +410,34 @@ function resolveTargets(state, actor, technique, action) {
         .filter(participant => isActive(participant) && participant.id !== actor.id);
     const pool = engaged.length
         ? engaged
-        : state.participants.filter(p => isActive(p) && p.id !== actor.id);
-    return { targets: pool, excluded: [] };
+        : state.participants.filter(p => p.id !== actor.id);
+    return filterMultiTargets(state, actor, pool);
+}
+
+/**
+ * Group/aura actions keep legal targets and report why the rest were skipped,
+ * so the beat log and the pairing UI can explain a silent omission.
+ */
+function filterMultiTargets(state, actor, pool) {
+    const targets = [];
+    const excluded = [];
+    for (const participant of pool) {
+        if (participant.id === actor.id) continue;
+        if (!isActive(participant)) {
+            excluded.push({ id: participant.id, name: participant.name, reason: 'Target is out of the encounter.' });
+            continue;
+        }
+        if (!canEngageWith(state, actor.id, participant.id, state.maxPartners)) {
+            excluded.push({
+                id: participant.id,
+                name: participant.name,
+                reason: `Partner limit reached (${state.maxPartners}).`,
+            });
+            continue;
+        }
+        targets.push(participant);
+    }
+    return { targets, excluded };
 }
 
 function requiresHoldCheck(state, actor, target, technique) {
@@ -502,20 +486,9 @@ function pushLog(state, beat) {
     if (state.log.length > LOG_LIMIT) state.log.splice(0, state.log.length - LOG_LIMIT);
 }
 
-function clearOverwhelmedIfExpired(state, participant) {
-    if (!participant.overwhelmedUntilRound) return;
-    if (state.round > participant.overwhelmedUntilRound) {
-        participant.overwhelmedUntilRound = 0;
-        participant.poise = Math.max(participant.poise, Math.ceil(participant.maxPoise / 2));
-    }
-}
-
 function tickParticipantRound(state, participant, endingRound) {
     participant.acted = false;
-    if (participant.stance) {
-        participant.stance.roundsLeft -= 1;
-        if (participant.stance.roundsLeft <= 0) participant.stance = null;
-    }
+    tickStance(participant);
     // A status applied during the round that is ending has not yet had its
     // round; skip its first tick so "1 round" spans the next round.
     participant.status = participant.status
@@ -524,7 +497,7 @@ function tickParticipantRound(state, participant, endingRound) {
             return { ...status, roundsLeft: Number(status.roundsLeft) - 1 };
         })
         .filter(status => status.roundsLeft > 0);
-    clearOverwhelmedIfExpired(state, participant);
+    tickOverwhelmed(state, participant);
 }
 
 function advanceRoundIfComplete(state) {
@@ -536,8 +509,7 @@ function advanceRoundIfComplete(state) {
     state.round += 1;
     const endingRound = state.round - 1;
     for (const participant of state.participants) tickParticipantRound(state, participant, endingRound);
-    state.engagements = state.engagements.filter(edge => state.round - (Number(edge.refreshedRound) || 0) <= 1);
-    refreshEngagedWith(state);
+    expireEngagements(state, state.round);
 
     if (state.round > state.roundCap) {
         endEncounter(state, 'draw', { reason: 'round-cap' });
@@ -645,9 +617,16 @@ export function createLewdEncounterState(options = {}) {
         round: 1,
         roundCap: clamp(settings.lewdCombatRoundCap, 1, 60, DEFAULT_ROUND_CAP),
         maxPartners: clamp(settings.lewdCombatMaxPartners, 1, 4, DEFAULT_MAX_PARTNERS),
+        // Only the flags the resolution policy needs; the full settings object
+        // stays outside the board so it is never serialized by accident.
+        settings: {
+            lewdCombatDarkerThemes: !!settings.lewdCombatDarkerThemes,
+            lewdCombatExplicitness: String(settings.lewdCombatExplicitness || 'explicit'),
+        },
         seed,
         rollCount: 0,
         rngState: hashSeed(seed),
+        techniques: Array.isArray(options.techniques) ? options.techniques : LEWD_TECHNIQUES,
         participants: [],
         engagements: [],
         log: [],
@@ -739,6 +718,53 @@ export function applyLewdAction(state, action, options = {}) {
         return { ok: true, beat, outcome: outcome || null };
     }
 
+    if (type === 'escape') {
+        const requested = targetIdsOf(action)[0];
+        const holds = state.engagements.filter(edge =>
+            edge.hold && (edge.a === actor.id || edge.b === actor.id));
+        const edge = requested
+            ? holds.find(candidate => candidate.a === requested || candidate.b === requested)
+            : holds[0];
+        if (!edge) return { ok: false, reason: 'You are not being held.' };
+        const natural = rollDie(state, 20);
+        const escape = attemptEscape(state, actor, edge, {
+            roll: natural,
+            poiseBonus: poiseEscapeBonus(actor),
+            escapeBonus: statModifier(actor, 'dex') + experienceEscapeBonus(actor),
+        });
+        if (!escape.resolved) return { ok: false, reason: escape.reason };
+        actor.acted = true;
+        const beat = {
+            type: 'escape',
+            round: state.round,
+            actor: { id: actor.id, name: actor.name },
+            target: { id: escape.holderId, name: escape.holderName },
+            hold: escape.hold,
+            natural,
+            total: escape.total,
+            dc: escape.dc,
+            success: escape.success,
+            stateChanges: [
+                escape.success
+                    ? `${actor.name} escapes ${escape.holderName}'s ${escape.hold.label}.`
+                    : `${actor.name} fails to escape ${escape.holderName}'s ${escape.hold.label}.`,
+            ],
+        };
+        pushLog(state, beat);
+        state.actionLog.push({
+            round: state.round,
+            unitId: actor.id,
+            type: 'escape',
+            targetIds: [escape.holderId],
+            success: escape.success,
+            source: actionSummarySource(action),
+        });
+        advanceRoundIfComplete(state);
+        const outcome = state.status === 'ended' ? state.outcome : checkLewdEncounterEnd(state);
+        if (outcome) beat.outcome = outcome;
+        return { ok: true, beat, outcome: outcome || null };
+    }
+
     if (type !== 'technique' && type !== 'action') {
         return { ok: false, reason: `Unknown action type "${type}".` };
     }
@@ -773,13 +799,13 @@ export function applyLewdAction(state, action, options = {}) {
     const defaultZone = zones[0] || technicalZones[0] || 'full_body';
 
     const targets = [];
-    const excluded = [];
+    const excluded = [...(resolved.excluded || [])];
     for (const target of resolved.targets) {
         if (!requiresHoldCheck(state, actor, target, technique)) {
             excluded.push({ id: target.id, name: target.name, reason: 'Requires a hold.' });
             continue;
         }
-        if (technique.requires?.overwhelmed && !isOverwhelmed(state, target)) {
+        if (technique.requires?.overwhelmed && target.id !== actor.id && !isOverwhelmed(state, target)) {
             excluded.push({ id: target.id, name: target.name, reason: 'Requires an overwhelmed target.' });
             continue;
         }
@@ -802,8 +828,7 @@ export function applyLewdAction(state, action, options = {}) {
         return { ok: false, reason: excluded[0].reason, excluded };
     }
 
-    const postureChange = actor.lastPosture && actor.lastPosture !== posture;
-    if (postureChange) actor.stance = null;
+    expireStanceOnPostureChange(actor, posture);
 
     const beat = {
         type: 'technique',
@@ -845,22 +870,28 @@ export function applyLewdAction(state, action, options = {}) {
         };
 
         if (hit) {
+            const selfRecovery = target.id === actor.id && technique.category === 'recover';
             const rawArousal = rollLewdDice(state, technique.arousal).total + NUMBER(LEWD_POSTURES[posture]?.arousal);
             if (rawArousal > 0) {
                 const delta = Math.max(1, round(rawArousal * arousalMultiplier(state, target, zone, technique)));
                 const before = target.arousal;
-                target.arousal = clamp(target.arousal + delta, 0, target.maxArousal, target.maxArousal);
+                if (selfRecovery) {
+                    target.arousal = clamp(target.arousal - delta, 0, target.maxArousal, 0);
+                } else {
+                    target.arousal = clamp(target.arousal + delta, 0, target.maxArousal, target.maxArousal);
+                }
                 entry.arousalDelta = target.arousal - before;
             }
 
             const rawPoise = rollLewdDice(state, technique.poise).total;
             if (rawPoise > 0) {
                 const before = target.poise;
-                target.poise = clamp(target.poise - rawPoise, 0, target.maxPoise, 0);
+                target.poise = selfRecovery
+                    ? clamp(target.poise + rawPoise, 0, target.maxPoise, target.maxPoise)
+                    : clamp(target.poise - rawPoise, 0, target.maxPoise, 0);
                 entry.poiseDelta = target.poise - before;
-                if (target.poise <= 0) {
-                    target.overwhelmedUntilRound = Math.max(target.overwhelmedUntilRound, state.round + 1);
-                    target.stance = null;
+                if (!selfRecovery && target.poise <= 0) {
+                    markOverwhelmed(state, target);
                 }
             }
 
@@ -965,7 +996,7 @@ export function climaxParticipant(state, unit, options = {}) {
         sensitivityBonus: 0.3,
     });
     if (participant.poise <= 0) {
-        participant.overwhelmedUntilRound = Math.max(participant.overwhelmedUntilRound, state.round + 1);
+        markOverwhelmed(state, participant);
     }
     if (participant.stamina <= 0) {
         participant.stamina = 0;
@@ -1092,43 +1123,103 @@ function nextOpponentActor(state) {
     return pool.find(participant => !participant.acted) || null;
 }
 
-function localOpponentChoice(state, actor, options) {
-    const registry = options.techniques || state.techniques;
-    if (!registry) return null;
-    const list = Array.isArray(registry)
-        ? registry
-        : registry instanceof Map
-            ? [...registry.values()]
-            : Object.values(registry);
-    const recent = state.actionLog.filter(entry => entry.unitId === actor.id).slice(-6);
-    const scored = list
-        .filter(technique => technique && technique.targetMode !== 'self')
-        .map(technique => {
-            const id = techniqueKey(technique);
-            const repetitions = recent.filter(entry => entry.techniqueId === id).length;
-            const priority = NUMBER(technique.ai?.priority);
-            return { technique, score: priority - repetitions * 1.5 + nextRandom(state) * 0.001 };
-        })
-        .sort((a, b) => b.score - a.score);
+function categoryWeight(actor, category) {
+    const role = actor?.profile?.role;
+    if (role === 'dominant') {
+        if (['hold', 'command', 'finisher'].includes(category)) return 1.2;
+        if (category === 'submit') return -1;
+        return 0;
+    }
+    if (role === 'submissive') {
+        if (['submit', 'counter', 'recover'].includes(category)) return 1.2;
+        if (['command', 'hold'].includes(category)) return -0.8;
+        return 0;
+    }
+    if (role === 'switch') {
+        if (['stance', 'tease', 'technique'].includes(category)) return 0.8;
+    }
+    return 0;
+}
 
-    for (const { technique } of scored) {
-        const targets = state.participants.filter(participant => isActive(participant) && participant.id !== actor.id);
-        for (const target of targets) {
-            const blocked = isBlockedByLimits(target.profile, [...(technique.tags || []), ...(technique.zones || [])]);
-            if (blocked) continue;
-            const result = applyLewdAction(state, {
-                type: 'technique',
-                unitId: actor.id,
-                techniqueId: technique.id,
-                targetIds: [target.id],
-                posture: techniquePosture(technique),
-                zone: (technique.zones || [])[0],
-                source: 'ai',
-            }, options);
-            if (result.ok) return result;
+function conditionWeight(state, actor, entry, target) {
+    const conditions = entry.technique?.ai?.conditions || [];
+    let weight = 0;
+    for (const condition of conditions) {
+        if (condition === 'held') {
+            if (state.engagements.some(edge => edge.hold && (edge.a === actor.id || edge.b === actor.id))) weight += 0.8;
+        } else if (condition === 'overwhelmed') {
+            if (target && isOverwhelmed(state, target)) weight += 0.8;
+        } else if (condition === 'darker') {
+            if (state.settings?.lewdCombatDarkerThemes) weight += 0.5;
+        } else if (condition.startsWith('role:')) {
+            if (actor.profile?.role === condition.slice(5)) weight += 0.6;
+        } else if (condition.startsWith('targetSensitive:')) {
+            const zone = condition.slice('targetSensitive:'.length);
+            if (target && zoneMultiplier(target.profile, zone) >= 1.25) weight += 0.8;
         }
     }
-    return null;
+    return weight;
+}
+
+function targetWeight(target, entry) {
+    if (!target || !entry.zones?.length) return 0;
+    return entry.zones.reduce((sum, zone) => sum + zoneMultiplier(target.profile, zone), 0) / entry.zones.length;
+}
+
+/**
+ * Deterministic local policy. It scores only actions that `listLegalActions`
+ * considers legal, applies a repetition penalty, and biases by role and target
+ * sensitivity. Ties are broken by the seeded RNG, never `Math.random`.
+ *
+ * @param {object} state
+ * @param {object|string} unit
+ * @param {{ techniques?: object[] }} [options]
+ * @returns {{ action: object, technique: object, entry: object, score: number }|null}
+ */
+export function chooseOpponentAction(state, unit, options = {}) {
+    const actor = findParticipant(state, unit);
+    if (!actor || !isActive(actor) || actor.acted) return null;
+    const legal = listLegalActions(state, actor, options);
+    const recent = state.actionLog.filter(entry => entry.unitId === actor.id).slice(-6);
+    const scored = [];
+    for (const entry of legal) {
+        if (entry.disabled) continue;
+        const legalTargets = entry.targets.filter(target => !target.disabled);
+        if (entry.technique.targetMode !== 'self' && !legalTargets.length) continue;
+        const repetitions = recent.filter(action => action.techniqueId === entry.id).length;
+        const targets = entry.technique.targetMode === 'self' ? [null] : legalTargets;
+        for (const target of targets) {
+            const score = NUMBER(entry.technique.ai?.priority)
+                + categoryWeight(actor, entry.category)
+                + conditionWeight(state, actor, entry, target)
+                + (target ? targetWeight(target, entry) * 0.5 : 0)
+                - repetitions * 1.5
+                + nextRandom(state) * 0.001;
+            scored.push({ entry, target, score });
+        }
+    }
+    if (!scored.length) return null;
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    const action = {
+        type: 'technique',
+        unitId: actor.id,
+        techniqueId: best.entry.id,
+        posture: best.entry.posture,
+        source: 'ai',
+    };
+    if (best.target) {
+        action.targetIds = [best.target.id];
+        action.zone = best.entry.zones[0];
+    }
+    return { action, technique: best.entry.technique, entry: best.entry, score: best.score };
+}
+
+function localOpponentChoice(state, actor, options) {
+    const chosen = chooseOpponentAction(state, actor, options);
+    if (!chosen) return null;
+    const result = applyLewdAction(state, chosen.action, options);
+    return result.ok ? result : null;
 }
 
 /**
@@ -1205,6 +1296,9 @@ export function hydrateLewdState(raw) {
     state.maxPartners = Math.max(1, Number(state.maxPartners) || DEFAULT_MAX_PARTNERS);
     state.seed = String(state.seed ?? 'lewd-combat');
     state.rollCount = Math.max(0, Number(state.rollCount) || 0);
+    state.techniques = Array.isArray(state.techniques) && state.techniques.length
+        ? state.techniques
+        : LEWD_TECHNIQUES;
     state.participants = Array.isArray(state.participants) ? state.participants : [];
     state.engagements = Array.isArray(state.engagements) ? state.engagements : [];
     state.log = Array.isArray(state.log) ? state.log : [];

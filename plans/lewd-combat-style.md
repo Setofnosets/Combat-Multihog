@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U3 complete; next: U4 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`)
+- **Status:** in progress — U4 complete; next: U5 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -340,6 +340,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): deterministic stamina/arousal/poise engine`
 
 ### 4. Multi-partner pairings, stances, holds, and technique catalog
+- **Status:** ✅ Done — `__HASH__` (feat(lewd-combat): multi-partner pairings, stances, holds, and technique catalog)
 - **Files:** new `src/features/lewd-combat/lewd-combat-techniques.js`, `src/features/lewd-combat/lewd-combat-states.js`, `src/features/lewd-combat/lewd-combat-pairing.js`; tests `tests/lewd-combat-techniques.test.js`, `tests/lewd-combat-pairing.test.js`.
 - **Depends on:** Step 3
 - **Parallelizable:** yes (with Step 5 once the schema is frozen)
