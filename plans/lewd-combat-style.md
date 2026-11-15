@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-style
-- **Status:** in progress — U6 complete; next: U7 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`)
+- **Status:** in progress — U7 complete; next: U8 (U1/Step 1 `1d4767e`, U2/Step 2 `010d4c9`, U3/Step 3 `7a83799`, U4/Step 4 `f064405`, U5/Step 5 `88c539e`, U6/Steps 6+7 `30463df`, U7/Steps 8+9 `ff1a7f1`)
 - **Date:** 2026-11-14
 
 ## Summary
@@ -406,6 +406,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): board UI with stamina, pairing matrix, and action composer`
 
 ### 8. Opponent AI contract, local fallback, and bounded freedom
+- **Status:** ✅ Done — `ff1a7f1` (U7 combined commit: feat(lewd-combat): AI opponent contract and main-connection prose pass)
 - **Files:** new `src/features/lewd-combat/lewd-combat-agent.js`, `src/features/lewd-combat/lewd-combat-prompts.js`; modify `src/features/lewd-combat/lewd-combat-engine.js` (action validation), `src/state/connection-setups.js` (lewd agent connection); tests `tests/lewd-combat-agent.test.js`.
 - **Depends on:** Steps 4, 6
 - **Parallelizable:** yes (with Step 9)
@@ -421,6 +422,7 @@ Remaining assumptions:
 - **Commit:** `feat(lewd-combat): AI opponent contract with bounded freedom and local fallback`
 
 ### 9. Prose narration pass (Main connection)
+- **Status:** ✅ Done — `ff1a7f1` (U7 combined commit: feat(lewd-combat): AI opponent contract and main-connection prose pass)
 - **Files:** new `src/features/lewd-combat/lewd-combat-prose.js`, `src/features/lewd-combat/lewd-combat-prompts.js`; tests `tests/lewd-combat-prose.test.js`.
 - **Depends on:** Step 7
 - **Parallelizable:** yes (with Step 8)
