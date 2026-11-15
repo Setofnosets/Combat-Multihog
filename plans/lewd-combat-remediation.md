@@ -182,6 +182,7 @@
 - **Risk:** medium-high (content + schema)
 - **Model / Effort:** implementer model #high
 - **Commit:** `feat(lewd-combat): add explicit act catalog with penetration, oral, manual, and bondage techniques`
+- **Status:** ✅ Done — 16c2006
 
 ### A3. Deterministic anatomy/skill/trait gating
 - **Files:** `src/features/lewd-combat/lewd-combat-profile.js`, `lewd-combat-techniques.js`, `lewd-combat-engine.js`, `lewd-combat-agent.js`; tests `tests/lewd-combat-techniques.test.js`, `tests/lewd-combat-engine.test.js`.
