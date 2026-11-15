@@ -311,15 +311,17 @@ QUEST: The Missing Sheep
 One line per named participant (player, NPC, enemy, or party member). Only maintain entries for characters who take part in or are explicitly available for a Lewd Combat encounter. Update a line only when a profile genuinely changes (new lasting limit, sensitivity, or experience); otherwise omit the block entirely.
 
 [LEWD]
-- Name: role=dominant|submissive|switch | orientation=... | stamina=current/max | sensitivity=zone:high, zone:low | likes=tag, tag | dislikes=tag | limits=limit, limit | endurance=+N | experience=N | traits=trait+N
+- Name: role=dominant|submissive|switch | orientation=... | stamina=current/max | sensitivity=zone:high, zone:low | anatomy=penis, testes | skills=bondage | kinks=bondage | likes=tag, tag | dislikes=tag | limits=limit, limit | endurance=+N | experience=N | traits=trait+N, tail | body=short description | species=elf
 [/LEWD]
 
 Rules:
 - \`stamina\` is the profile pool (1–6), not HP. Never copy HP here. \`endurance\` and \`experience\` are small integers; use +0 / 0 when neutral.
-- \`sensitivity\` zones: lips, neck, ears, chest, breasts, nipples, back, waist, hips, groin, thighs, hands, feet, full_body. Levels: low, medium, high. Numeric multipliers (e.g. neck:1.4) are also accepted.
+- \`sensitivity\` zones: lips, mouth, throat, neck, ears, chest, breasts, nipples, back, waist, hips, groin, genitals, tail, thighs, hands, feet, full_body. Levels: low, medium, high. Numeric multipliers (e.g. neck:1.4) are also accepted.
+- \`anatomy\` is an optional comma list of explicit traits: penis, testes, vagina, vulva, anus, breasts, tail, wings, tentacles, knot, bondage-gear. Only write a tag the story or card establishes. NEVER guess anatomy from gender or from an assumed default body — \`female\` or \`male\` says nothing about anatomy.
+- \`skills\`, \`kinks\`, and \`body\` / \`species\` are optional profile details. \`body\` is a short neutral description (max 300 characters) and \`species\` is one short phrase (max 80 characters).
 - \`likes\` / \`dislikes\` are short tags such as praise, teasing, being guided, pain.
 - \`limits\` are hard boundaries such as breath play, marking. \`none declared\` is valid; NEVER invent a hard limit that the story has not established — absent means unknown, and the engine treats unknown as neutral.
-- \`traits\` are optional modifiers: stamina+1, drain-1, maxArousal+2, poise+1, endurance+1, sensitivity:neck+1. Unknown traits are ignored by the engine.
+- \`traits\` are optional modifiers: stamina+1, drain-1, maxArousal+2, poise+1, endurance+1, sensitivity:neck+1. \`traits\` may also carry capability words such as \`tail\` or \`bondage\`; those become profile tags, not stat changes. Unknown modifiers are ignored by the engine.
 - Use the exact character name used elsewhere in the memo so the board can match participants. Do not include unnamed extras.`,
   time_24h: `Current time and day grabbed from the status footer. Also track time of the last rest (only on Long Rest, e.g. 'Last Rest: 22:00, Day 0'). Use this to track out-of-combat buff durations by comparing to the PRIOR MEMO's time.
 

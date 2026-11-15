@@ -6,10 +6,15 @@ import {
 } from '../constants.js';
 import {
     applyProfileTraits,
+    collectProfileSignals,
+    extractProfileSourceText,
     findLewdProfile,
     inferProfile,
+    inferProfileFromSources,
     isBlockedByLimits,
     maxStaminaFromProfile,
+    mergeProfileInference,
+    normalizeLewdAnatomy,
     normalizeLewdProfile,
     normalizeLewdZone,
     parseLewdProfileLine,
@@ -77,20 +82,20 @@ describe('lewd profile parsing', () => {
     it('accepts synonyms, alternate separators, and unknown fields with warnings', () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const profiles = parseLewdProfiles(`[LEWD]
-- Mira: dynamic=dom; sensitive=neck:1.5, tail:high | desires=praise | aversions=humiliation | hard limits=no marking | exp=3 | stamina=2 | traits=stamina+2, luck+1
+- Mira: dynamic=dom; sensitive=neck:1.5, soul:high | desires=praise | aversions=humiliation | hard limits=no marking | exp=3 | stamina=2 | traits=stamina+2, luck+1
 [/LEWD]`);
 
         const mira = findLewdProfile(profiles, 'mira');
         expect(mira.role).toBe('dominant');
         expect(mira.sensitivity.neck).toBe(1.5);
-        expect(mira.sensitivity.tail).toBeUndefined();
+        expect(mira.sensitivity.soul).toBeUndefined();
         expect(mira.maxStamina).toBe(4); // 2 + stamina+2
         expect(mira.experience).toBe(3);
         expect(mira.preference.praise).toBe('like');
         expect(mira.preference.humiliation).toBe('dislike');
         expect(mira.limits).toEqual(['no marking']);
         expect(isBlockedByLimits(mira, ['marking'])).toBe('no marking');
-        expect(mira.warnings.join(' ')).toContain('unknown sensitivity zone "tail"');
+        expect(mira.warnings.join(' ')).toContain('unknown sensitivity zone "soul"');
         expect(mira.warnings.join(' ')).toContain('unknown trait "luck+1"');
         expect(warn).toHaveBeenCalled();
     });
@@ -142,7 +147,7 @@ Limits: marking
     it('normalizes zones and ignores malformed lines instead of guessing', () => {
         expect(normalizeLewdZone('full body')).toBe('full_body');
         expect(normalizeLewdZone('Nipple')).toBe('nipples');
-        expect(normalizeLewdZone('tail')).toBe('');
+        expect(normalizeLewdZone('tail')).toBe('tail');
         expect(parseLewdProfileLine('')).toBeNull();
         expect(parseLewdProfileLine('just prose without a colon')).toBeNull();
     });
@@ -312,5 +317,164 @@ describe('[LEWD] memo contract', () => {
             drain: -1,
             sensitivity: { neck: 1 },
         });
+    });
+});
+
+describe('profile anatomy, skills, kinks, and inference', () => {
+    it('parses the optional anatomy/skills/kinks/traits/body/species fields', () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const profile = normalizeLewdProfile(parseLewdProfileLine(
+            'Nyx: anatomy=penis, testes | skills=bondage | kinks=bondage | traits=tail | body=Lean and tall. | species=Incubus',
+        ));
+
+        expect(profile.anatomy).toEqual(['penis', 'testes', 'tail']);
+        expect(profile.skills).toEqual(['bondage']);
+        expect(profile.kinks).toEqual(['bondage']);
+        // `traits=tail` is a capability tag, not a numeric modifier.
+        expect(profile.sourceTraits).toEqual(['tail']);
+        expect(profile.traits).toEqual({});
+        expect(profile.body).toBe('Lean and tall.');
+        expect(profile.species).toBe('Incubus');
+        expect(profile.provenance.anatomy.penis).toBe('lewd');
+        expect(profile.provenance.body).toBe('lewd');
+        expect(profile.inferredFields).toEqual([]);
+    });
+
+    it('drops numeric-looking trait tokens and keeps capability words', () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const profile = normalizeLewdProfile({ name: 'Nyx', traits: '2, 2.5, tail, bondage' });
+        expect(profile.traits).toEqual({});
+        expect(profile.sourceTraits).toEqual(['tail', 'bondage']);
+        expect(profile.warnings).toEqual([
+            'unknown trait "2"',
+            'unknown trait "2.5"',
+        ]);
+    });
+
+    it('accepts tail, genitals, throat, and mouth as valid sensitivity zones', () => {
+        const profile = normalizeLewdProfile({ name: 'Aria' });
+        for (const zone of ['tail', 'genitals', 'throat', 'mouth']) {
+            expect(normalizeLewdZone(zone)).toBe(zone);
+            expect(zoneMultiplier(profile, zone)).toBeGreaterThan(0);
+        }
+        expect(normalizeLewdZone('genital')).toBe('genitals');
+        expect(normalizeLewdAnatomy('cock')).toBe('penis');
+        expect(normalizeLewdAnatomy('restraints')).toBe('bondage-gear');
+        expect(normalizeLewdAnatomy('flipper')).toBe('');
+    });
+
+    it('keeps explicit [LEWD] provenance while adding inferred anatomy', () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const memo = `[LEWD]
+- Nyx: anatomy=penis
+[/LEWD]`;
+        const profiles = parseLewdProfiles(memo, {}, {
+            cards: {
+                Nyx: { name: 'Nyx', description: 'A tall fox with a long tail.' },
+            },
+        });
+
+        const nyx = findLewdProfile(profiles, 'nyx');
+        expect(nyx.anatomy).toEqual(expect.arrayContaining(['penis', 'tail']));
+        expect(nyx.provenance.anatomy.penis).toBe('lewd');
+        expect(nyx.provenance.anatomy.tail).toBe('card');
+        expect(nyx.inferred).toBe(false);
+    });
+
+    it('collects anatomy/skills/kinks/body/species from card text and tracker sections', () => {
+        const cardSignals = collectProfileSignals({
+            card: {
+                name: 'Nyx',
+                description: 'A tall woman with wings and a long tail.',
+                personality: 'Bondage and praise.',
+            },
+        });
+        expect(cardSignals.anatomy).toEqual(expect.arrayContaining(['wings', 'tail']));
+        expect(cardSignals.skills).toContain('bondage');
+        expect(cardSignals.kinks).toEqual(expect.arrayContaining(['bondage', 'praise']));
+        expect(cardSignals.provenance.anatomy.wings).toBe('card');
+
+        const memo = `[PARTY]
+- Nyx: 10/10 HP
+Species: kitsune
+Body: Slim, silver-furred.
+Appearance: A long tail.
+Skills: ropework
+Kinks: bondage
+[/PARTY]`;
+        const trackerText = extractProfileSourceText(memo, 'Nyx');
+        expect(trackerText).toContain('Species: kitsune');
+        expect(trackerText).not.toContain('HP');
+        const trackerSignals = collectProfileSignals({ trackerText });
+        expect(trackerSignals.anatomy).toContain('tail');
+        expect(trackerSignals.skills).toEqual(expect.arrayContaining(['ropework', 'bondage']));
+        expect(trackerSignals.kinks).toContain('bondage');
+        expect(trackerSignals.body).toBe('Slim, silver-furred.');
+        expect(trackerSignals.species).toBe('kitsune');
+        expect(trackerSignals.provenance.anatomy.tail).toBe('tracker');
+        expect(trackerSignals.provenance.species).toBe('tracker');
+
+        // Another combatant's lines never leak into this character's text.
+        const splitMemo = `[PARTY]
+- Nyx: 10/10 HP
+Species: kitsune
+- Bram: 12/12 HP
+Species: dwarf
+[/PARTY]`;
+        const nyxText = extractProfileSourceText(splitMemo, 'Nyx');
+        expect(nyxText).toContain('kitsune');
+        expect(nyxText).not.toContain('dwarf');
+    });
+
+    it('never derives anatomy from gender or invents a limit', () => {
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const profile = inferProfile(
+            { name: 'Mira', gender: 'female', notes: 'A female woman.' },
+            {},
+            { trackerText: 'Sex: Female\nGender: woman' },
+        );
+        expect(profile.anatomy).toEqual([]);
+        expect(profile.limits).toEqual([]);
+        expect(profile.inferred).toBe(true);
+        expect(normalizeLewdProfile({ name: 'Mira', gender: 'female' }).anatomy).toEqual([]);
+    });
+
+    it('carries unit skills/notes through inference and lists inferred fields', () => {
+        const profile = inferProfile({
+            name: 'Nyx',
+            skills: [{ name: 'Ropework' }, 'Seduction'],
+            notes: 'A long tail, wings, and a fondness for bondage.',
+        });
+        expect(profile.sourceSkills).toEqual(expect.arrayContaining(['Ropework', 'Seduction']));
+        expect(profile.anatomy).toEqual(expect.arrayContaining(['tail', 'wings']));
+        expect(profile.kinks).toContain('bondage');
+        expect(profile.inferredFields).toEqual(expect.arrayContaining(['anatomy', 'kinks']));
+        expect(profile.inferred).toBe(true);
+        expect(profile.source).toBe('inferred');
+    });
+
+    it('merges inference without mutating the explicit profile or losing provenance', () => {
+        const explicit = normalizeLewdProfile({
+            name: 'Nyx',
+            anatomy: 'penis, tail',
+            body: 'Explicit body',
+            species: 'human',
+        });
+        const inferred = inferProfileFromSources({ name: 'Nyx', traits: ['wings'] }, {
+            card: { name: 'Nyx', description: 'Wings and a tail. Bondage.' },
+        });
+        const snapshot = JSON.stringify(explicit);
+        const merged = mergeProfileInference(explicit, inferred);
+
+        expect(merged).not.toBe(explicit);
+        expect(JSON.stringify(explicit)).toBe(snapshot);
+        expect(merged.body).toBe('Explicit body');
+        expect(merged.species).toBe('human');
+        expect(merged.anatomy).toEqual(['penis', 'tail', 'wings']);
+        expect(merged.skills).toContain('bondage');
+        expect(merged.provenance.anatomy.penis).toBe('lewd');
+        expect(merged.provenance.anatomy.tail).toBe('lewd');
+        expect(merged.provenance.anatomy.wings).toBe('card');
+        expect(merged.provenance.body).toBe('lewd');
     });
 });

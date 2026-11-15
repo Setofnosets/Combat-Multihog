@@ -38,13 +38,18 @@
  * they never become invented limits or silent stat changes.
  */
 
+import { LEWD_ANATOMY_ALIASES, LEWD_ANATOMY_TAGS } from './lewd-combat-constants.js';
+
 export const LEWD_ZONES = Object.freeze([
-    'lips', 'neck', 'ears', 'chest', 'breasts', 'nipples', 'back', 'waist',
-    'hips', 'groin', 'thighs', 'hands', 'feet', 'full_body',
+    'lips', 'mouth', 'throat', 'neck', 'ears', 'chest', 'breasts', 'nipples',
+    'back', 'waist', 'hips', 'groin', 'genitals', 'tail', 'thighs', 'hands',
+    'feet', 'full_body',
 ]);
 
 export const DEFAULT_ZONE_SENSITIVITY = Object.freeze({
     lips: 1.0,
+    mouth: 1.3,
+    throat: 1.4,
     neck: 1.3,
     ears: 1.2,
     chest: 0.9,
@@ -54,6 +59,8 @@ export const DEFAULT_ZONE_SENSITIVITY = Object.freeze({
     waist: 1.0,
     hips: 1.2,
     groin: 1.8,
+    genitals: 1.9,
+    tail: 1.3,
     thighs: 1.2,
     hands: 0.9,
     feet: 0.7,
@@ -98,6 +105,11 @@ const ZONE_ALIASES = {
     hip: 'hips',
     hips: 'hips',
     groin: 'groin',
+    genital: 'genitals',
+    genitals: 'genitals',
+    tail: 'tail',
+    throat: 'throat',
+    mouth: 'mouth',
     thigh: 'thighs',
     thighs: 'thighs',
     hand: 'hands',
@@ -140,6 +152,11 @@ const FIELD_ALIASES = {
     skill: 'experience',
     traits: 'traits',
     modifiers: 'traits',
+    anatomy: 'anatomy',
+    skills: 'skills',
+    kinks: 'kinks',
+    body: 'body',
+    species: 'species',
     notes: 'notes',
     note: 'notes',
 };
@@ -175,6 +192,24 @@ export function normalizeLewdZone(zone) {
     return direct || '';
 }
 
+/**
+ * Canonical anatomy tag, or '' when the word is not one of the literal anatomy
+ * words. Never derived from gender or an assumed body.
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function normalizeLewdAnatomy(value) {
+    const raw = String(value ?? '')
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/[^a-z ]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    if (!raw) return '';
+    if (LEWD_ANATOMY_TAGS.includes(raw)) return raw;
+    return LEWD_ANATOMY_ALIASES[raw] || '';
+}
+
 function normalizeToken(token, { stripNo = false } = {}) {
     let text = String(token ?? '')
         .toLowerCase()
@@ -200,6 +235,45 @@ function splitList(value) {
 
 function stripBullet(line) {
     return String(line ?? '').replace(/^\s*[-*+•]\s*/, '').trim();
+}
+
+function asList(value) {
+    if (Array.isArray(value)) return value;
+    if (value == null || value === '') return [];
+    return splitList(value);
+}
+
+/**
+ * Canonical, de-duplicated list of tokens. Arrays and comma lists both work, so
+ * the function is idempotent for an already-normalized profile.
+ */
+function normalizeTokenList(value, normalizer = normalizeToken) {
+    const seen = new Set();
+    const out = [];
+    for (const item of asList(value)) {
+        const token = normalizer(item);
+        if (!token || seen.has(token)) continue;
+        seen.add(token);
+        out.push(token);
+    }
+    return out;
+}
+
+/**
+ * Readable names (skills, traits) are trimmed but keep their original casing;
+ * de-duplication is case-insensitive.
+ */
+function normalizeNameList(value) {
+    const seen = new Set();
+    const out = [];
+    for (const item of asList(value)) {
+        const name = String(item ?? '').trim().slice(0, 80);
+        const key = normalizeToken(name);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        out.push(name);
+    }
+    return out;
 }
 
 function extractBlock(memo, tag) {
@@ -244,18 +318,28 @@ function parseSensitivity(value, warnings, { bareMeansHigh = true } = {}) {
     return map;
 }
 
-function parseTraits(value, warnings) {
+function parseTraitValue(value, warnings) {
     const traits = {};
+    const capabilities = [];
     for (const item of splitList(value)) {
-        const match = String(item).trim().match(TRAIT_RX);
+        const token = String(item).trim();
+        if (!token) continue;
+        const match = token.match(TRAIT_RX);
         if (!match) {
-            warnings.push(`unknown trait "${String(item).trim()}"`);
+            // A token with no +/- is a capability tag (`tail`, `bondage`), not a
+            // malformed modifier. A numeric-looking token is still an error.
+            if (/[+-]/.test(token) || /^\d+(?:\.\d+)?$/.test(token)) {
+                warnings.push(`unknown trait "${token}"`);
+            } else {
+                const capability = normalizeToken(token);
+                if (capability) capabilities.push(capability);
+            }
             continue;
         }
         const key = match[1].toLowerCase();
         const delta = Number.parseFloat(String(match[3]).replace(/\s+/g, ''));
         if (!Number.isFinite(delta)) {
-            warnings.push(`unknown trait "${String(item).trim()}"`);
+            warnings.push(`unknown trait "${token}"`);
             continue;
         }
         if (key === 'sensitivity') {
@@ -271,7 +355,11 @@ function parseTraits(value, warnings) {
         const canonical = key === 'maxarousal' ? 'maxArousal' : key;
         traits[canonical] = (traits[canonical] || 0) + delta;
     }
-    return traits;
+    return { traits, capabilities };
+}
+
+function parseTraits(value, warnings) {
+    return parseTraitValue(value, warnings).traits;
 }
 
 function parseLimits(value) {
@@ -329,6 +417,33 @@ function statsFromUnit(unit) {
     return { conMod: mod('con'), wisMod: mod('wis'), chaMod: mod('cha') };
 }
 
+function unitSkillNames(unit) {
+    return asList(unit?.skills).map(entry =>
+        (entry && typeof entry === 'object' ? entry.name ?? entry.id : entry));
+}
+
+function cloneProvenance(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const copy = {};
+    for (const [key, entry] of Object.entries(value)) {
+        copy[key] = entry && typeof entry === 'object' && !Array.isArray(entry)
+            ? { ...entry }
+            : entry;
+    }
+    return copy;
+}
+
+function recordTokenProvenance(provenance, field, tokens, source) {
+    if (!tokens.length) return;
+    const existing = provenance[field] && typeof provenance[field] === 'object'
+        ? { ...provenance[field] }
+        : {};
+    for (const token of tokens) {
+        if (!existing[token]) existing[token] = source;
+    }
+    provenance[field] = existing;
+}
+
 /**
  * Apply profile traits to base derived stats. Pure: the input base and the
  * profile are not mutated, so calling this with the same inputs is idempotent.
@@ -378,9 +493,15 @@ export function normalizeLewdProfile(fields = {}, options = {}) {
     const level = clamp(unit?.level, 1, 30, 1);
     const endurance = clamp(parseInteger(fields.endurance, 0), -3, 5, 0);
     const experience = clamp(parseInteger(fields.experience, 0), 0, 10, 0);
-    const traits = fields.traits && typeof fields.traits === 'object'
-        ? fields.traits
-        : parseTraits(fields.traits || '', warnings);
+    let traits;
+    let traitCapabilities = [];
+    if (fields.traits && typeof fields.traits === 'object') {
+        traits = fields.traits;
+    } else {
+        const parsedTraits = parseTraitValue(fields.traits || '', warnings);
+        traits = parsedTraits.traits;
+        traitCapabilities = parsedTraits.capabilities;
+    }
 
     let baseMaxStamina;
     let stamina = null;
@@ -418,6 +539,35 @@ export function normalizeLewdProfile(fields = {}, options = {}) {
         ...(fields.preference && typeof fields.preference === 'object' ? fields.preference : {}),
     };
 
+    const anatomy = normalizeTokenList([
+        ...asList(fields.anatomy),
+        ...traitCapabilities,
+    ], normalizeLewdAnatomy);
+    const skills = normalizeTokenList(fields.skills);
+    const kinks = normalizeTokenList(fields.kinks);
+    const sourceSkills = normalizeNameList([
+        ...unitSkillNames(unit),
+        ...asList(fields.sourceSkills),
+        ...asList(options.sourceSkills),
+    ]);
+    const sourceTraits = normalizeTokenList([
+        ...asList(fields.sourceTraits),
+        ...traitCapabilities,
+        ...asList(options.sourceTraits),
+    ]);
+    const body = String(fields.body ?? '').trim().slice(0, 300);
+    const species = String(fields.species ?? '').trim().slice(0, 80);
+    const provenance = cloneProvenance(fields.provenance);
+    const sourceBucket = String(options.source || fields.source || 'lewd');
+    recordTokenProvenance(provenance, 'anatomy', anatomy, sourceBucket);
+    recordTokenProvenance(provenance, 'skills', skills, sourceBucket);
+    recordTokenProvenance(provenance, 'kinks', kinks, sourceBucket);
+    if (body && !provenance.body) provenance.body = sourceBucket;
+    if (species && !provenance.species) provenance.species = sourceBucket;
+    const inferredFields = Array.isArray(fields.inferredFields)
+        ? [...new Set(fields.inferredFields.map(String).filter(Boolean))]
+        : [];
+
     return {
         name,
         role: fields.role && LEWD_ROLES.includes(String(fields.role))
@@ -436,22 +586,394 @@ export function normalizeLewdProfile(fields = {}, options = {}) {
         traits,
         drain: derived.drain,
         notes: String(fields.notes ?? '').trim().slice(0, 500),
+        anatomy,
+        skills,
+        kinks,
+        sourceSkills,
+        sourceTraits,
+        body,
+        species,
+        provenance,
+        inferredFields,
         source: String(options.source || fields.source || 'lewd'),
         inferred: options.source === 'inferred' || fields.inferred === true,
         warnings,
     };
 }
 
+const PROFILE_SKILL_WORDS = Object.freeze([
+    'bondage', 'ropework', 'shibari', 'restraint', 'seduction', 'teasing',
+    'massage', 'oral', 'penetration',
+]);
+
+const PROFILE_KINK_WORDS = Object.freeze([
+    'bondage', 'praise', 'teasing', 'tail', 'tentacles', 'submission', 'dominance',
+]);
+
+function cardText(card) {
+    if (!card) return '';
+    if (typeof card === 'string') return card;
+    return [card.description, card.personality, card.scenario, card.mes_example, card.example_dialogue]
+        .map(entry => String(entry ?? ''))
+        .filter(Boolean)
+        .join('\n');
+}
+
+function wordsOf(value) {
+    return String(value ?? '')
+        .toLowerCase()
+        .replace(/[’']/g, '')
+        .split(/[^a-z]+/)
+        .filter(Boolean);
+}
+
+function wordSet(value) {
+    return new Set(wordsOf(value));
+}
+
+function includesWord(set, word) {
+    if (!set || !word) return false;
+    return set.has(word) || set.has(`${word}s`);
+}
+
+function labeledValues(value, labels) {
+    const source = String(value ?? '');
+    if (!source) return [];
+    const escaped = labels.map(label => label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const rx = new RegExp(`^[\\s*•+-]*(?:${escaped})\\s*:\\s*(.+)$`, 'gim');
+    const out = [];
+    let match;
+    while ((match = rx.exec(source))) out.push(match[1].trim());
+    return out;
+}
+
+function labeledValue(value, labels) {
+    const values = labeledValues(value, labels);
+    return values.length ? values[0].split(/[|;]/)[0].trim() : '';
+}
+
+function anatomyTokensIn(value) {
+    const found = [];
+    const text = String(value ?? '');
+    for (const word of new Set(wordsOf(text))) {
+        const tag = normalizeLewdAnatomy(word);
+        if (tag && !found.includes(tag)) found.push(tag);
+    }
+    if (/bondage[-\s]?gear/i.test(text) && !found.includes('bondage-gear')) {
+        found.push('bondage-gear');
+    }
+    return found;
+}
+
+/**
+ * Read the tracker lines that belong to one character. Header rules match the
+ * inline-profile reader, so another combatant's lines are never returned.
+ *
+ * @param {string} memo
+ * @param {string} name
+ * @returns {string}
+ */
+export function extractProfileSourceText(memo, name) {
+    const key = normalizeLewdName(name);
+    if (!key) return '';
+    const sections = [];
+    for (const tag of ['CHARACTER', 'PARTY', 'COMBAT']) {
+        const content = extractBlock(memo, tag);
+        if (!content) continue;
+        let currentName = tag === 'CHARACTER' ? '{{user}}' : '';
+        let lines = [];
+        const flush = () => {
+            if (currentName && normalizeLewdName(currentName) === key && lines.length) {
+                sections.push(lines.join('\n'));
+            }
+            lines = [];
+        };
+        for (const line of content.split(/\r?\n/)) {
+            const cleaned = stripBullet(line);
+            if (!cleaned) continue;
+            if (/^(?:enemies|non-party allies|allies|party)\s*:/i.test(cleaned)) {
+                flush();
+                currentName = '';
+                continue;
+            }
+            const header = cleaned.match(CHARACTER_HEADER_RX);
+            if (header) {
+                flush();
+                currentName = header[1].trim();
+                continue;
+            }
+            if (!currentName) continue;
+            lines.push(cleaned);
+        }
+        flush();
+    }
+    return sections.join('\n').trim();
+}
+
+/**
+ * Collect anatomy/skill/kink/body/species signals from every supplied source.
+ * Pure: it reads plain data only and never touches state or the network.
+ *
+ * @param {{ unit?: object, card?: object|string, trackerText?: string, lorebookText?: string, notes?: string }} [sources]
+ * @returns {{ anatomy: string[], skills: string[], kinks: string[], body: string, species: string, provenance: object }}
+ */
+export function collectProfileSignals(sources = {}) {
+    const unit = sources.unit && typeof sources.unit === 'object' ? sources.unit : {};
+    const trackerText = String(sources.trackerText ?? '');
+    const lorebookText = String(sources.lorebookText ?? '');
+    const notes = String(sources.notes ?? '');
+    const cardValue = sources.card;
+    const cardSource = cardText(cardValue);
+    const unitText = [
+        unit.description,
+        unit.appearance,
+        unit.personality,
+        unit.notes,
+        notes,
+    ].map(entry => String(entry ?? '')).filter(Boolean).join('\n');
+
+    const buckets = [
+        { source: 'unit', text: unitText },
+        { source: 'card', text: cardSource },
+        { source: 'tracker', text: trackerText },
+        { source: 'lorebook', text: lorebookText },
+    ];
+
+    const anatomy = [];
+    const anatomySource = {};
+    const skills = [];
+    const skillSource = {};
+    const kinks = [];
+    const kinkSource = {};
+
+    const add = (list, map, token, source) => {
+        if (!token) return;
+        if (!list.includes(token)) list.push(token);
+        if (!map[token]) map[token] = source;
+    };
+
+    for (const bucket of buckets) {
+        if (!bucket.text) continue;
+        for (const tag of anatomyTokensIn(bucket.text)) add(anatomy, anatomySource, tag, bucket.source);
+
+        const words = wordSet(bucket.text);
+        for (const word of PROFILE_SKILL_WORDS) {
+            if (includesWord(words, word)) add(skills, skillSource, word, bucket.source);
+        }
+        for (const word of PROFILE_KINK_WORDS) {
+            if (includesWord(words, word)) add(kinks, kinkSource, word, bucket.source);
+        }
+        for (const value of labeledValues(bucket.text, ['skills', 'abilities'])) {
+            for (const token of splitList(value)) {
+                add(skills, skillSource, normalizeToken(token), bucket.source);
+            }
+        }
+    }
+
+    for (const token of asList(unit.anatomy)) {
+        add(anatomy, anatomySource, normalizeLewdAnatomy(token), 'unit');
+    }
+    // Capability traits are signals, not engine modifiers.
+    for (const token of asList(unit.traits)) {
+        const text = token && typeof token === 'object' ? token.name ?? token.id : token;
+        const tag = normalizeLewdAnatomy(text);
+        if (tag) add(anatomy, anatomySource, tag, 'unit');
+    }
+    // `unit.skills` are source names, not engine skill tags: they are carried
+    // into `sourceSkills` by `normalizeLewdProfile`, never into `skills`.
+
+    let body = '';
+    let bodySource = '';
+    for (const bucket of buckets) {
+        const found = labeledValue(bucket.text, ['body', 'appearance']);
+        if (found) {
+            body = found;
+            bodySource = bucket.source;
+            break;
+        }
+    }
+    if (!body && cardValue) {
+        const fallback = (typeof cardValue === 'string' ? cardValue : String(cardValue.description ?? '')).trim();
+        if (fallback) {
+            body = fallback.slice(0, 200);
+            bodySource = 'card';
+        }
+    }
+
+    let species = '';
+    let speciesSource = '';
+    for (const bucket of buckets) {
+        const found = labeledValue(bucket.text, ['species', 'race']);
+        if (found) {
+            species = found;
+            speciesSource = bucket.source;
+            break;
+        }
+    }
+    if (!species && cardSource) {
+        const match = cardSource.match(/\b(?:species|race)\s*(?:is|:)\s*([a-z][a-z' -]{2,40})/i);
+        if (match) {
+            species = match[1].trim();
+            speciesSource = 'card';
+        }
+    }
+
+    const provenance = {};
+    if (anatomy.length) provenance.anatomy = anatomySource;
+    if (skills.length) provenance.skills = skillSource;
+    if (kinks.length) provenance.kinks = kinkSource;
+    if (body) provenance.body = bodySource;
+    if (species) provenance.species = speciesSource;
+
+    return { anatomy, skills, kinks, body, species, provenance };
+}
+
+function applySignalsToInferredProfile(unit, signals, options = {}) {
+    const profile = normalizeLewdProfile({ name: unit?.name || 'Unknown' }, {
+        unit,
+        source: 'inferred',
+        sourceTraits: options.sourceTraits,
+    });
+    const anatomy = normalizeTokenList([...profile.anatomy, ...signals.anatomy], normalizeLewdAnatomy);
+    const skills = normalizeTokenList([...profile.skills, ...signals.skills]);
+    const kinks = normalizeTokenList([...profile.kinks, ...signals.kinks]);
+    const body = profile.body || signals.body;
+    const species = profile.species || signals.species;
+    const provenance = cloneProvenance(profile.provenance);
+
+    for (const field of ['anatomy', 'skills', 'kinks']) {
+        const tokens = field === 'anatomy' ? anatomy : field === 'skills' ? skills : kinks;
+        const signalMap = signals.provenance?.[field];
+        if (!signalMap) continue;
+        const map = provenance[field] && typeof provenance[field] === 'object'
+            ? { ...provenance[field] }
+            : {};
+        for (const token of tokens) {
+            if (signalMap[token]) map[token] = signalMap[token];
+        }
+        if (Object.keys(map).length) provenance[field] = map;
+    }
+    if (signals.body && body === signals.body) {
+        provenance.body = signals.provenance?.body || 'inferred';
+    }
+    if (signals.species && species === signals.species) {
+        provenance.species = signals.provenance?.species || 'inferred';
+    }
+
+    const inferredFields = [];
+    if (signals.anatomy.length) inferredFields.push('anatomy');
+    if (signals.skills.length) inferredFields.push('skills');
+    if (signals.kinks.length) inferredFields.push('kinks');
+    if (signals.body) inferredFields.push('body');
+    if (signals.species) inferredFields.push('species');
+
+    return {
+        ...profile,
+        anatomy,
+        skills,
+        kinks,
+        body: String(body ?? '').slice(0, 300),
+        species: String(species ?? '').slice(0, 80),
+        provenance,
+        inferredFields: [...new Set([...profile.inferredFields, ...inferredFields])],
+        inferred: true,
+        source: 'inferred',
+    };
+}
+
+/**
+ * Build an inferred profile from a unit plus optional card/tracker/lorebook
+ * sources. Never invents a limit; inference only adds capability tags.
+ *
+ * @param {object} [unit]
+ * @param {{ unit?: object, card?: object|string, trackerText?: string, lorebookText?: string, notes?: string }} [sources]
+ * @returns {object}
+ */
+export function inferProfileFromSources(unit = {}, sources = {}) {
+    const baseUnit = sources.unit && typeof sources.unit === 'object' ? sources.unit : unit;
+    const signals = collectProfileSignals({
+        unit: baseUnit,
+        card: sources.card,
+        trackerText: sources.trackerText,
+        lorebookText: sources.lorebookText,
+        notes: sources.notes ?? baseUnit?.notes,
+    });
+    // Capability words on `unit.traits` are source tags, never engine modifiers.
+    const sourceTraits = asList(baseUnit?.traits)
+        .map(entry => (entry && typeof entry === 'object' ? entry.name ?? entry.id : entry))
+        .map(normalizeToken)
+        .filter(Boolean);
+    return applySignalsToInferredProfile(baseUnit, signals, { sourceTraits });
+}
+
+/**
+ * Merge an inferred signal set into an explicit profile. The explicit profile
+ * wins for body/species and duplicate tokens; inference only fills gaps and
+ * records lower-priority provenance. Pure: returns a new object.
+ *
+ * @param {object} profile
+ * @param {object} inferred
+ * @returns {object}
+ */
+export function mergeProfileInference(profile, inferred = {}) {
+    const base = profile && typeof profile === 'object' ? profile : {};
+    const extra = inferred && typeof inferred === 'object' ? inferred : {};
+    const anatomy = normalizeTokenList([...asList(base.anatomy), ...asList(extra.anatomy)], normalizeLewdAnatomy);
+    const skills = normalizeTokenList([...asList(base.skills), ...asList(extra.skills)]);
+    const kinks = normalizeTokenList([...asList(base.kinks), ...asList(extra.kinks)]);
+    const body = String(base.body ?? '').trim() || String(extra.body ?? '').trim();
+    const species = String(base.species ?? '').trim() || String(extra.species ?? '').trim();
+
+    const provenance = cloneProvenance(extra.provenance);
+    const baseProvenance = base.provenance && typeof base.provenance === 'object' ? base.provenance : {};
+    for (const field of ['anatomy', 'skills', 'kinks']) {
+        const map = baseProvenance[field];
+        if (!map || typeof map !== 'object') continue;
+        const mergedMap = provenance[field] && typeof provenance[field] === 'object'
+            ? { ...provenance[field] }
+            : {};
+        for (const [token, source] of Object.entries(map)) mergedMap[token] = source;
+        provenance[field] = mergedMap;
+    }
+    if (base.body) provenance.body = baseProvenance.body || 'lewd';
+    else if (extra.body) provenance.body = extra.provenance?.body || 'inferred';
+    if (base.species) provenance.species = baseProvenance.species || 'lewd';
+    else if (extra.species) provenance.species = extra.provenance?.species || 'inferred';
+
+    const inferredFields = [...new Set([
+        ...(Array.isArray(base.inferredFields) ? base.inferredFields : []),
+        ...(Array.isArray(extra.inferredFields) ? extra.inferredFields : []),
+    ])];
+
+    return {
+        ...extra,
+        ...base,
+        anatomy,
+        skills,
+        kinks,
+        body,
+        species,
+        provenance,
+        inferredFields,
+        sourceSkills: normalizeNameList([...asList(base.sourceSkills), ...asList(extra.sourceSkills)]),
+        sourceTraits: normalizeTokenList([...asList(base.sourceTraits), ...asList(extra.sourceTraits)]),
+    };
+}
+
 /**
  * Neutral profile for a character with no `[LEWD]` entry. Derived from CON/WIS/
  * CHA and level; never invents a hard limit and is always marked inferred.
+ * The optional third argument lets callers feed card/tracker/lorebook text
+ * through the same signal collector as `inferProfileFromSources`.
+ *
  * @param {object} unit
  * @param {Record<string, any>} [settings]
+ * @param {{ card?: object|string, trackerText?: string, lorebookText?: string, notes?: string }} [sources]
  * @returns {object}
  */
-export function inferProfile(unit = {}, settings = {}) {
+export function inferProfile(unit = {}, settings = {}, sources = {}) {
     void settings;
-    return normalizeLewdProfile({ name: unit?.name || 'Unknown' }, { unit, source: 'inferred' });
+    return inferProfileFromSources(unit, sources);
 }
 
 /**
@@ -546,13 +1068,22 @@ function parseKeyValueFields(body, warnings) {
             const parsed = parseSensitivity(value, warnings);
             fields.sensitivity = { ...(fields.sensitivity || {}), ...parsed };
         } else if (key === 'traits') {
-            const parsed = parseTraits(value, warnings);
+            const parsed = parseTraitValue(value, warnings);
             fields.traits = { ...(fields.traits || {}) };
-            for (const [traitKey, delta] of Object.entries(parsed)) {
+            for (const [traitKey, delta] of Object.entries(parsed.traits)) {
                 if (traitKey === 'sensitivity') {
                     fields.traits.sensitivity = { ...(fields.traits.sensitivity || {}), ...delta };
                 } else {
                     fields.traits[traitKey] = (fields.traits[traitKey] || 0) + delta;
+                }
+            }
+            if (parsed.capabilities.length) {
+                fields.sourceTraits = [...asList(fields.sourceTraits), ...parsed.capabilities];
+                const traitAnatomy = parsed.capabilities
+                    .map(capability => normalizeLewdAnatomy(capability))
+                    .filter(Boolean);
+                if (traitAnatomy.length) {
+                    fields.anatomy = [...asList(fields.anatomy), ...traitAnatomy];
                 }
             }
         } else if (key === 'likes' || key === 'dislikes') {
@@ -601,6 +1132,10 @@ function mergeRawProfile(target, incoming) {
     const targetLimits = Array.isArray(target.limits) ? target.limits : splitList(target.limits);
     const incomingLimits = Array.isArray(incoming.limits) ? incoming.limits : splitList(incoming.limits);
     merged.limits = [...new Set([...targetLimits, ...incomingLimits])];
+    for (const listKey of ['anatomy', 'skills', 'kinks', 'sourceTraits', 'sourceSkills']) {
+        if (target[listKey] == null && incoming[listKey] == null) continue;
+        merged[listKey] = [...new Set([...asList(target[listKey]), ...asList(incoming[listKey])])];
+    }
     merged.warnings = [...(target.warnings || []), ...(incoming.warnings || [])];
     return merged;
 }
@@ -676,11 +1211,39 @@ function parseInlineLines(memo, warnings) {
 }
 
 /**
+ * Resolve a character card by name. Accepts a map (`{ [name]: card }`), an
+ * array of cards, or a single card. Matching is case-insensitive.
+ *
+ * @param {object|Array<object>|Record<string, object>|null} cards
+ * @param {string} name
+ * @returns {object|string|null}
+ */
+export function findProfileCard(cards, name) {
+    if (!cards || typeof cards === 'string') return null;
+    const key = normalizeLewdName(name);
+    if (!key) return null;
+    if (Array.isArray(cards)) {
+        return cards.find(card => normalizeLewdName(card?.name) === key) || null;
+    }
+    if (typeof cards !== 'object') return null;
+    for (const [cardKey, card] of Object.entries(cards)) {
+        if (!card) continue;
+        const cardName = typeof card === 'object' ? card.name : '';
+        if (normalizeLewdName(cardKey) === key || normalizeLewdName(cardName) === key) return card;
+    }
+    return null;
+}
+
+/**
  * Parse explicit lewd profiles (no inferred entries) from the memo.
+ *
+ * Optional `cards`/`card`/`lorebookText` sources enrich every explicit profile
+ * through `inferProfileFromSources` + `mergeProfileInference`; explicit
+ * `[LEWD]` values keep their own provenance and win duplicate tokens.
  *
  * @param {string} memo
  * @param {Record<string, any>} [settings]
- * @param {{ units?: Array<object> }} [options]
+ * @param {{ units?: Array<object>, cards?: object, card?: object|string, lorebookText?: string }} [options]
  * @returns {Record<string, object>} keyed by `normalizeLewdName(profile.name)`
  */
 export function parseLewdProfiles(memo, settings = {}, options = {}) {
@@ -693,23 +1256,38 @@ export function parseLewdProfiles(memo, settings = {}, options = {}) {
         const key = normalizeLewdName(unit?.name);
         if (key) unitsByName.set(key, unit);
     }
+    const cards = options.cards || null;
+    const lorebookText = String(options.lorebookText ?? '');
+
+    const enrich = (profile) => {
+        const key = normalizeLewdName(profile.name);
+        const unit = unitsByName.get(key) || null;
+        const matchingCard = findProfileCard(cards, profile.name)
+            || (options.card && normalizeLewdName(options.card?.name) === key ? options.card : null);
+        const inferred = inferProfileFromSources(unit || { name: profile.name }, {
+            card: matchingCard,
+            trackerText: extractProfileSourceText(memo, profile.name),
+            lorebookText,
+        });
+        return mergeProfileInference(profile, inferred);
+    };
 
     const profiles = {};
     for (const [key, raw] of explicit) {
         // `[LEWD]` wins over inline lines for the same character.
-        profiles[key] = normalizeLewdProfile(raw, {
+        profiles[key] = enrich(normalizeLewdProfile(raw, {
             unit: unitsByName.get(key),
             source: 'lewd',
             warnings: [...(raw.warnings || [])],
-        });
+        }));
     }
     for (const [key, raw] of inline) {
         if (profiles[key]) continue;
-        profiles[key] = normalizeLewdProfile(raw, {
+        profiles[key] = enrich(normalizeLewdProfile(raw, {
             unit: unitsByName.get(key),
             source: 'inline',
             warnings: [...(raw.warnings || [])],
-        });
+        }));
     }
     if (warnings.length) {
         console.warn('[RPG Tracker] Lewd Combat profile warnings:', warnings);

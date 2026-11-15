@@ -73,7 +73,7 @@ describe('technique compendium', () => {
             techniques: [
                 { id: 'good', name: 'Good', category: 'technique', zones: ['neck'], targetMode: 'single' },
                 { id: 'bad', name: 'Bad', category: 'nonsense', zones: ['neck'], targetMode: 'single' },
-                { id: 'bad-zone', name: 'Bad Zone', category: 'technique', zones: ['tail'], targetMode: 'single' },
+                { id: 'bad-zone', name: 'Bad Zone', category: 'technique', zones: ['flipper'], targetMode: 'single' },
             ],
         });
         const normalized = normalizeLewdTechniqueCompendium(raw);
@@ -181,7 +181,7 @@ describe('one-time technique compiler', () => {
 
     it('rejects an invalid compiler response without caching it', async () => {
         const settings = {};
-        const sendStateRequest = vi.fn(async () => JSON.stringify(compiledPayload({ zones: ['tail'] })));
+        const sendStateRequest = vi.fn(async () => JSON.stringify(compiledPayload({ zones: ['flipper'] })));
         const result = await compileLewdTechnique({ name: 'Tail Trick' }, settings, { sendStateRequest });
         expect(result.ok).toBe(false);
         expect(result.error).toContain('Unknown zone');

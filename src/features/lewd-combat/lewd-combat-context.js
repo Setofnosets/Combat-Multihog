@@ -21,6 +21,8 @@ import {
     listLegalActions,
 } from './lewd-combat-engine.js';
 import {
+    extractProfileSourceText,
+    findProfileCard,
     inferProfile,
     normalizeLewdName,
     parseLewdProfiles,
@@ -44,6 +46,37 @@ function unitKey(unit) {
 
 function profileIsExplicit(profile) {
     return !!profile && profile.inferred !== true && profile.source !== 'inferred';
+}
+
+/**
+ * Best-effort card map for profile inference: active narrator character,
+ * supplied `options.cards`, and any `ctx.characters` entries by name.
+ */
+function buildCardMap(ctx, options = {}) {
+    const map = {};
+    const characters = ctx?.characters;
+    if (Array.isArray(characters)) {
+        for (const card of characters) {
+            if (card?.name) map[card.name] = card;
+        }
+    } else if (characters && typeof characters === 'object') {
+        for (const card of Object.values(characters)) {
+            if (card?.name) map[card.name] = card;
+        }
+    }
+    const activeCard = ctx?.characters?.[ctx?.characterId];
+    if (activeCard?.name) map[activeCard.name] = activeCard;
+    if (options.cards && typeof options.cards === 'object' && !Array.isArray(options.cards)) {
+        for (const [name, card] of Object.entries(options.cards)) {
+            if (card && !map[name]) map[name] = card;
+        }
+    }
+    if (options.card) {
+        const cardName = typeof options.card === 'object' ? options.card.name : '';
+        if (cardName) map[cardName] = options.card;
+        else if (ctx?.name2) map[ctx.name2] = options.card;
+    }
+    return map;
 }
 
 /**
@@ -164,6 +197,14 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     const location = text(options.location || collected?.location || '');
     const sceneExcerpt = String(collected?.sceneExcerpt || '');
     const chatId = resolveChatId(collected, ctx, options);
+    // Lorebook text is read, never fetched; no new I/O happens here.
+    const lorebookText = String(options.lorebookText ?? ctx?.lorebookText ?? ctx?.worldInfoText ?? '');
+    const cardMap = buildCardMap(ctx, options);
+    const inferenceSources = (name) => ({
+        card: findProfileCard(cardMap, name),
+        trackerText: extractProfileSourceText(sourceMemo, name),
+        lorebookText,
+    });
 
     let playerUnits = Array.isArray(collected?.playerUnits) ? [...collected.playerUnits] : [];
     let enemies = Array.isArray(collected?.enemies) ? [...collected.enemies] : [];
@@ -185,7 +226,11 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
     }
 
     const units = [...playerUnits, ...allies, ...enemies].filter(Boolean);
-    const profiles = parseLewdProfiles(sourceMemo, settings, { units });
+    const profiles = parseLewdProfiles(sourceMemo, settings, {
+        units,
+        cards: cardMap,
+        lorebookText,
+    });
 
     const candidates = [];
     const byKey = new Map();
@@ -245,7 +290,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
                 unit,
                 side: unit.side || 'player',
                 roleSuggestion: explicit?.role || '',
-                profile: explicit || inferProfile(unit, settings),
+                profile: explicit || inferProfile(unit, settings, inferenceSources(unit.name)),
                 inferred: !profileIsExplicit(explicit),
                 sources: [source],
             });
@@ -268,7 +313,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
             unit,
             side: unit?.side || 'player',
             roleSuggestion: explicit?.role || '',
-            profile: explicit || inferProfile(unit || { name }, settings),
+            profile: explicit || inferProfile(unit || { name }, settings, inferenceSources(name)),
             inferred: !profileIsExplicit(explicit),
             sources: ['session'],
         });
@@ -296,6 +341,26 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
             );
     }
 
+    // Diagnostic only: which inference buckets were actually consulted.
+    const profileSources = new Set();
+    for (const profile of Object.values(profiles || {})) {
+        if (profile?.source === 'lewd' || profile?.source === 'inline') {
+            profileSources.add(profile.source);
+        }
+    }
+    if (units.length) profileSources.add('unit');
+    const consultedNames = new Set([
+        ...Object.keys(profiles || {}),
+        ...units.map(unitKey),
+        text(ctx?.name1),
+        text(ctx?.name2),
+    ].filter(Boolean).map(normalizeLewdName));
+    for (const name of consultedNames) {
+        if (findProfileCard(cardMap, name)) profileSources.add('card');
+        if (extractProfileSourceText(sourceMemo, name)) profileSources.add('tracker');
+    }
+    if (lorebookText) profileSources.add('lorebook');
+
     return {
         chatId,
         memo: sourceMemo,
@@ -304,6 +369,7 @@ export function collectLewdContext(settings = {}, ctx = {}, options = {}) {
         controlMode,
         playerNames: [...playerNames],
         profiles,
+        profileSources: [...profileSources],
         units,
         candidates,
         warnings,
@@ -634,6 +700,10 @@ export function createLewdEncounterFromContext(settings = {}, ctx = {}, options 
     state.location = text(options.location) || context.location || '';
     state.reason = text(options.reason);
     state.tone = text(options.tone) || text(settings.lewdCombatExplicitness) || 'explicit';
+    state.profileInference = {
+        completedAt: Date.now(),
+        sources: Array.isArray(context.profileSources) ? [...context.profileSources] : [],
+    };
 
     const warnings = [...context.warnings];
     let opening = null;

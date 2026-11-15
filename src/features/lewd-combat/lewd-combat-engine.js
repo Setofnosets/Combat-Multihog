@@ -218,6 +218,17 @@ function uniqueId(state, requested, name) {
     return `${base}-${index}`;
 }
 
+function cloneProfileProvenance(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const copy = {};
+    for (const [key, entry] of Object.entries(value)) {
+        copy[key] = entry && typeof entry === 'object' && !Array.isArray(entry)
+            ? { ...entry }
+            : entry;
+    }
+    return copy;
+}
+
 function normalizeProfile(raw, unit) {
     if (!raw) return null;
     if (Number.isFinite(Number(raw.maxStamina))) {
@@ -230,6 +241,15 @@ function normalizeProfile(raw, unit) {
             limits: Array.isArray(raw.limits) ? [...raw.limits] : [],
             traits: { ...(raw.traits || {}) },
             warnings: Array.isArray(raw.warnings) ? [...raw.warnings] : [],
+            anatomy: Array.isArray(raw.anatomy) ? [...raw.anatomy] : [],
+            skills: Array.isArray(raw.skills) ? [...raw.skills] : [],
+            kinks: Array.isArray(raw.kinks) ? [...raw.kinks] : [],
+            sourceSkills: Array.isArray(raw.sourceSkills) ? [...raw.sourceSkills] : [],
+            sourceTraits: Array.isArray(raw.sourceTraits) ? [...raw.sourceTraits] : [],
+            provenance: cloneProfileProvenance(raw.provenance),
+            inferredFields: Array.isArray(raw.inferredFields) ? [...raw.inferredFields] : [],
+            body: String(raw.body ?? ''),
+            species: String(raw.species ?? ''),
         };
     }
     return normalizeLewdProfile(raw, { unit });
@@ -248,6 +268,11 @@ function buildParticipant(raw = {}, state, index, controlMode = 'auto') {
     if (raw.control === 'player' || raw.control === 'ai') control = raw.control;
     else if (mode === 'player-all') control = 'player';
     else control = raw.side === 'opponent' || raw.side === 'enemy' ? 'ai' : 'player';
+    const profileList = (key) => {
+        if (Array.isArray(raw?.[key])) return raw[key].map(String);
+        if (Array.isArray(profile?.[key])) return profile[key].map(String);
+        return [];
+    };
     return {
         id: uniqueId(state, raw.id, name),
         name,
@@ -262,6 +287,18 @@ function buildParticipant(raw = {}, state, index, controlMode = 'auto') {
         tieBreak: 0,
         ai: control === 'ai',
         profile,
+        anatomy: profileList('anatomy'),
+        skills: profileList('skills'),
+        kinks: profileList('kinks'),
+        sourceSkills: profileList('sourceSkills'),
+        sourceTraits: profileList('sourceTraits'),
+        inferredFields: profileList('inferredFields'),
+        provenance: raw?.provenance && typeof raw.provenance === 'object'
+            ? cloneProfileProvenance(raw.provenance)
+            : cloneProfileProvenance(profile.provenance),
+        body: String(raw.body ?? profile.body ?? ''),
+        species: String(raw.species ?? profile.species ?? ''),
+        notes: String(raw.notes ?? profile.notes ?? '').trim(),
         stamina,
         maxStamina,
         arousal: clamp(raw.arousal ?? 0, 0, maxArousal, 0),
@@ -1506,6 +1543,14 @@ export function hydrateLewdState(raw) {
         participant.maxPoise = clamp(participant.maxPoise, 4, 16, 6);
         participant.poise = clamp(participant.poise, 0, participant.maxPoise, participant.maxPoise);
         if (!participant.profile) participant.profile = inferProfile(participant, {});
+        // Profile capability data is additive. Legacy boards get empty
+        // containers; unknown persisted fields are left untouched.
+        for (const key of ['anatomy', 'skills', 'kinks', 'sourceSkills', 'sourceTraits', 'inferredFields']) {
+            participant[key] = Array.isArray(participant[key]) ? participant[key] : [];
+        }
+        participant.provenance = cloneProfileProvenance(participant.provenance);
+        participant.body = String(participant.body ?? '');
+        participant.species = String(participant.species ?? '');
     }
     refreshEngagedWith(state);
 

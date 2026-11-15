@@ -34,7 +34,7 @@ export const DEFAULT_PC_SECTIONS = [
 export const LEWD_DESIRES_SECTION = {
     id: 'sec_desires',
     name: 'Desires',
-    description: 'Optional intimate preferences and boundaries: likes, dislikes, sensitivities, and hard limits. Never invent a hard limit; leave the section out when nothing is established.',
+    description: 'Optional intimate preferences and boundaries: likes, dislikes, sensitivities, and hard limits, plus optional anatomy, skills, kinks, body, and species fields. Never invent a hard limit, and never guess anatomy from gender — leave a field out when nothing is established.',
     icon: '💗',
     color: '#c96b8e',
 };

@@ -441,6 +441,102 @@ describe('lewd-combat-context', () => {
         expect(JSON.stringify(serializeLewdState(state))).toBe(before);
     });
 
+    it('infers a card/tracker profile for a no-[LEWD] character and preserves explicit anatomy', () => {
+        const inferMemo = `[CHARACTER]
+Aria: 24/24 HP | AC 14
+Attr: STR 10 DEX 14 CON 12 INT 10 WIS 12 CHA 16
+[/CHARACTER]
+
+[PARTY]
+- Bran: 18/18 HP | AC 13
+Attr: STR 10 DEX 12 CON 10 INT 10 WIS 14 CHA 10
+- Nyx: 12/12 HP | AC 12
+Species: kitsune
+Body: Slim, silver-furred, with a long tail.
+[/PARTY]`;
+        const settings = makeSettings({ currentMemo: inferMemo });
+        const ctx = {
+            chatId: 'infer-chat',
+            characters: [{ name: 'Nyx', description: 'A tall kitsune with a long tail.' }],
+        };
+
+        const inferred = candidate(collectLewdContext(settings, ctx), 'Nyx');
+        expect(inferred.profile.inferred).toBe(true);
+        expect(inferred.profile.anatomy).toContain('tail');
+        expect(['card', 'tracker']).toContain(inferred.profile.provenance.anatomy.tail);
+
+        const explicitMemo = `${inferMemo}
+
+[LEWD]
+- Nyx: anatomy=wings
+[/LEWD]`;
+        const explicit = candidate(
+            collectLewdContext(makeSettings({ currentMemo: explicitMemo }), ctx),
+            'Nyx',
+        );
+        expect(explicit.profile.inferred).toBe(false);
+        expect(explicit.profile.anatomy).toEqual(expect.arrayContaining(['wings', 'tail']));
+        expect(explicit.profile.provenance.anatomy.wings).toBe('lewd');
+    });
+
+    it('records profileInference and persists capability fields through hydrate', () => {
+        const inferMemo = `[CHARACTER]
+Aria: 24/24 HP | AC 14
+Attr: STR 10 DEX 14 CON 12 INT 10 WIS 12 CHA 16
+[/CHARACTER]
+
+[PARTY]
+- Bran: 18/18 HP | AC 13
+- Nyx: 12/12 HP | AC 12
+Species: kitsune
+Body: Slim, silver-furred, with a long tail.
+[/PARTY]`;
+        const settings = makeSettings({ currentMemo: inferMemo });
+        const ctx = {
+            chatId: 'profile-inference-chat',
+            characters: [{ name: 'Nyx', description: 'A tall kitsune with a long tail.' }],
+        };
+        const { state } = createLewdEncounterFromContext(settings, ctx, {
+            participantNames: ['Aria', 'Nyx'],
+            seed: 'profile-inference-seed',
+        });
+
+        expect(state.profileInference).toBeTruthy();
+        expect(state.profileInference.completedAt).toBeGreaterThan(0);
+        expect(state.profileInference.sources).toEqual(expect.arrayContaining(['card', 'tracker', 'unit']));
+
+        const nyx = state.participants.find(participant => participant.name === 'Nyx');
+        expect(nyx.anatomy).toContain('tail');
+        expect(nyx.skills).toEqual(expect.any(Array));
+        expect(nyx.kinks).toEqual(expect.any(Array));
+        expect(nyx.sourceSkills).toEqual(expect.any(Array));
+        expect(nyx.sourceTraits).toEqual(expect.any(Array));
+        expect(typeof nyx.notes).toBe('string');
+
+        const restored = hydrateLewdState(serializeLewdState(state));
+        const restoredNyx = restored.participants.find(participant => participant.name === 'Nyx');
+        expect(restoredNyx.anatomy).toEqual(nyx.anatomy);
+        expect(restoredNyx.skills).toEqual(nyx.skills);
+        expect(restoredNyx.kinks).toEqual(nyx.kinks);
+        expect(restoredNyx.sourceSkills).toEqual(nyx.sourceSkills);
+        expect(restoredNyx.sourceTraits).toEqual(nyx.sourceTraits);
+    });
+
+    it('drops unknown anatomy tokens without throwing', () => {
+        const memo = `[CHARACTER]
+Aria: 24/24 HP
+[/CHARACTER]
+
+[PARTY]
+- Nyx: 12/12 HP
+Body: A strange flipper and a soul.
+[/PARTY]`;
+        const settings = makeSettings({ currentMemo: memo });
+        expect(() => collectLewdContext(settings, { chatId: 'garbage-anatomy' })).not.toThrow();
+        const nyx = candidate(collectLewdContext(settings, { chatId: 'garbage-anatomy' }), 'Nyx');
+        expect(nyx.profile.anatomy).toEqual([]);
+    });
+
     it('round-trips participants, engagements, pools, seed, and roll count', () => {
         const { state } = createLewdEncounterFromContext(
             makeSettings(),

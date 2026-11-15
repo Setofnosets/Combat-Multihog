@@ -99,7 +99,7 @@ describe('shipped technique catalog', () => {
         };
         expect(validateLewdTechnique(base).ok).toBe(true);
         expect(validateLewdTechnique({ ...base, category: 'nonsense' }).errors.join(' ')).toContain('Unknown category');
-        expect(validateLewdTechnique({ ...base, zones: ['tail'] }).errors.join(' ')).toContain('Unknown zone');
+        expect(validateLewdTechnique({ ...base, zones: ['flipper'] }).errors.join(' ')).toContain('Unknown zone');
         expect(validateLewdTechnique({ ...base, check: { stat: 'luck' } }).errors.join(' ')).toContain('Unknown check stat');
         expect(validateLewdTechnique({ ...base, targetMode: 'all' }).errors.join(' ')).toContain('Unknown targetMode');
         expect(validateLewdTechnique({ ...base, requires: { tentacles: true } }).errors.join(' ')).toContain('Unknown requirement');

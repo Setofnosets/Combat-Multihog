@@ -49,6 +49,11 @@ function arr(value) {
     return [value];
 }
 
+function capabilityList(participant, key) {
+    const profile = participant?.profile || {};
+    return arr(participant?.[key] ?? profile[key]).map(String);
+}
+
 function findParticipant(state, reference) {
     if (!state || reference == null) return null;
     if (typeof reference === 'object') {
@@ -177,6 +182,14 @@ function payloadProfiles(state) {
             endurance: Number(profile.endurance) || 0,
             experience: Number(profile.experience) || 0,
             inferred: profile.inferred === true,
+            body: String(participant.body ?? profile.body ?? ''),
+            species: String(participant.species ?? profile.species ?? ''),
+            anatomy: capabilityList(participant, 'anatomy'),
+            skills: capabilityList(participant, 'skills'),
+            kinks: capabilityList(participant, 'kinks'),
+            sourceSkills: capabilityList(participant, 'sourceSkills'),
+            sourceTraits: capabilityList(participant, 'sourceTraits'),
+            inferredFields: capabilityList(participant, 'inferredFields'),
         };
         // Inferred profiles never declare limits; exposing an empty list would
         // look like a declaration the player never made.
@@ -225,6 +238,10 @@ export function buildLewdAgentPayload(state, unit, options = {}) {
             maxArousal: actor?.maxArousal ?? 0,
             poise: actor?.poise ?? 0,
             maxPoise: actor?.maxPoise ?? 0,
+            anatomy: capabilityList(actor, 'anatomy'),
+            skills: capabilityList(actor, 'skills'),
+            kinks: capabilityList(actor, 'kinks'),
+            sourceTraits: capabilityList(actor, 'sourceTraits'),
             overwhelmed: state && actor ? isOverwhelmed(state, actor) : false,
         },
         participants: participants.map(participant => ({

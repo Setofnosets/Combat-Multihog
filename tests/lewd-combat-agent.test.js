@@ -126,6 +126,62 @@ describe('lewd-combat-agent', () => {
         expect(payload.rules.constraints.join(' ')).toContain('Never invent numbers, targets, body zones, or outcomes.');
     });
 
+    it('exposes anatomy, skills, kinks, and source tags without leaking provenance', () => {
+        const state = createLewdEncounterState({
+            seed: 'agent-profile-seed',
+            participants: [
+                {
+                    name: 'Aria',
+                    side: 'player',
+                    profile: profile('Aria', {
+                        anatomy: ['vagina'],
+                        skills: ['bondage'],
+                        kinks: ['praise'],
+                        sourceSkills: ['Ropework'],
+                        sourceTraits: ['tail'],
+                        body: 'Lean.',
+                        species: 'human',
+                        inferredFields: ['anatomy'],
+                    }),
+                },
+                {
+                    name: 'Bran',
+                    side: 'opponent',
+                    profile: profile('Bran', {
+                        anatomy: ['penis', 'tail'],
+                        skills: ['teasing'],
+                        kinks: ['praise'],
+                        sourceSkills: [],
+                        sourceTraits: ['tail'],
+                        body: 'Broad.',
+                        species: 'elf',
+                    }),
+                },
+            ],
+        });
+        const aria = unit(state, 'Aria');
+        const bran = unit(state, 'Bran');
+        const payload = buildLewdAgentPayload(state, bran);
+
+        expect(payload.knownProfiles[aria.id]).toMatchObject({
+            body: 'Lean.',
+            species: 'human',
+            anatomy: ['vagina'],
+            skills: ['bondage'],
+            kinks: ['praise'],
+            sourceSkills: ['Ropework'],
+            sourceTraits: ['tail'],
+            inferredFields: ['anatomy'],
+        });
+        expect(payload.actor).toMatchObject({
+            anatomy: ['penis', 'tail'],
+            skills: ['teasing'],
+            kinks: ['praise'],
+            sourceTraits: ['tail'],
+        });
+        expect(JSON.stringify(payload)).not.toContain('provenance');
+    });
+
     it('builds prompts with the payload and actor name', () => {
         const state = makeState();
         const actor = unit(state, 'Bran');
