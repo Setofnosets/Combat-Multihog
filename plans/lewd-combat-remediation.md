@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** in progress — Phase 1 (B1-B5) and Phase 2 (A1-A2) implemented and green; next: A3
+- **Status:** in progress — Phase 1 (B1-B5) and Phase 2 (A1-A4) implemented and green; next: A5
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
