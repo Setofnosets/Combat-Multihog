@@ -2883,6 +2883,62 @@
                         </div>
                     </div><!-- /#rpg_combat_traditional_pane -->
 
+                    <div class="inline-drawer" id="rpg_lewd_combat_drawer">
+                        <div class="inline-drawer-toggle inline-drawer-header">
+                            <i class="fa-solid fa-heart rt-lc-drawer-icon" style="margin-right: 6px;"></i>
+                            <b>Lewd Combat (secondary)</b>
+                            <div class="inline-drawer-icon fa-solid fa-circle-down down"></div>
+                        </div>
+                        <div class="inline-drawer-content">
+                            <div class="rt-tc-settings-note">An optional, consent-aware board for intimate contests. It is independent of the combat style above: the selected style keeps handling ordinary hostile fights. While this module is enabled, <code>[LEWD]</code> profile blocks are sent to the model. Off by default.</div>
+                            <label class="checkbox_label" for="rpg_lewd_combat_enabled">
+                                <input type="checkbox" id="rpg_lewd_combat_enabled" />
+                                Enable Lewd Combat
+                            </label>
+                            <div id="rpg_lewd_combat_options" style="display: none;">
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_explicitness">Explicitness</label>
+                                    <select id="rpg_lewd_combat_explicitness" class="text_pole">
+                                        <option value="explicit">Explicit (default)</option>
+                                        <option value="suggestive">Suggestive</option>
+                                        <option value="fade-to-black">Fade to black</option>
+                                    </select>
+                                    <div class="rt-tc-settings-note">Controls the prose pass only; the engine math never changes.</div>
+                                </div>
+                                <label class="checkbox_label" for="rpg_lewd_combat_darker_themes">
+                                    <input type="checkbox" id="rpg_lewd_combat_darker_themes" />
+                                    Allow darker themes (still bounded by every character's hard limits)
+                                </label>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_prose_frequency">Prose frequency</label>
+                                    <select id="rpg_lewd_combat_prose_frequency" class="text_pole">
+                                        <option value="per-exchange">Per exchange (default)</option>
+                                        <option value="per-round">Per round</option>
+                                        <option value="climax-only">Climax only</option>
+                                        <option value="off">Off — templated beats only</option>
+                                    </select>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_round_cap">Round cap</label>
+                                    <input type="number" id="rpg_lewd_combat_round_cap" class="text_pole" min="1" max="60" step="1" value="12" />
+                                    <div class="rt-tc-settings-note">Reaching the cap ends the encounter as a draw.</div>
+                                </div>
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_max_partners">Max concurrent partners</label>
+                                    <input type="number" id="rpg_lewd_combat_max_partners" class="text_pole" min="1" max="4" step="1" value="2" />
+                                </div>
+                            </div>
+                            <div class="rt-tc-field">
+                                <div id="rpg_lewd_combat_status" class="rt-lc-status">Lewd Combat: no board in this chat.</div>
+                                <div class="rt-tc-settings-actions">
+                                    <button type="button" id="rpg_lewd_combat_open" class="menu_button interactable"><i class="fa-solid fa-heart"></i> Open Lewd Combat board</button>
+                                    <button type="button" id="rpg_lewd_combat_remove" class="menu_button interactable"><i class="fa-solid fa-broom"></i> Discard board in this chat</button>
+                                </div>
+                                <div class="rt-tc-settings-note">Boards are saved per chat under <code>lewdCombatByChat</code> and never touch <code>[COMBAT]</code>, HP, or Willpower. A running lewd board blocks combat-style switching, just like an open tactical board.</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="rt-tc-settings-note">Combat results are written to <code>[COMBAT]</code> as <code>END_COMBAT</code> and queued as an authoritative aftermath block for the narrator. Each board is saved per chat under the extension settings.</div>
                 </div>
             </div>

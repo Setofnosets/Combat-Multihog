@@ -13,15 +13,21 @@ describe('clearing open combat encounters', () => {
             traditionalCombatByChat: {
                 'third-chat': { preparing: { active: true, startedAt: Date.now() }, units: [] },
             },
+            lewdCombatByChat: {
+                'lewd-chat': { status: 'active', participants: [], updatedAt: 25 },
+                'finished-lewd-chat': { status: 'victory', participants: [], updatedAt: 5 },
+            },
             tacticalCombatReturnByChat: { 'other-chat': { chatId: 'other-chat' } },
         };
 
         const result = clearActiveCombatEncounters(settings);
 
-        expect(result.cleared).toBe(2);
-        expect(result.chatIds).toEqual(['other-chat', 'third-chat']);
+        expect(result.cleared).toBe(3);
+        expect(result.chatIds).toEqual(['other-chat', 'lewd-chat', 'third-chat']);
         expect(settings.tacticalCombatByChat['other-chat']).toBeUndefined();
         expect(settings.traditionalCombatByChat['third-chat']).toBeUndefined();
+        expect(settings.lewdCombatByChat['lewd-chat']).toBeUndefined();
+        expect(settings.lewdCombatByChat['finished-lewd-chat'].status).toBe('victory');
         expect(settings.tacticalCombatByChat['vitest-chat'].status).toBe('victory');
         expect(settings.tacticalCombatReturnByChat['other-chat']).toBeUndefined();
         expect(hasActiveCombatBoard(settings)).toBe(false);

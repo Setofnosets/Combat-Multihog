@@ -1660,6 +1660,15 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'traditionalCombatSpecialPrompt',
     'traditionalCombatActionCatalogJson',
     'traditionalCombatByChat',
+    // Lewd Combat is a secondary module. Its toggle, tuning, and per-chat
+    // boards are global configuration too, never chat-state projections.
+    'lewdCombatEnabled',
+    'lewdCombatExplicitness',
+    'lewdCombatDarkerThemes',
+    'lewdCombatProseFrequency',
+    'lewdCombatRoundCap',
+    'lewdCombatMaxPartners',
+    'lewdCombatByChat',
     // Tick targeting is operational campaign state: mapped roots differ by chat.
     // Keep these fields in chatStates so reload restores the active campaign's choices.
     'mapEvolutionSystemPrompt',

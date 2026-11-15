@@ -272,6 +272,17 @@ export function buildDefaultSettings() {
         traditionalCombatActionCatalogJson: DEFAULT_TRADITIONAL_ACTION_CATALOG_JSON,
         traditionalCombatByChat: {},
 
+        // ── Lewd Combat (secondary opt-in module) ─────────────────────────
+        // Independent of `combatStyle`: enabling it never changes the primary
+        // board selector. Off by default and inert until the feature is built.
+        lewdCombatEnabled: false,
+        lewdCombatExplicitness: "explicit",
+        lewdCombatDarkerThemes: false,
+        lewdCombatProseFrequency: "per-exchange",
+        lewdCombatRoundCap: 12,
+        lewdCombatMaxPartners: 2,
+        lewdCombatByChat: {},
+
         renderedViewActive: true,
 
         panelLayoutMode: 'stack',   // 'stack' = classic vertical stack | 'tabs' = compact tab mode (Character/Combat pinned, rest behind tabs)

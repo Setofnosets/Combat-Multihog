@@ -22,15 +22,19 @@ import {
 } from '../tactical-combat/tactical-combat-store.js';
 import { resetTacticalCombatEncounter } from '../tactical-combat/tactical-combat-ui.js';
 import { resetTraditionalCombatEncounter } from '../traditional-combat/traditional-combat-ui.js';
+import { LEWD_BY_CHAT_KEY, LEWD_CHANGED_EVENT } from '../lewd-combat/lewd-combat-constants.js';
+import { removeLewdEncounterForChat } from '../lewd-combat/lewd-combat-store.js';
 
 const STORE_KEYS = {
     tactical: TC_BY_CHAT_KEY,
     traditional: TRADITIONAL_BY_CHAT_KEY,
+    lewd: LEWD_BY_CHAT_KEY,
 };
 
 const CHANGE_EVENTS = {
     tactical: 'rt_tactical_combat_changed',
     traditional: 'rt_traditional_combat_changed',
+    lewd: LEWD_CHANGED_EVENT,
 };
 
 function activeChatId() {
@@ -53,11 +57,21 @@ function notifyChanged(style) {
  * Remove one running board. The active chat goes through the style's own reset
  * so its `[COMBAT]` memo block, pending narration, and in-flight agent request
  * are cleaned up too. Other chats only own their saved board entry.
- * @param {{ chatId: string, style: 'tactical'|'traditional' }} board
+ * @param {{ chatId: string, style: 'tactical'|'traditional'|'lewd' }} board
  * @param {Record<string, any>} settings
  * @param {string} chatId
  */
 function clearBoard(board, settings, chatId) {
+    // Lewd Combat has no `[COMBAT]` memo block or agent request to unwind yet;
+    // dropping its saved board (and any queued narration for the chat) is the
+    // whole reset. The U6 board UI can add a richer reset behind the same event.
+    if (board.style === 'lewd') {
+        // One synchronous save is enough: `clearPendingNarration` persists after
+        // removing the board entry without its own intermediate write.
+        removeLewdEncounterForChat(chatId, settings, { persist: false });
+        clearPendingNarration(settings, { chatId });
+        return;
+    }
     if (chatId && chatId === activeChatId()) {
         try {
             if (board.style === 'tactical') resetTacticalCombatEncounter();
@@ -90,9 +104,10 @@ export function clearActiveCombatEncounters(settings, options = {}) {
         if (!chatIds.includes(chatId)) chatIds.push(chatId);
     }
     if (cleared) {
-        // Both panes refresh: one chat can hold boards for either style.
+        // Every pane refreshes: one chat can hold boards for any style.
         notifyChanged('tactical');
         notifyChanged('traditional');
+        notifyChanged('lewd');
     }
     return { cleared, chatIds };
 }

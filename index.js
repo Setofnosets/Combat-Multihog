@@ -98,7 +98,7 @@ import {
     bindTraditionalCombatSettings,
     syncTraditionalCombatSettingsUi,
 } from './src/features/traditional-combat/traditional-combat-settings.js';
-import { bindCombatModeSettings, syncCombatModeSettingsUi } from './src/features/combat/combat-mode-settings.js';
+import { bindCombatModeSettings, syncCombatModeSettingsUi, syncLewdCombatSettingsUi } from './src/features/combat/combat-mode-settings.js';
 import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
 import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
@@ -2757,6 +2757,7 @@ async function onChatChanged(newChatId) {
         try { syncTacticalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Tactical Combat settings refresh skipped:', error); }
         try { syncTraditionalCombatSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Traditional Combat settings refresh skipped:', error); }
         try { syncCombatModeSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Combat mode settings refresh skipped:', error); }
+        try { syncLewdCombatSettingsUi(s); } catch (error) { console.warn('[RPG Tracker] Lewd Combat settings refresh skipped:', error); }
         try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
         updateChatLinkUI();
         return;
