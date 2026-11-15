@@ -2,7 +2,7 @@
 
 ## Meta
 - **Slug:** lewd-combat-remediation
-- **Status:** in progress — Phase 1 (B1-B5) and A1-A5 implemented and green; next: A6
+- **Status:** complete — Phase 1 (B1-B5) and Phase 2 (A1-A6) implemented and green; the remediation plan is done
 - **Date:** 2026-11-15
 - **Predecessor:** `plans/lewd-combat-style.md` (implemented)
 
@@ -248,6 +248,7 @@
 - **Risk:** low-medium
 - **Model / Effort:** implementer model #medium
 - **Commit:** `docs/test(lewd-combat): document action model and cover remediation regressions`
+- **Status:** ✅ Done — e7a8ae1
 
 ## Verification & Testing
 - **Automated checks after every unit:**
