@@ -54,6 +54,7 @@ import {
 import { continueToNarration, queueCombatOutcome, requeueCombatOutcomeIfMissing } from '../tactical-combat/tactical-combat-outcome.js';
 import { isTraditionalCombatMode } from '../combat/combat-mode.js';
 import { buildTraditionalCombatMarkup } from './traditional-combat-markup.js';
+import { buildActionPreview } from '../tactical-combat/combat-action-preview.js';
 import { idlePassiveCompileAction } from '../tactical-combat/tactical-combat-ui.js';
 import {
     applyTraditionalAction,
@@ -148,6 +149,17 @@ function setBusy(busy, label = '', abortable = false) {
     ui.view.abortable = !!abortable;
 }
 
+function selectedActionSource(state, unit) {
+    if (!unit) return null;
+    if (ui.view.mode === 'skill' && ui.view.selectedSkillId) {
+        return (unit.skills || []).find(skill => skill.id === ui.view.selectedSkillId) || null;
+    }
+    if (ui.view.mode === 'item' && ui.view.selectedItemId) {
+        return (unit.items || []).find(item => item.id === ui.view.selectedItemId) || null;
+    }
+    return null;
+}
+
 function targetInfo(state, unit) {
     if (!unit || !ui.view.mode) return { ids: [], labels: {} };
     const options = describeTraditionalUnitOptions(state, unit);
@@ -155,10 +167,22 @@ function targetInfo(state, unit) {
     if (ui.view.mode === 'attack') ids = options.attackTargets;
     else if (ui.view.mode === 'skill' && ui.view.selectedSkillId) ids = options.skillTargets[ui.view.selectedSkillId] || [];
     else if (ui.view.mode === 'item' && ui.view.selectedItemId) ids = options.itemTargets[ui.view.selectedItemId] || [];
+    const previewsEnabled = getSettings()?.combatShowActionPreviews !== false;
+    const source = selectedActionSource(state, unit);
+    const mode = ui.view.mode;
     const labels = {};
     for (const id of ids) {
         const target = getUnitById(state, id);
-        if (target) labels[id] = `${target.name} (${target.hp}/${target.maxHp} HP${target.maxWillpower ? `, ${target.willpower}/${target.maxWillpower} WP` : ''})`;
+        if (!target) continue;
+        let label = `${target.name} (${target.hp}/${target.maxHp} HP${target.maxWillpower ? `, ${target.willpower}/${target.maxWillpower} WP` : ''})`;
+        if (previewsEnabled && (mode === 'attack' || source)) {
+            const preview = buildActionPreview(state, unit, source, { mode, target });
+            const detail = preview.special
+                ? 'resolved by the agent'
+                : preview.summary.slice(preview.summary.indexOf(': ') + 2);
+            if (detail) label += ` — ${detail}`;
+        }
+        labels[id] = label;
     }
     return { ids, labels };
 }
@@ -195,9 +219,16 @@ function render() {
         const targets = targetInfo(state, unit);
         ui.view.targetIds = targets.ids;
         ui.view.targetLabels = targets.labels;
+        const source = selectedActionSource(state, unit);
+        ui.view.actionPreview = getSettings()?.combatShowActionPreviews !== false
+            && unit
+            && (ui.view.mode === 'attack' || source)
+            ? buildActionPreview(state, unit, source, { mode: ui.view.mode })
+            : null;
     } else {
         ui.view.targetIds = [];
         ui.view.targetLabels = {};
+        ui.view.actionPreview = null;
     }
     host.innerHTML = buildTraditionalCombatMarkup(state, ui.view);
     if (ui.centerNextRender) {

@@ -11884,7 +11884,8 @@ body.rt-tc-modal-open {
     line-height: 1.35;
 }
 
-.rt-tc-action-preview {
+.rt-tc-action-preview,
+.rt-trad-action-preview {
     margin-top: 8px;
     padding: 7px 9px;
     border: 1px solid var(--tc-border);
@@ -13197,6 +13198,14 @@ body.rt-tc-modal-open {
 }
 
 .rt-trad-target:hover { background: rgba(255, 207, 102, 0.22); }
+
+.rt-trad-target small {
+    display: block;
+    margin-top: 2px;
+    color: var(--tc-muted, #9a9385);
+    font-size: 0.85em;
+    line-height: 1.3;
+}
 
 @media (max-width: 900px) {
     .rt-trad-body { flex-direction: column; }

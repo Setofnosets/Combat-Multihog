@@ -6,7 +6,8 @@
  * adds only the roster and target-selection pieces.
  */
 
-import { escapeHtml } from '../tactical-combat/tactical-combat-markup.js';
+import { escapeHtml, renderActionPreview } from '../tactical-combat/tactical-combat-markup.js';
+import { getEffectiveAc, getEffectiveAttackBonus } from '../tactical-combat/tactical-combat-engine.js';
 import { TC_SIDE_COLORS, TC_SIDE_LABELS } from '../tactical-combat/tactical-combat-constants.js';
 import { describeResource, hasUses } from '../tactical-combat/tactical-combat-resources.js';
 import { describePassiveTrigger, isPassiveFlavourOnly, isPassiveRecipePending } from '../tactical-combat/tactical-combat-passives.js';
@@ -43,15 +44,26 @@ function statusChips(unit) {
     return chips.join('');
 }
 
+function formatMod(value) {
+    const number = Number(value) || 0;
+    return number >= 0 ? `+${number}` : String(number);
+}
+
 function targetList(view) {
     if (!Array.isArray(view.targetIds) || !view.targetIds.length) return '';
     const labels = view.targetLabels && typeof view.targetLabels === 'object' ? view.targetLabels : {};
     return `<div class="rt-trad-target-list">
         <div class="rt-tc-subtitle">Choose a target</div>
-        <div class="rt-trad-target-grid">${view.targetIds.map(id => `
+        <div class="rt-trad-target-grid">${view.targetIds.map(id => {
+            const label = labels[id] || id;
+            const split = String(label).split(' — ');
+            const name = split.shift();
+            const detail = split.join(' — ');
+            return `
             <button type="button" class="rt-trad-target" data-trad-action="target" data-trad-target-id="${escapeHtml(id)}">
-                ${escapeHtml(labels[id] || id)}
-            </button>`).join('')}
+                ${escapeHtml(name)}${detail ? `<small>${escapeHtml(detail)}</small>` : ''}
+            </button>`;
+        }).join('')}
         </div>
     </div>`;
 }
@@ -131,7 +143,7 @@ function renderUnitCard(state, unit, view) {
         : unit.fled
             ? '<span class="rt-tc-chip">Fled</span>'
             : unit.willpowerBroken ? '<span class="rt-tc-chip rt-tc-chip-danger">Willpower broken</span>' : '';
-    return `<button type="button" class="${classes}" data-trad-select-unit="${escapeHtml(unit.id)}" ${targetable ? `data-trad-target="${escapeHtml(unit.id)}"` : ''} style="--trad-side:${escapeHtml(unit.color || TC_SIDE_COLORS[unit.side] || '#888')}" title="${escapeHtml(`${unit.name} — ${unit.hp}/${unit.maxHp} HP${unit.maxWillpower ? `, ${unit.willpower}/${unit.maxWillpower} WP` : ''}, AC ${unit.ac}`)}">
+    return `<button type="button" class="${classes}" data-trad-select-unit="${escapeHtml(unit.id)}" ${targetable ? `data-trad-target="${escapeHtml(unit.id)}"` : ''} style="--trad-side:${escapeHtml(unit.color || TC_SIDE_COLORS[unit.side] || '#888')}" title="${escapeHtml(`${unit.name} — ${unit.hp}/${unit.maxHp} HP${unit.maxWillpower ? `, ${unit.willpower}/${unit.maxWillpower} WP` : ''}, AC ${getEffectiveAc(state, unit)}`)}">
         <div class="rt-trad-unit-head">
             <div>
                 <div class="rt-trad-unit-name">${escapeHtml(unit.name)} <span class="rt-tc-chip">${escapeHtml(sideLabel)}</span></div>
@@ -145,8 +157,8 @@ function renderUnitCard(state, unit, view) {
         <div class="rt-tc-hpbar" aria-hidden="true"><i style="width:${hpPct}%"></i></div>
         ${unit.maxWillpower ? `<div class="rt-tc-wpbar" aria-hidden="true"><i style="width:${wpPct}%"></i></div>` : ''}
         <div class="rt-tc-chip-row">
-            <span class="rt-tc-chip">AC ${Number(unit.ac) || 10}</span>
-            <span class="rt-tc-chip">ATK ${Number(unit.attackBonus) >= 0 ? '+' : ''}${Number(unit.attackBonus) || 0}</span>
+            <span class="rt-tc-chip">AC ${getEffectiveAc(state, unit)}</span>
+            <span class="rt-tc-chip">ATK ${formatMod(getEffectiveAttackBonus(state, unit))}</span>
             <span class="rt-tc-chip">INIT ${Number(unit.initiative) || 0}</span>
             ${dead}
             ${statusChips(unit)}
@@ -271,13 +283,14 @@ function renderSelectedPanel(state, view) {
             </div>
         </div>
         <div class="rt-tc-chip-row">
-            <span class="rt-tc-chip">AC ${Number(unit.ac) || 10}</span>
-            <span class="rt-tc-chip">ATK ${Number(unit.attackBonus) >= 0 ? '+' : ''}${Number(unit.attackBonus) || 0}</span>
+            <span class="rt-tc-chip">AC ${getEffectiveAc(state, unit)}</span>
+            <span class="rt-tc-chip">ATK ${formatMod(getEffectiveAttackBonus(state, unit))}</span>
             <span class="rt-tc-chip">INIT ${Number(unit.initiative) || 0}</span>
             ${statusChips(unit)}
         </div>
         ${isPlayer && state.status === 'active' ? `<div class="rt-tc-actions">${buttons.join('')}</div>` : ''}
         ${isPlayer && state.status === 'active' ? `<div class="rt-tc-hint">${escapeHtml(hint)}</div>` : ''}
+        ${renderActionPreview({ ...view, actionPreviewClass: 'rt-trad-action-preview' })}
         ${skills}
         ${passives}
         ${items}

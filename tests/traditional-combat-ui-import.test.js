@@ -21,4 +21,15 @@ describe('traditional combat UI module', () => {
         expect(uiSource).toContain("host.querySelector('.rt-tc-log-list')");
         expect(uiSource).toContain('log.scrollTop = log.scrollHeight');
     });
+
+    it('composes action previews and per-target predictions without grid assumptions', () => {
+        expect(uiSource).toContain("from '../tactical-combat/combat-action-preview.js'");
+        expect(uiSource).toContain('function selectedActionSource');
+        expect(uiSource).toContain('ui.view.actionPreview =');
+        expect(uiSource).toContain('buildActionPreview(state, unit, source, { mode, target })');
+        expect(uiSource).toContain("preview.special");
+        expect(uiSource).toContain("'resolved by the agent'");
+        expect(uiSource).toContain('getSettings()?.combatShowActionPreviews !== false');
+        expect(uiSource).not.toContain('getAreaTargets');
+    });
 });

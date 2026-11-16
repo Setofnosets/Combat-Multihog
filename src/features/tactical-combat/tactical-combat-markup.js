@@ -226,7 +226,7 @@ function renderLegend(state, view = {}) {
     </details>`;
 }
 
-function renderActionPreview(view) {
+export function renderActionPreview(view) {
     const preview = view.actionPreview;
     if (!preview) return '';
     const chip = preview.special
@@ -238,7 +238,8 @@ function renderActionPreview(view) {
     const lines = (preview.lines || [])
         .map(line => `<li>${escapeHtml(line)}</li>`)
         .join('');
-    return `<div class="rt-tc-action-preview" aria-live="polite">
+    const className = view.actionPreviewClass || 'rt-tc-action-preview';
+    return `<div class="${className}" aria-live="polite">
         <div class="rt-tc-preview-head"><b>${escapeHtml(preview.title)}</b>${chip}</div>
         ${description}
         ${lines ? `<ul class="rt-tc-preview-lines">${lines}</ul>` : ''}
