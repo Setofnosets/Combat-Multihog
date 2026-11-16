@@ -71,8 +71,9 @@ describe('Lewd Combat narrator function tool', () => {
         expect(tool.parameters.type).toBe('object');
         expect(tool.parameters.required).toEqual([]);
         expect(Object.keys(tool.parameters.properties).sort()).toEqual([
-            'controlMode', 'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
+            'controlMode', 'isContest', 'location', 'mode', 'openingTechnique', 'openingZone', 'participantNames', 'reason', 'spectatorNames', 'title', 'tone',
         ]);
+        expect(tool.parameters.properties.isContest.type).toBe('boolean');
         expect(tool.parameters.properties.mode.enum).toEqual(['duel', 'group', 'free-for-all']);
         expect(tool.parameters.properties.controlMode.enum).toEqual(['auto', 'player-all', 'ai-others']);
         expect(tool.stealth).toBe(false);
@@ -313,6 +314,62 @@ describe('Lewd Combat narrator function tool', () => {
         expect(body).not.toContain('runAiTurns');
     });
 
+    it('rejects a competitions-mode call without isContest and re-arms the tool', async () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatTriggerMode = 'competitions';
+        registerLewdCombatTool();
+        const tool = registerFunctionTool.mock.calls[0][0];
+
+        const message = await tool.action({ participantNames: ['Alice', 'Bob'] });
+        expect(message).toMatch(/narrate this intimate moment normally/i);
+        expect(s.lewdCombatByChat ?? {}).toEqual({});
+        // The rejection is guidance, not a failure: the tool is re-registered.
+        expect(registerFunctionTool.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(tool.shouldRegister()).toBe(true);
+
+        // A genuine competition can start immediately after the rejection.
+        const started = await tool.action({ participantNames: ['Alice', 'Bob'], isContest: true });
+        expect(started).toMatch(/board is open/i);
+        expect(Object.values(s.lewdCombatByChat || {})).toHaveLength(1);
+    });
+
+    it('starts a competitions-mode call when isContest is true', async () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatTriggerMode = 'competitions';
+        s.lewdCombatExplicitness = 'explicit';
+        s.lewdCombatTechniqueCompendiumJson = '';
+        registerLewdCombatTool();
+        const tool = registerFunctionTool.mock.calls[0][0];
+
+        const message = await tool.action({ participantNames: ['Alice', 'Bob'], isContest: true });
+        expect(message).toMatch(/board is open/i);
+        const boards = Object.values(s.lewdCombatByChat || {});
+        expect(boards).toHaveLength(1);
+        expect(boards[0].status).toBe('active');
+    });
+
+    it('starts an always-mode call without isContest', async () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatTriggerMode = 'always';
+        s.lewdCombatExplicitness = 'explicit';
+        s.lewdCombatTechniqueCompendiumJson = '';
+        registerLewdCombatTool();
+        const tool = registerFunctionTool.mock.calls[0][0];
+
+        const message = await tool.action({ participantNames: ['Alice', 'Bob'] });
+        expect(message).toMatch(/board is open/i);
+        expect(Object.values(s.lewdCombatByChat || {})).toHaveLength(1);
+    });
+
     it('refuses a lewd start while a tactical board is active but allows a finished one', () => {
         const s = {
             lewdCombatEnabled: true,
@@ -324,5 +381,34 @@ describe('Lewd Combat narrator function tool', () => {
 
         s.tacticalCombatByChat = { 'vitest-chat': { status: 'ended' } };
         expect(canStartLewdEncounter(s, 'vitest-chat').ok).toBe(true);
+    });
+
+    it('still applies the 30s cooldown to genuine start failures', async () => {
+        const registerFunctionTool = vi.fn();
+        const unregisterFunctionTool = vi.fn();
+        mockContext({ registerFunctionTool, unregisterFunctionTool });
+        const s = settings();
+        s.lewdCombatTriggerMode = 'competitions';
+        s.tacticalCombatByChat = { 'vitest-chat': { status: 'active' } };
+        registerLewdCombatTool();
+        const tool = registerFunctionTool.mock.calls[0][0];
+
+        const message = await tool.action({ participantNames: ['Alice', 'Bob'], isContest: true });
+        expect(message).toMatch(/tactical\/traditional combat board is active/i);
+        expect(Object.values(s.lewdCombatByChat || {})).toHaveLength(0);
+        expect(tool.shouldRegister()).toBe(false);
+
+        const registrations = registerFunctionTool.mock.calls.length;
+        syncLewdCombatToolRegistration();
+        expect(registerFunctionTool.mock.calls.length).toBe(registrations);
+    });
+
+    it('keeps the manual overlay start independent of the isContest guard', () => {
+        const start = uiSource.indexOf('async function startFromOverlay');
+        expect(start).toBeGreaterThan(-1);
+        const finish = uiSource.indexOf('function ', start + 10);
+        const body = uiSource.slice(start, finish > start ? finish : undefined);
+        expect(body).not.toContain('isContest');
+        expect(body).not.toContain('startLewdCombatFromNarrator');
     });
 });

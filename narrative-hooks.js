@@ -31,7 +31,10 @@ import { isPercentFormula, resolveDiceCompare } from './src/state/dice-compare.j
 import { buildCyoaModeBlock, STATE_MEMO_INJECT_PREAMBLE } from './constants.js';
 import { buildNarrationBlock, clearNarrationAfterGeneration, markNarrationInjected } from './src/features/tactical-combat/tactical-combat-outcome.js';
 import { getPendingNarration, hasPendingNarration } from './src/features/tactical-combat/tactical-combat-store.js';
-import { LEWD_CHANGED_EVENT } from './src/features/lewd-combat/lewd-combat-constants.js';
+import {
+    LEWD_CHANGED_EVENT,
+    resolveLewdCombatTriggerMode,
+} from './src/features/lewd-combat/lewd-combat-constants.js';
 import { LEWD_COMBAT_RESULT_NOTICE } from './src/features/lewd-combat/lewd-combat-outcome.js';
 import {
     consumeDeliveredLewdResolution,
@@ -1078,10 +1081,14 @@ export function registerLewdCombatTool() {
         const { registerFunctionTool, unregisterFunctionTool } = ctx;
         if (!registerFunctionTool || !unregisterFunctionTool) return;
         unregisterFunctionTool('StartLewdCombat');
+        const triggerMode = resolveLewdCombatTriggerMode(getSettings()?.lewdCombatTriggerMode);
+        const triggerNote = triggerMode === 'competitions'
+            ? 'The current trigger mode is competitions: call this ONLY when the player initiates an intimate competition with stakes and a winner, and pass isContest=true. Routine intimacy, affection, flirting, kissing, and casual acts must be narrated normally; if unsure, do not call it.'
+            : 'The current trigger mode is always: call this once when the scene becomes intimate and the player initiates.';
         registerFunctionTool({
             name: 'StartLewdCombat',
             displayName: 'Lewd Combat',
-            description: 'Open the Lewd Combat board for a player-initiated intimate scene. Call this once when the scene becomes intimate and the player initiates; do not call it for ordinary hostile combat, which stays on the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for this scene: the player\'s initiation is the trigger. Pass the participant names, any spectators, a short title, the location, a reason, the scene tone, and the mode. Pass openingTechnique/openingZone only when the player already declared a concrete opening act, and set mode to duel, group, or free-for-all. Pass controlMode only when the player stated who should be AI-controlled. After calling, do not narrate or resolve the scene yourself; the board owns it and returns the authoritative aftermath.',
+            description: `Open the Lewd Combat board for a player-initiated intimate scene. ${triggerNote} Do not call it for ordinary hostile combat, which stays on the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for this scene. Pass the participant names, any spectators, a short title, the location, a reason, the scene tone, and the mode. Pass openingTechnique/openingZone only when the player already declared a concrete opening act, and set mode to duel, group, or free-for-all. Pass controlMode only when the player stated who should be AI-controlled. After calling, do not narrate or resolve the scene yourself; the board owns it and returns the authoritative aftermath.`,
             parameters: {
                 $schema: 'http://json-schema.org/draft-04/schema#',
                 type: 'object',
@@ -1104,6 +1111,7 @@ export function registerLewdCombatTool() {
                     tone: { type: 'string', description: 'Optional tone/explicitness for this scene, e.g. explicit, suggestive, or fade-to-black.' },
                     mode: { type: 'string', enum: ['duel', 'group', 'free-for-all'], description: 'Optional scene shape. Defaults to duel.' },
                     controlMode: { type: 'string', enum: ['auto', 'player-all', 'ai-others'], description: 'Optional control policy. auto keeps the player and party on the player side and hands everyone else to the AI; player-all lets the player control every participant; ai-others hands every non-party participant to the AI.' },
+                    isContest: { type: 'boolean', description: 'Set true only when this scene is a genuine intimate competition with stakes and a winner (struggle for dominance, wager, challenge, or duel of technique). Required to start while the trigger mode is competitions.' },
                 },
                 required: [],
             },
@@ -1116,7 +1124,14 @@ export function registerLewdCombatTool() {
                     const { startLewdCombatFromNarrator } = await import('./src/features/lewd-combat/lewd-combat-ui.js');
                     const result = await startLewdCombatFromNarrator(args || {});
                     if (!result?.ok) {
-                        _lewdCombatToolFailureUntil.set(String(chatId || ''), Date.now() + LEWD_COMBAT_FAILURE_COOLDOWN_MS);
+                        if (result?.rejected) {
+                            // A policy rejection is guidance, not a failure: do not
+                            // start the cooldown, and re-register so a later genuine
+                            // competition can start immediately.
+                            syncLewdCombatToolRegistration();
+                        } else {
+                            _lewdCombatToolFailureUntil.set(String(chatId || ''), Date.now() + LEWD_COMBAT_FAILURE_COOLDOWN_MS);
+                        }
                     } else {
                         _lewdCombatToolFailureUntil.delete(String(chatId || ''));
                     }

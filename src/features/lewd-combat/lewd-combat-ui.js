@@ -11,7 +11,11 @@
  */
 
 import { getActiveChatId, getSettings } from '../../../state-manager.js';
-import { LEWD_CHANGED_EVENT, LEWD_OPEN_EVENT } from './lewd-combat-constants.js';
+import {
+    LEWD_CHANGED_EVENT,
+    LEWD_OPEN_EVENT,
+    resolveLewdCombatTriggerMode,
+} from './lewd-combat-constants.js';
 import {
     appendLewdProseEntry,
     applyLewdAction,
@@ -607,6 +611,13 @@ export async function startLewdCombatFromNarrator(args = {}) {
         const chatId = getActiveChatId();
         const gate = canStartLewdEncounter(settings, chatId);
         if (!gate.ok) return { ok: false, message: gate.reason };
+        if (resolveLewdCombatTriggerMode(settings.lewdCombatTriggerMode) === 'competitions' && args.isContest !== true) {
+            return {
+                ok: false,
+                rejected: true,
+                message: 'Not started: Lewd Combat is set to competitions only and this call did not set isContest=true. Narrate this intimate moment normally. Call StartLewdCombat only for an intimate competition with stakes and a winner, passing isContest=true.',
+            };
+        }
 
         const result = createLewdEncounterFromContext(settings, safeContext(), {
             participantNames: arr(args.participantNames),
