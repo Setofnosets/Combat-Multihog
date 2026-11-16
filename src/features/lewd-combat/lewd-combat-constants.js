@@ -36,6 +36,7 @@ export const LEWD_COMBAT_LABEL = 'Lewd Combat';
  */
 export const LEWD_COMBAT_DEFAULTS = Object.freeze({
     enabled: false,
+    triggerMode: 'competitions',
     explicitness: 'explicit',
     darkerThemes: false,
     proseFrequency: 'per-exchange',
@@ -44,6 +45,23 @@ export const LEWD_COMBAT_DEFAULTS = Object.freeze({
     postEncounterLatch: true,
     postEncounterCooldownMs: 60000,
 });
+
+/**
+ * Narrator trigger modes. `competitions` (default) only opens the board when
+ * the player initiates an intimate competition with stakes and a winner;
+ * `always` restores the legacy broad "any intimate scene" behaviour.
+ */
+export const LEWD_COMBAT_TRIGGER_MODES = Object.freeze(['competitions', 'always']);
+
+/**
+ * Clamp an arbitrary persisted trigger-mode value to a known mode.
+ * @param {any} value
+ * @returns {'competitions'|'always'}
+ */
+export function resolveLewdCombatTriggerMode(value) {
+    const mode = String(value || '');
+    return LEWD_COMBAT_TRIGGER_MODES.includes(mode) ? mode : 'competitions';
+}
 
 /**
  * Canonical anatomy tags. These are capability/body descriptors, never inferred

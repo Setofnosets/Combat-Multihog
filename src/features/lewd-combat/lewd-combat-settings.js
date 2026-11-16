@@ -19,6 +19,7 @@ import {
     LEWD_COMBAT_LABEL,
     LEWD_EXPLICITNESS_OPTIONS,
     LEWD_PROSE_FREQUENCY_OPTIONS,
+    resolveLewdCombatTriggerMode,
 } from './lewd-combat-constants.js';
 import { getLewdEncounterForChat, removeLewdEncounterForChat } from './lewd-combat-store.js';
 import {
@@ -101,6 +102,7 @@ export function normalizeLewdCombatSettings(settings = {}) {
     return {
         ...settings,
         lewdCombatEnabled: !!settings.lewdCombatEnabled,
+        lewdCombatTriggerMode: resolveLewdCombatTriggerMode(settings.lewdCombatTriggerMode),
         lewdCombatExplicitness: LEWD_EXPLICITNESS_OPTIONS.includes(explicitness)
             ? explicitness
             : LEWD_COMBAT_DEFAULTS.explicitness,
@@ -153,6 +155,8 @@ export function syncLewdCombatSettingsUi(settings) {
     if (options) options.style.display = normalized.lewdCombatEnabled ? '' : 'none';
     const toggle = el('rpg_lewd_combat_enabled');
     if (toggle) toggle.checked = normalized.lewdCombatEnabled;
+    const triggerMode = el('rpg_lewd_combat_trigger_mode');
+    if (triggerMode) triggerMode.value = normalized.lewdCombatTriggerMode;
 
     const explicitness = el('rpg_lewd_combat_explicitness');
     if (explicitness) explicitness.value = normalized.lewdCombatExplicitness;
@@ -239,6 +243,14 @@ export function bindLewdCombatSettings(settings, saveSettings) {
         syncLewdCombatSettingsUi(settings);
         // The header icon, tool registration, and prompt sections all react to
         // the module flag; one event keeps them in sync.
+        dispatchChanged();
+    });
+
+    const triggerMode = el('rpg_lewd_combat_trigger_mode');
+    triggerMode?.addEventListener('change', () => {
+        settings.lewdCombatTriggerMode = resolveLewdCombatTriggerMode(triggerMode.value);
+        save(settings, saveSettings);
+        syncLewdCombatSettingsUi(settings);
         dispatchChanged();
     });
 

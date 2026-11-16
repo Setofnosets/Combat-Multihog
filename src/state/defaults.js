@@ -283,6 +283,7 @@ export function buildDefaultSettings() {
         // Independent of `combatStyle`: enabling it never changes the primary
         // board selector. Off by default and inert until the feature is built.
         lewdCombatEnabled: false,
+        lewdCombatTriggerMode: "competitions",
         lewdCombatExplicitness: "explicit",
         lewdCombatDarkerThemes: false,
         lewdCombatProseFrequency: "per-exchange",
