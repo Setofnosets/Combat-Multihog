@@ -125,6 +125,44 @@ describe('tactical combat markup', () => {
         expect(supportCell).toContain('is-area-heal');
     });
 
+    it('renders the action preview block and escapes injected text', () => {
+        const state = makeState();
+        const html = buildTacticalCombatMarkup(state, {
+            selectedUnitId: 'pc-1',
+            mode: 'skill',
+            selectedSkillId: 'firebolt',
+            actionPreview: {
+                title: 'Fire <bolt>',
+                description: 'A "fiery" <script> idea.',
+                lines: ['Hit chance: 75% (crit 5%)', '<img src=x onerror=alert(1)>'],
+                special: false,
+            },
+        });
+        expect(html).toContain('rt-tc-action-preview');
+        expect(html).toContain('Fire &lt;bolt&gt;');
+        expect(html).toContain('A &quot;fiery&quot; &lt;script&gt; idea.');
+        expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+        expect(html).not.toContain('<script>');
+        expect(html).not.toContain('<img src=x');
+    });
+
+    it('marks special predictions with a resolver chip', () => {
+        const state = makeState();
+        const html = buildTacticalCombatMarkup(state, {
+            selectedUnitId: 'pc-1',
+            mode: 'skill',
+            selectedSkillId: 'firebolt',
+            actionPreview: {
+                title: 'Time Stop',
+                description: 'Freezes time.',
+                lines: ['Resolved by the combat agent when cast; no fixed numbers.'],
+                special: true,
+            },
+        });
+        expect(html).toContain('special · resolver');
+        expect(html).toContain('Resolved by the combat agent');
+    });
+
     it('shows area badges and the targeting hint', () => {
         const state = makeState();
         getUnitById(state, 'pc-1').skills.push({

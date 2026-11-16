@@ -36,6 +36,7 @@ import { describeArea, normalizeArea } from './tactical-combat-constants.js';
 import { describeResource, hasUses } from './tactical-combat-resources.js';
 import { getActionCatalog } from './tactical-combat-actions.js';
 import { buildTacticalCombatMarkup } from './tactical-combat-markup.js';
+import { buildActionPreview } from './combat-action-preview.js';
 import {
     buildEncounterFromContext,
     collectEncounterContext,
@@ -200,6 +201,39 @@ function itemTargetCells(state, unit, item) {
     return cells;
 }
 
+function actionPreviewMode(source) {
+    return source?.amount != null && source?.heal == null && source?.damage == null ? 'item' : 'skill';
+}
+
+function areaPredictionFragment(state, caster, source, targets) {
+    if (getSettings()?.combatShowActionPreviews === false) return '';
+    const list = Array.isArray(targets) ? targets : [];
+    if (!list.length) return '';
+    if (source?.kind === 'special') return ' · resolved by the agent';
+    const mode = actionPreviewMode(source);
+    const previews = list
+        .map(target => buildActionPreview(state, caster, source, { mode, target }))
+        .filter(Boolean);
+    if (!previews.length) return '';
+    const numbers = values => values.filter(value => Number.isFinite(value));
+    const hints = [];
+    const damages = numbers(previews.map(preview => preview.prediction?.averageDamage));
+    if (damages.length) {
+        const avg = damages.reduce((sum, value) => sum + value, 0) / damages.length;
+        hints.push(`~${Math.round(avg * 10) / 10} dmg/target`);
+    }
+    const heals = numbers(previews.map(preview => preview.prediction?.averageHeal));
+    if (heals.length) {
+        const avg = heals.reduce((sum, value) => sum + value, 0) / heals.length;
+        hints.push(`~${Math.round(avg * 10) / 10} heal`);
+    }
+    const hits = numbers(previews.map(preview => preview.prediction?.hitChance));
+    if (hits.length > 1 && Math.min(...hits) !== Math.max(...hits)) {
+        hints.push(`${Math.min(...hits)}–${Math.max(...hits)}% hit`);
+    }
+    return hints.length ? ` · ${hints.join(' · ')}` : '';
+}
+
 function buildAreaPreviewView(state, caster, source, result) {
     if (!result || (!result.ok && !Array.isArray(result.cells))) return null;
     const targetMode = String(source?.target || '').toLowerCase();
@@ -235,7 +269,7 @@ function buildAreaPreviewView(state, caster, source, result) {
         blockedCells,
         warningCells,
         anchor: result.anchor || null,
-        hint: `${label} · ${countLabel}${warning}${actionHint}`,
+        hint: `${label} · ${countLabel}${warning}${areaPredictionFragment(state, caster, source, result.targets)}${actionHint}`,
     };
 }
 
@@ -390,6 +424,19 @@ export function buildTacticalView(state, viewOverrides = null) {
     } else {
         view.targetHint = '';
     }
+    view.actionPreview = null;
+    if (settings.combatShowActionPreviews !== false) {
+        const previewSource = view.mode === 'skill'
+            ? (selected.skills || []).find(skill => skill.id === view.selectedSkillId) || null
+            : view.mode === 'item'
+                ? (selected.items || []).find(item => item.id === view.selectedItemId) || null
+                : null;
+        if (view.mode === 'attack' || previewSource) {
+            view.actionPreview = buildActionPreview(state, selected, previewSource, {
+                mode: view.mode === 'attack' ? 'attack' : view.mode === 'item' ? 'item' : 'skill',
+            });
+        }
+    }
     return view;
 }
 
@@ -430,31 +477,58 @@ function addAoePreviewClasses(host, preview, anchorKey) {
     if (hint) hint.textContent = preview.hint || hint.dataset.defaultHint || '';
 }
 
+function previewTargetAtCell(host, state, view, selected, source, x, y) {
+    if (getSettings()?.combatShowActionPreviews === false) return false;
+    const key = `${x},${y}`;
+    if (!view.targetCells?.has(key)) return false;
+    const target = liveUnitAtCell(state, x, y);
+    if (!target || target.id === selected.id) return false;
+    const preview = buildActionPreview(state, selected, source, {
+        mode: view.mode === 'attack' ? 'attack' : view.mode === 'item' ? 'item' : 'skill',
+        target,
+    });
+    const hint = host.querySelector('#rt-tc-target-hint');
+    if (hint) {
+        const base = hint.dataset.defaultHint || '';
+        hint.textContent = base ? `${base} · ${preview.summary}` : preview.summary;
+    }
+    ui.hoverKey = key;
+    return true;
+}
+
 function previewAoeAtCell(x, y) {
-    if (ui.view.mode !== 'skill' && ui.view.mode !== 'item') return;
+    if (ui.view.mode !== 'skill' && ui.view.mode !== 'item' && ui.view.mode !== 'attack') return;
     const state = getState();
     const settings = getSettings();
     if (!state || state.status !== 'active' || ui.view.busy) return;
-    if (settings.tacticalCombatShowTargetingPreviews === false) return;
     const view = buildTacticalView(state);
-    if (view.mode !== 'skill' && view.mode !== 'item') return;
+    if (view.mode !== 'skill' && view.mode !== 'item' && view.mode !== 'attack') return;
     const selected = state.units.find(unit => unit.id === view.selectedUnitId);
     if (!selected) return;
     if (state.phase !== 'player' || selected.side !== 'player' || selected.doneForRound) return;
     if (state.turnStyle === 'initiative' && activeUnitId(state) !== selected.id) return;
+    if (view.mode === 'attack' && selected.actionUsed) return;
     const source = view.mode === 'skill'
         ? (selected.skills || []).find(skill => skill.id === view.selectedSkillId)
-        : (selected.items || []).find(item => item.id === view.selectedItemId);
-    if (!source) return;
-    if (!hasUses(source, selected)) return;
-    const area = normalizeArea(source.area);
-    if (!area || area.origin === 'self') return;
-    if (view.mode === 'skill' && skillResourceUsed(selected, source)) return;
-    if (view.mode === 'item' && selected.actionUsed) return;
+        : view.mode === 'item'
+            ? (selected.items || []).find(item => item.id === view.selectedItemId)
+            : null;
+    if (view.mode !== 'attack' && !source) return;
+    if (view.mode !== 'attack' && !hasUses(source, selected)) return;
+    const area = source ? normalizeArea(source.area) : null;
+    if (area?.origin === 'self') return;
 
     const host = ui.overlay?.querySelector?.(`#${HOST_ID}`);
     const key = `${x},${y}`;
     if (!host) return;
+    if (!area) {
+        previewTargetAtCell(host, state, view, selected, source, x, y);
+        return;
+    }
+    if (settings.tacticalCombatShowTargetingPreviews === false) return;
+    if (view.mode === 'skill' && skillResourceUsed(selected, source)) return;
+    if (view.mode === 'item' && selected.actionUsed) return;
+
     const result = getAreaTargets(state, selected, source, { x, y }, { allowEmpty: true });
     if (!result.ok) {
         clearAoePreview(host);

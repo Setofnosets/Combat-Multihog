@@ -11884,6 +11884,57 @@ body.rt-tc-modal-open {
     line-height: 1.35;
 }
 
+.rt-tc-action-preview {
+    margin-top: 8px;
+    padding: 7px 9px;
+    border: 1px solid var(--tc-border);
+    border-left: 3px solid var(--tc-accent);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.20);
+    color: var(--tc-text, #e8e2d4);
+    font-size: 10px;
+    line-height: 1.4;
+}
+
+.rt-tc-action-preview:empty {
+    display: none;
+}
+
+.rt-tc-preview-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-bottom: 3px;
+}
+
+.rt-tc-preview-chip {
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(160, 120, 255, 0.22);
+    color: #d9c7ff;
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.rt-tc-preview-desc {
+    margin: 0 0 4px;
+    color: var(--tc-muted);
+    font-size: 9px;
+}
+
+.rt-tc-preview-lines {
+    margin: 0;
+    padding-left: 14px;
+    list-style: disc;
+}
+
+.rt-tc-preview-lines li + li {
+    margin-top: 2px;
+}
+
 .rt-tc-subpane {
     margin-top: 9px;
     padding-top: 8px;

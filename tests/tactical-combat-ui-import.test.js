@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import * as ui from '../src/features/tactical-combat/tactical-combat-ui.js';
 import { createEncounterState } from '../src/features/tactical-combat/tactical-combat-engine.js';
+import { testExtensionSettings } from './setup.js';
+
+afterEach(() => {
+    if (testExtensionSettings.rpg_tracker) delete testExtensionSettings.rpg_tracker.combatShowActionPreviews;
+});
 
 function makeViewState() {
     const state = createEncounterState({
@@ -53,6 +58,32 @@ describe('tactical combat UI module', () => {
         expect(aura.aoePreview.cells.has('1,1')).toBe(true);
         expect(aura.aoePreview.targetCells.has('1,1')).toBe(true);
         expect(aura.aoePreview.targetCells.has('1,2')).toBe(true);
+        expect(aura.aoePreview.hint).toMatch(/heal/i);
+    });
+
+    it('computes a generic action preview for attack, skill, and item modes', () => {
+        const state = makeViewState();
+        state.units[0].items = [{ id: 'potion', name: 'Potion', kind: 'heal', amount: '2d4+2', uses: 1, maxUses: 1, range: 0 }];
+
+        const attack = ui.buildTacticalView(state, { selectedUnitId: 'pc-1', mode: 'attack' });
+        expect(attack.actionPreview.title).toBe('Basic attack');
+        expect(attack.actionPreview.lines.join('\n')).toMatch(/Attack bonus/);
+
+        const skill = ui.buildTacticalView(state, { selectedUnitId: 'pc-1', mode: 'skill', selectedSkillId: 'fireball' });
+        expect(skill.actionPreview.title).toBe('Fireball');
+        expect(skill.actionPreview.lines.join('\n')).toMatch(/Damage \(HP\)/);
+
+        const item = ui.buildTacticalView(state, { selectedUnitId: 'pc-1', mode: 'item', selectedItemId: 'potion' });
+        expect(item.actionPreview.kind).toBe('heal');
+        expect(item.actionPreview.prediction.averageHeal).toBe(7);
+    });
+
+    it('omits previews when combatShowActionPreviews is false', () => {
+        const state = makeViewState();
+        testExtensionSettings.rpg_tracker = testExtensionSettings.rpg_tracker || {};
+        testExtensionSettings.rpg_tracker.combatShowActionPreviews = false;
+        const view = ui.buildTacticalView(state, { selectedUnitId: 'pc-1', mode: 'attack' });
+        expect(view.actionPreview).toBeNull();
     });
 
 
