@@ -14,6 +14,7 @@ const panelMarkup = readFileSync(new URL('../src/ui/panel/panel-markup.js', impo
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 const syspromptSource = readFileSync(new URL('../sysprompt.txt', import.meta.url), 'utf8');
 const gameSystemsSource = readFileSync(new URL('../game-systems.js', import.meta.url), 'utf8');
+const tacticalSettingsSource = readFileSync(new URL('../src/features/tactical-combat/tactical-combat-settings.js', import.meta.url), 'utf8');
 
 describe('Tactical Combat settings tab contract', () => {
     it('ships a primary Combat drawer with the expected tactical controls', () => {
@@ -38,6 +39,7 @@ describe('Tactical Combat settings tab contract', () => {
             'rpg_tactical_combat_sync_tracker_before_narration',
             'rpg_tactical_combat_show_coordinates',
             'rpg_tactical_combat_show_targeting_previews',
+            'rpg_combat_show_action_previews',
             'rpg_tactical_combat_max_tokens',
             'rpg_tactical_combat_agent_prompt',
             'rpg_tactical_combat_agent_prompt_reset',
@@ -121,6 +123,7 @@ describe('Tactical Combat settings tab contract', () => {
             'tacticalCombatSyncTrackerBeforeNarration: true',
             'tacticalCombatShowCoordinates: false',
             'tacticalCombatShowTargetingPreviews: true',
+            'combatShowActionPreviews: true',
             'tacticalCombatConnectionSource: "default"',
             'tacticalCombatMaxTokens: 6000',
             'tacticalCombatAgentPrompt: DEFAULT_TACTICAL_COMBAT_AGENT_PROMPT',
@@ -135,6 +138,14 @@ describe('Tactical Combat settings tab contract', () => {
             expect(defaultsSource).toContain(key);
         }
         expect(defaultsSource).toContain("from '../features/tactical-combat/tactical-combat-prompts.js'");
+    });
+
+    it('persists and binds the shared action-preview setting', () => {
+        expect(settingsStateSource).toContain("'combatShowActionPreviews'");
+        expect(tacticalSettingsSource).toContain("el('rpg_combat_show_action_previews')");
+        expect(tacticalSettingsSource).toContain('settings.combatShowActionPreviews !== false');
+        expect(tacticalSettingsSource).toContain("['rpg_combat_show_action_previews', 'combatShowActionPreviews']");
+        expect(settingsHtml).toContain('both the Tactical and Traditional boards');
     });
 
     it('documents standalone abilities and spells as player-character-only loadouts', () => {

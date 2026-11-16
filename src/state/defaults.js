@@ -226,6 +226,7 @@ export function buildDefaultSettings() {
         tacticalCombatSyncTrackerBeforeNarration: true,
         tacticalCombatShowCoordinates: false,
         tacticalCombatShowTargetingPreviews: true,
+        combatShowActionPreviews: true,
         tacticalCombatConnectionSource: "default",
         tacticalCombatConnectionProfileId: "",
         tacticalCombatCompletionPresetId: "",

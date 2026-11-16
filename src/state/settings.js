@@ -1619,6 +1619,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'tacticalCombatSyncTrackerBeforeNarration',
     'tacticalCombatShowCoordinates',
     'tacticalCombatShowTargetingPreviews',
+    'combatShowActionPreviews',
     'tacticalCombatConnectionSource',
     'tacticalCombatConnectionProfileId',
     'tacticalCombatCompletionPresetId',
