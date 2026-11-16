@@ -522,7 +522,11 @@ function previewAoeAtCell(x, y) {
     const key = `${x},${y}`;
     if (!host) return;
     if (!area) {
-        previewTargetAtCell(host, state, view, selected, source, x, y);
+        if (!previewTargetAtCell(host, state, view, selected, source, x, y)) {
+            const hint = host.querySelector('#rt-tc-target-hint');
+            if (hint) hint.textContent = hint.dataset.defaultHint || '';
+            ui.hoverKey = '';
+        }
         return;
     }
     if (settings.tacticalCombatShowTargetingPreviews === false) return;

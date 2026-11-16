@@ -129,6 +129,44 @@ describe('buildActionPreview', () => {
         expect(potion.summary).toContain('HP+WP');
     });
 
+    it('mirrors the engine fallback order for Willpower damage', () => {
+        const state = makeState({ attackResource: 'willpower', damage: '1d8' });
+        const { unit, target } = unitsOf(state);
+        delete unit.willpowerDamage;
+
+        const basic = buildActionPreview(state, unit, null, { mode: 'attack', target });
+        expect(basic.lines.join('\n')).toContain('Damage (Willpower): 1d8');
+        expect(basic.prediction.averageDamage).toBe(4.5);
+
+        const skill = buildActionPreview(state, unit, {
+            name: 'Mind Spike', kind: 'attack', damage: '1d10', resource: 'willpower',
+        }, { mode: 'skill', target });
+        expect(skill.lines.join('\n')).toContain('Damage (Willpower): 1d10');
+
+        unit.willpowerDamage = '2d4';
+        const override = buildActionPreview(state, unit, null, { mode: 'attack', target });
+        expect(override.lines.join('\n')).toContain('Damage (Willpower): 2d4');
+    });
+
+    it('defaults a skill heal without an expression to the engine fallback', () => {
+        const state = makeState();
+        const { unit, target } = unitsOf(state);
+        const heal = buildActionPreview(state, unit, { name: 'Mend', kind: 'heal' }, { mode: 'skill', target });
+        expect(heal.lines.join('\n')).toMatch(/Heal HP: 1d8\+2/);
+        expect(heal.prediction.averageHeal).toBe(6.5);
+    });
+
+    it('treats non-heal items as buffs, matching item resolution', () => {
+        const state = makeState();
+        const { unit, target } = unitsOf(state);
+        const item = buildActionPreview(state, unit, {
+            name: 'Odd Tonic', kind: 'attack', amount: '1d6', rounds: 2,
+        }, { mode: 'item', target });
+        expect(item.kind).toBe('buff');
+        expect(item.prediction).toEqual({});
+        expect(item.lines.join('\n')).toContain('Duration: 2 rounds');
+    });
+
     it('previews buffs without inventing damage', () => {
         const state = makeState();
         const { unit, target } = unitsOf(state);

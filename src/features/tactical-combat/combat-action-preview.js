@@ -122,9 +122,11 @@ function resourceLabel(resource) {
 
 function damageKind(source, mode) {
     if (!source) return 'attack';
-    if (String(source.kind || '').toLowerCase() === 'special') return 'special';
-    if (mode === 'item') return String(source.kind || 'heal');
-    return String(source.kind || 'attack');
+    const kind = String(source.kind || '').toLowerCase();
+    if (kind === 'special') return 'special';
+    // The engine treats every non-heal item as a buff; only heal items roll amount.
+    if (mode === 'item') return kind === 'heal' ? 'heal' : 'buff';
+    return kind || 'attack';
 }
 
 function bonusLines(source, targetSuffix) {
@@ -192,7 +194,13 @@ export function buildActionPreview(state, unit, source = null, options = {}) {
         const isItem = mode === 'item';
         const expression = isItem
             ? String(source?.amount || '2d4+2')
-            : resolvePreviewExpression(source, state, unit, target, 'heal');
+            : resolvePreviewExpression(
+                { heal: source?.heal || '1d8+2', scale: source?.scale },
+                state,
+                unit,
+                target,
+                'heal',
+            );
         const stats = averageDiceExpression(expression);
         if (stats) {
             prediction.averageHeal = stats.avg;
@@ -221,22 +229,25 @@ export function buildActionPreview(state, unit, source = null, options = {}) {
         ? getSourceAttackBonus(state, unit, source, target)
         : getEffectiveAttackBonus(state, unit, 0, target);
     const resource = String((source ? source.resource : unit?.attackResource) || 'hp');
+    const baseDamage = source?.damage || unit?.damage || '1d6';
     const damageExpression = isItem
         ? String(source?.amount || '1d6')
         : resolvePreviewExpression(
-            { damage: source?.damage || unit?.damage || '1d6', scale: source?.scale },
+            { damage: baseDamage, scale: source?.scale },
             state,
             unit,
             target,
             'damage',
         );
+    // Mirror resolveAttack exactly: options.willpowerDamage || options.damage ||
+    // (basic only) unit.willpowerDamage || '1d6'.
+    const willpowerBase = source
+        ? (source.willpowerDamage || baseDamage)
+        : (unit?.willpowerDamage || unit?.damage || '1d6');
     const willpowerExpression = isItem
         ? damageExpression
         : resolvePreviewExpression(
-            {
-                damage: source?.willpowerDamage || source?.damage || unit?.willpowerDamage || source?.damage || '1d6',
-                scale: source?.scale,
-            },
+            { damage: willpowerBase, scale: source?.scale },
             state,
             unit,
             target,
