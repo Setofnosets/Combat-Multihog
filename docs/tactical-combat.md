@@ -35,6 +35,7 @@ Open it from **Settings → Combat → Tactical Combat** or the combat button in
 | **Encounter source** | Auto (reuse active `[COMBAT]`, otherwise ask the agent), Existing only, or Always ask the agent. |
 | **Show grid coordinates** | Adds `x,y` labels to cells. |
 | **Show area-of-effect hover previews** | Previews the burst covered by a hovered cell. Selected abilities always show their range; turn this off only for the hover overlay. |
+| **Show action descriptions and predicted values** | Shared with Traditional Combat. Shows a preview panel for the selected attack, skill, or item (description, hit chance, average damage/heal with min–max, AC, buff numbers) and per-target predictions in hover hints. Specials show their description and recipe plus a resolver notice instead of invented numbers. Defaults on. |
 | **Automatically return to narration** | When combat ends, close the board and trigger the main generation after a short delay. The outcome is queued either way. |
 | **Resolve declared opening actions** | Applies the player's declared spell, ambush, charge, or attack before Round 1. Ambushes cost the enemy their first activation. |
 | **Deploy player units before battle** | Opens a deployment step where player units can be repositioned inside the left deployment lane. Press **Start battle** to begin Round 1. |
@@ -231,6 +232,8 @@ Abilities: Whirlwind (1d8 slashing, self, 1/1; Area: aura 1, friendly fire)
 Explicit `Area: burst N` / `Area: aura N` syntax wins. Common keywords such as `fireball`, `nova`, `shockwave`, `radius`, and `all enemies within N cells` are also recognized conservatively; a plain `N cells` phrase is treated as range, not radius. Use `Area: aura N` when the ability is centered on the caster; `Area: burst N` always centers on a chosen cell/target. Add `friendly fire` or `indiscriminate` to let a hostile area include allies.
 
 When a skill is selected, the board highlights its range. Hovering a cell previews the center and every affected tile, including valid targets in red, support targets in green, blocked cells with a hatch pattern, and allied units that would be caught by `friendlyFire` in the warning colour. The **Show area-of-effect hover previews** setting disables only the hover overlay.
+
+With **Show action descriptions and predicted values** enabled, selecting Attack, a skill, or an item renders an action preview panel under the mode hint. The panel shows the description plus the same deterministic math the engine uses: effective attack bonus and target AC, hit chance (natural 1 misses, natural 20 hits), critical chance (5%), average HP/Willpower damage after outgoing bonuses and incoming reduction, heal averages, and buff/rounds. Dice expressions with unresolved `@` scale tokens or unparseable fragments show the raw expression instead of a fake average. Hovering a legal single-target cell appends the target-specific summary (hit %, average, AC) to the hint bar without re-rendering; area hints append `~average dmg/target` (or `~average heal`) and a hit-chance range when target ACs differ. Special abilities show their description, `effectTemplate` recipe, and a “resolved by the combat agent” notice; no damage number is invented.
 
 ### Combat engagement state
 

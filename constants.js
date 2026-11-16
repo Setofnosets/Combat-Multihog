@@ -485,8 +485,8 @@ After calling the tool, do not resolve the fight yourself. The traditional comba
 
 <lewd_combat>
 LEWD COMBAT (SECONDARY)
-When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
-Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Whether to call StartLewdCombat is decided by the <lewd_combat_trigger> rule that follows this section; follow it over any broader wording. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat.
 Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene. Set controlMode to auto, player-all, or ai-others only when the table wants a different control split; auto is the default.
 Profiles may declare anatomy, skills, kinks, body, and species; use what is declared and never infer genitals from gender. The board gates acts by anatomy, skills, traits, and target anatomy, and returns the authoritative result.
 After calling, wait for the board's result and do not resolve or replay the scene. When the result returns the encounter is OVER: do not resume or restart it, do not call StartLewdCombat again for the aftermath, do not treat defeated or surrendered participants as new hostiles (they stay at the winner's mercy), and do not start a new intimate scene unless the player explicitly initiates one in a later turn.
@@ -891,8 +891,8 @@ After calling the tool, do not resolve the fight yourself. The traditional comba
 
 <lewd_combat>
 LEWD COMBAT (SECONDARY)
-When the scene becomes intimate and the player initiates, call StartLewdCombat once. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
-Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat; the player's initiation is the trigger.
+Whether to call StartLewdCombat is decided by the <lewd_combat_trigger> rule that follows this section; follow it over any broader wording. Do not narrate the sexual contest yourself; the board resolves it and returns the authoritative aftermath.
+Do not call StartLewdCombat for ordinary hostile combat — that still uses the selected primary combat style and its own tool. Do not use the Two-Beat Encounter Rule or a dormant prelude for Lewd Combat.
 Pass the participant names, any spectators, a short title, the location, a reason, and the scene tone. Pass openingTechnique/openingZone only when the player's message already declared a concrete opening act, and set mode to duel, group, or free-for-all according to the scene. Set controlMode to auto, player-all, or ai-others only when the table wants a different control split; auto is the default.
 Profiles may declare anatomy, skills, kinks, body, and species; use what is declared and never infer genitals from gender. The board gates acts by anatomy, skills, traits, and target anatomy, and returns the authoritative result.
 After calling, wait for the board's result and do not resolve or replay the scene. When the result returns the encounter is OVER: do not resume or restart it, do not call StartLewdCombat again for the aftermath, do not treat defeated or surrendered participants as new hostiles (they stay at the winner's mercy), and do not start a new intimate scene unless the player explicitly initiates one in a later turn.

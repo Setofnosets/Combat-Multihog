@@ -104,6 +104,7 @@ import {
 } from './src/features/traditional-combat/traditional-combat-settings.js';
 import { bindCombatModeSettings, syncCombatModeSettingsUi } from './src/features/combat/combat-mode-settings.js';
 import { syncLewdCombatSettingsUi } from './src/features/lewd-combat/lewd-combat-settings.js';
+import { applyLewdCombatTrigger } from './src/features/lewd-combat/lewd-combat-trigger.js';
 import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
 import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
@@ -6035,7 +6036,15 @@ export function buildSysprompt(rawText) {
         if (row.tag === 'CYOA_mode') return '';
         if (row.tag === 'tactical_combat' && !isTacticalCombatMode(s)) return '';
         if (row.tag === 'traditional_combat' && !isTraditionalCombatMode(s)) return '';
-        if (row.tag === 'lewd_combat' && !s.lewdCombatEnabled) return '';
+        if (row.tag === 'lewd_combat') {
+            if (!s.lewdCombatEnabled) return '';
+            // The trigger rule is injected at assembly time so unlocked/custom
+            // overrides keep the configured mode even when they ship old text.
+            const lewdContent = row.kind === 'base'
+                ? transformBaseSectionContent(row.tag, row.content, s)
+                : (isBlankSectionContent(row.content) ? '' : row.content);
+            return lewdContent ? applyLewdCombatTrigger(lewdContent, s.lewdCombatTriggerMode) : '';
+        }
         if (row.tag === 'combat') {
             if (isTacticalCombatMode(s)) {
                 return isEffectiveSectionEnabled('tactical_combat', s)

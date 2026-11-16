@@ -41,6 +41,39 @@ describe('traditional combat markup', () => {
         expect(html).toContain('Goblin (10/10 HP)');
     });
 
+    it('renders escaped action previews and per-target prediction lines', () => {
+        const state = makeState();
+        const targetId = state.units[1].id;
+        const html = buildTraditionalCombatMarkup(state, {
+            selectedUnitId: state.units[0].id,
+            mode: 'attack',
+            targetIds: [targetId],
+            targetLabels: { [targetId]: 'Goblin (10/10 HP) — 65% hit · 1d8 (avg 4.5) · AC 10 <b>' },
+            actionPreview: {
+                title: 'Fire <bolt>',
+                description: 'A "fiery" idea & more.',
+                lines: ['<img src=x onerror=alert(1)>'],
+                special: false,
+            },
+        });
+        expect(html).toContain('rt-trad-action-preview');
+        expect(html).toContain('Fire &lt;bolt&gt;');
+        expect(html).toContain('A &quot;fiery&quot; idea &amp; more.');
+        expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
+        expect(html).toContain('<small>65% hit · 1d8 (avg 4.5) · AC 10 &lt;b&gt;</small>');
+    });
+
+    it('uses effective AC and attack values in the card chips', () => {
+        const state = makeState();
+        const unit = state.units[0];
+        unit.statuses = [{ id: 'focus', label: 'Focus', acBonus: 2, attackBonus: 3 }];
+        const html = buildTraditionalCombatMarkup(state, { selectedUnitId: unit.id, mode: 'attack' });
+        expect(html).toContain(`AC ${12 + 2}`);
+        expect(html).toContain('ATK +7');
+        expect(html).not.toContain('AC 12');
+        expect(html).not.toContain('ATK +4');
+    });
+
     it('renders the empty state and the outcome dialog', () => {
         const empty = buildTraditionalCombatMarkup(null, {});
         expect(empty).toContain('No encounter on the board');

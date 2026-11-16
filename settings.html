@@ -2550,6 +2550,11 @@
                                 <span>Show area-of-effect hover previews</span>
                             </label>
                             <div class="rt-tc-settings-note">Previews which cells a burst will cover when you hover a cell. Selected abilities always show their range. Turn off to skip the hover overlay.</div>
+                            <label class="checkbox_label" for="rpg_combat_show_action_previews">
+                                <input type="checkbox" id="rpg_combat_show_action_previews" checked />
+                                <span>Show action descriptions and predicted values</span>
+                            </label>
+                            <div class="rt-tc-settings-note">Adds a preview panel (description, hit chance, average damage/heal, AC, buff numbers) to both the Tactical and Traditional boards, and per-target predictions in hints/target lists. Specials show their description and recipe instead of invented numbers. This is independent of the area-of-effect hover previews above.</div>
                             <label class="checkbox_label" for="rpg_tactical_combat_auto_narrate">
                                 <input type="checkbox" id="rpg_tactical_combat_auto_narrate" checked />
                                 <span>Automatically return to narration when combat ends</span>
@@ -2898,6 +2903,14 @@
                                 Enable Lewd Combat
                             </label>
                             <div id="rpg_lewd_combat_options" style="display: none;">
+                                <div class="rt-tc-field">
+                                    <label for="rpg_lewd_combat_trigger_mode">Trigger</label>
+                                    <select id="rpg_lewd_combat_trigger_mode" class="text_pole">
+                                        <option value="competitions" selected>Competitions only (default)</option>
+                                        <option value="always">Always — any intimate scene</option>
+                                    </select>
+                                    <div class="rt-tc-settings-note">The narrator only opens the board for an intimate competition with stakes and a winner. <b>Always</b> restores the legacy behaviour that opens it on any player-initiated intimate scene. Manual Start scene / Open board always bypasses this setting.</div>
+                                </div>
                                 <div class="rt-tc-field">
                                     <label for="rpg_lewd_combat_explicitness">Explicitness</label>
                                     <select id="rpg_lewd_combat_explicitness" class="text_pole">

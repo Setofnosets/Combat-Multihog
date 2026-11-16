@@ -26,6 +26,7 @@ Traditional Combat is the no-grid turn-based mode of the Multihog D&D Framework.
 - Terrain-altering special effects are rejected in this mode. Summons join the caster's side and act from the next round.
 - Specials share the Campaign Skill Registry used by Tactical Combat: the first successful resolution becomes canonical, later uses expand the stored recipe without another AI call, and transformations reuse registered forms. Terrain primitives remain invalid here.
 - An opening attack/spell declared before the fight resolves before Round 1; an ambush costs the enemy its first activation.
+- When **Show action descriptions and predicted values** is enabled (shared with Tactical Combat), selecting Attack, a skill, or an item renders an action preview panel and appends the prediction to every legal target button — for example `Goblin (12/12 HP) — 65% hit · 1d6+2 (avg 5.5) · AC 13`. Because Traditional resolves on the target click, this is the confirmation surface; no extra click is added. Specials show their description and recipe with `resolved by the agent` instead of a damage number. The prediction uses effective AC/attack values, and the unit-card chips now show the same effective AC/ATK rather than raw sheet values. Area/range concepts are not applied in this mode.
 
 ## AI contract
 

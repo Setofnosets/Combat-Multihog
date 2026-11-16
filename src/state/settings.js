@@ -1619,6 +1619,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'tacticalCombatSyncTrackerBeforeNarration',
     'tacticalCombatShowCoordinates',
     'tacticalCombatShowTargetingPreviews',
+    'combatShowActionPreviews',
     'tacticalCombatConnectionSource',
     'tacticalCombatConnectionProfileId',
     'tacticalCombatCompletionPresetId',
@@ -1663,6 +1664,7 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     // Lewd Combat is a secondary module. Its toggle, tuning, and per-chat
     // boards are global configuration too, never chat-state projections.
     'lewdCombatEnabled',
+    'lewdCombatTriggerMode',
     'lewdCombatExplicitness',
     'lewdCombatDarkerThemes',
     'lewdCombatProseFrequency',

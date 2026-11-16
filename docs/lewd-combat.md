@@ -238,7 +238,23 @@ compatibility. The structured beat log stays separate.
 
 - `StartLewdCombat` accepts `participantNames`, `spectatorNames`, `title`,
   `location`, `reason`, `openingTechnique`, `openingZone`, `tone`, `mode`
-  (`duel`, `group`, `free-for-all`), and `controlMode`.
+  (`duel`, `group`, `free-for-all`), `controlMode`, and `isContest`.
+- **Trigger mode** (`lewdCombatTriggerMode`) controls when the narrator may call
+  the tool:
+  - `competitions` (default) — call it **only** for an intimate competition with
+    stakes and a winner (a struggle for dominance, wager, challenge, or duel of
+    technique) and pass `isContest=true`. Routine intimacy, affection, flirting,
+    kissing, and casual acts are narrated normally. If the narrator is unsure, it
+    must not call the tool. A competitions-mode call without `isContest=true` is
+    rejected with a “narrate this moment normally” message, creates no board, and
+    does **not** trigger the 30-second failure cooldown.
+  - `always` — the legacy behaviour; call it once whenever the scene becomes
+    intimate and the player initiates, whether or not it is a competition.
+  The mode is injected at prompt assembly time as a `<lewd_combat_trigger>` block
+  immediately after `<lewd_combat>`, so it also overrides old wording in unlocked
+  base-prompt overrides. **Start scene** and **Open Lewd Combat board** in
+  Settings/the board are explicit player actions and bypass the competitions
+  guard; only the narrator tool is gated.
 - **Control modes** are independent of combat side:
   - `auto` (default) — `[CHARACTER]`/`[PARTY]` are player-controlled; `[COMBAT]`
     enemies/allies and `[LEWD]`-only named NPCs are AI-controlled.
@@ -290,8 +306,9 @@ compatibility. The structured beat log stays separate.
 
 Settings → Combat → **Lewd Combat (secondary)** contains:
 
-- enable, explicitness (`explicit` default / `suggestive` / `fade-to-black`),
-  darker themes, prose frequency, round cap, max concurrent partners;
+- enable, trigger mode (`competitions` default / `always`), explicitness
+  (`explicit` default / `suggestive` / `fade-to-black`), darker themes, prose
+  frequency, round cap, max concurrent partners;
 - control mode (`auto` / `player-all` / `ai-others`);
 - post-encounter latch and cooldown (seconds), `[COMBAT]` cleanup
   (`off` / `mark` / `close`), and mercy status writeback;

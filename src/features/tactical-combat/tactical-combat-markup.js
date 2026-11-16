@@ -226,6 +226,26 @@ function renderLegend(state, view = {}) {
     </details>`;
 }
 
+export function renderActionPreview(view) {
+    const preview = view.actionPreview;
+    if (!preview) return '';
+    const chip = preview.special
+        ? '<span class="rt-tc-preview-chip">special · resolver</span>'
+        : '';
+    const description = preview.description
+        ? `<p class="rt-tc-preview-desc">${escapeHtml(preview.description)}</p>`
+        : '';
+    const lines = (preview.lines || [])
+        .map(line => `<li>${escapeHtml(line)}</li>`)
+        .join('');
+    const className = view.actionPreviewClass || 'rt-tc-action-preview';
+    return `<div class="${className}" aria-live="polite">
+        <div class="rt-tc-preview-head"><b>${escapeHtml(preview.title)}</b>${chip}</div>
+        ${description}
+        ${lines ? `<ul class="rt-tc-preview-lines">${lines}</ul>` : ''}
+    </div>`;
+}
+
 function renderUnitCard(state, view) {
     const unit = state.units.find(candidate => candidate.id === view.selectedUnitId && !candidate.defeated && !candidate.fled)
         || state.units.find(candidate => candidate.id === view.activeUnitId && !candidate.defeated && !candidate.fled)
@@ -399,6 +419,7 @@ function renderUnitCard(state, view) {
         ${!state.deployment?.active && view.mode === 'item' ? '<div class="rt-tc-hint">Choose an item, then a highlighted ally.</div>' : ''}
         ${!state.deployment?.active && view.mode === 'attack' ? '<div class="rt-tc-hint">Choose a highlighted enemy to attack.</div>' : ''}
         ${!state.deployment?.active && view.mode === 'move' ? '<div class="rt-tc-hint">Choose a highlighted cell to move.</div>' : ''}
+        ${renderActionPreview(view)}
         ${skillList}
         ${passiveList}
         ${itemList}

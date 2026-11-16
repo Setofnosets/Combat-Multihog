@@ -17,6 +17,7 @@ describe('Lewd Combat settings pane contract', () => {
         for (const id of [
             'rpg_lewd_combat_drawer',
             'rpg_lewd_combat_enabled',
+            'rpg_lewd_combat_trigger_mode',
             'rpg_lewd_combat_options',
             'rpg_lewd_combat_explicitness',
             'rpg_lewd_combat_darker_themes',
@@ -85,6 +86,7 @@ describe('Lewd Combat settings pane contract', () => {
     it('persists every setting, prompt, token limit, and connection key', () => {
         for (const key of [
             'lewdCombatEnabled: false',
+            'lewdCombatTriggerMode: "competitions"',
             'lewdCombatProsePrompt: DEFAULT_LEWD_PROSE_PROMPT',
             'lewdCombatOutcomePrompt: DEFAULT_LEWD_OUTCOME_PROMPT',
             'lewdCombatAgentPrompt: DEFAULT_LEWD_AGENT_PROMPT',
@@ -98,6 +100,7 @@ describe('Lewd Combat settings pane contract', () => {
             expect(defaultsSource).toContain(key);
         }
         for (const key of [
+            'lewdCombatTriggerMode',
             'lewdCombatProsePrompt',
             'lewdCombatOutcomePrompt',
             'lewdCombatAgentPrompt',
@@ -125,6 +128,21 @@ describe('Lewd Combat settings pane contract', () => {
         expect(settings.lewdCombatOutcomePrompt).toMatch(/AUTHORITATIVE/);
         expect(settings.lewdCombatAgentPrompt).toMatch(/Never invent numbers/);
         expect(settings.lewdCombatConnectionSource).toBe('default');
+        expect(settings.lewdCombatTriggerMode).toBe('competitions');
+    });
+
+    it('normalizes the trigger mode and ships both options in the drawer', () => {
+        expect(normalizeLewdCombatSettings({ lewdCombatTriggerMode: 'nope' }).lewdCombatTriggerMode).toBe('competitions');
+        expect(normalizeLewdCombatSettings({}).lewdCombatTriggerMode).toBe('competitions');
+        expect(normalizeLewdCombatSettings({ lewdCombatTriggerMode: 'always' }).lewdCombatTriggerMode).toBe('always');
+        expect(settingsHtml).toContain('<option value="competitions" selected>');
+        expect(settingsHtml).toContain('<option value="always">');
+    });
+
+    it('binds and syncs the trigger-mode control', () => {
+        expect(settingsModuleSource).toContain("el('rpg_lewd_combat_trigger_mode')");
+        expect(settingsModuleSource).toContain('resolveLewdCombatTriggerMode');
+        expect(settingsModuleSource).toContain('settings.lewdCombatTriggerMode =');
     });
 
     it('clamps enum and numeric settings deterministically', () => {
