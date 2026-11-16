@@ -138,7 +138,8 @@
 - **Model / Effort:** deepseek-v4.1-flash #medium.
 - **Commit:** `feat(lewd): enforce competitions-only starts via isContest flag`
 
-### B1. Create the pure action-preview module
+### B1. [x] Create the pure action-preview module
+- **Status:** done — commit `b5282c0` (fallback parity fix in `806391b`)
 - **Files:** `src/features/tactical-combat/tactical-combat-engine.js` (export `getSourceAttackBonus` and `scaledSourceExpression`; no behaviour change), new `src/features/tactical-combat/combat-action-preview.js`, new `tests/combat-action-preview.test.js`.
 - **Depends on:** none.
 - **Parallelizable:** yes (with A1).
@@ -165,7 +166,8 @@
 - **Model / Effort:** deepseek-v4.1-flash #medium.
 - **Commit:** `feat(combat): add pure action-preview prediction module`
 
-### B2. Add the `combatShowActionPreviews` setting
+### B2. [x] Add the `combatShowActionPreviews` setting
+- **Status:** done — commit `f3015cb`
 - **Files:** `src/state/defaults.js`, `src/state/settings.js` (global allowlist), `src/features/tactical-combat/tactical-combat-settings.js` (sync/bind), `settings.html` (checkbox next to the existing previews toggle, note that it applies to both boards), `tests/tactical-combat-settings.test.js`.
 - **Depends on:** none.
 - **Parallelizable:** yes (with A1/B1).
@@ -178,7 +180,8 @@
 - **Model / Effort:** deepseek-v4.1-flash #low.
 - **Commit:** `feat(combat): add shared action-preview setting`
 
-### B3. Integrate previews into the Tactical board
+### B3. [x] Integrate previews into the Tactical board
+- **Status:** done — commit `fee65a7` (hint reset fix in `806391b`)
 - **Files:** `src/features/tactical-combat/tactical-combat-ui.js`, `src/features/tactical-combat/tactical-combat-markup.js`, `style.css`, `tests/tactical-combat-markup.test.js`, `tests/tactical-combat-ui-import.test.js`.
 - **Depends on:** B1, B2.
 - **Parallelizable:** yes (with B4, once B1/B2 land).
@@ -198,7 +201,8 @@
 - **Model / Effort:** deepseek-v4.1-flash #medium.
 - **Commit:** `feat(tactical): show action descriptions and predicted values`
 
-### B4. Integrate previews into the Traditional board
+### B4. [x] Integrate previews into the Traditional board
+- **Status:** done — commit `40d116c`
 - **Files:** `src/features/traditional-combat/traditional-combat-markup.js`, `src/features/traditional-combat/traditional-combat-ui.js`, `style.css`, `tests/traditional-combat-markup.test.js`, `tests/traditional-combat-ui-import.test.js`.
 - **Depends on:** B1, B2.
 - **Parallelizable:** yes (with B3).
@@ -218,7 +222,8 @@
 - **Model / Effort:** deepseek-v4.1-flash #medium.
 - **Commit:** `feat(traditional): show action descriptions and predicted values`
 
-### B5. Update docs and changelog
+### B5. [x] Update docs and changelog
+- **Status:** done — commit `d9bcbc6`
 - **Files:** `docs/lewd-combat.md`, `docs/tactical-combat.md`, `docs/traditional-combat.md`, `CHANGELOG.md`.
 - **Depends on:** A1–A3, B1–B4.
 - **Parallelizable:** no.
