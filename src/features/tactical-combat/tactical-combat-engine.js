@@ -1401,7 +1401,7 @@ export function getEffectiveAttackBonus(state, unit, extra = 0, target = null) {
  * @param {object} source
  * @returns {number}
  */
-function getSourceAttackBonus(state, unit, source, target = null) {
+export function getSourceAttackBonus(state, unit, source, target = null) {
     const normal = Number(unit?.attackBonus) || 0;
     const spell = unit?.spellAttackBonus == null ? NaN : Number(unit.spellAttackBonus);
     const base = source?.spell === true && Number.isFinite(spell) ? spell : normal;
@@ -3828,7 +3828,7 @@ function rollDamagePool(expression, critical, rng, variables = null) {
     return damage;
 }
 
-function scaledSourceExpression(source, state, unit, target, field = 'damage') {
+export function scaledSourceExpression(source, state, unit, target, field = 'damage') {
     const base = String(source?.[field] || '').trim();
     if (!source?.scale) return base;
     const context = buildCombatVariableContext(state, {
