@@ -25,6 +25,7 @@ const TAB_DEFS = [
     { id: 'general', icon: 'fa-gears', label: 'General & Visuals', match: /General\s*&\s*Visuals/i },
     { id: 'connections', icon: 'fa-plug', label: 'Connections', match: /Connections/i },
     { id: 'gamesystems', icon: 'fa-dice-d20', label: 'Game Systems', match: /Game Systems/i },
+    { id: 'scripts', icon: 'fa-scroll', label: 'Scripts', match: /^Scripts\b/i },
     { id: 'statetracker', icon: 'fa-brain', label: 'State Tracker', match: /State Tracker/i },
     { id: 'agent', icon: 'fa-route', label: 'Lorebook Agent', match: /Lorebook Agent/i },
     { id: 'maparchitect', icon: 'fa-map', label: 'Persistent Maps', match: /Persistent Maps/i },

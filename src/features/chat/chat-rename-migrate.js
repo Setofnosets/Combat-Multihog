@@ -272,7 +272,21 @@ export async function onChatRenamedMigrate(detail, deps) {
         );
     }
 
-    let settingsChanged = migratedPartition;
+    let migratedGameScripts = false;
+    if (!partitionCollision
+        && s.gameScriptStatesByChat
+        && typeof s.gameScriptStatesByChat === 'object'
+        && !Array.isArray(s.gameScriptStatesByChat)
+        && Object.prototype.hasOwnProperty.call(s.gameScriptStatesByChat, oldId)) {
+        const hasNewScriptState = Object.prototype.hasOwnProperty.call(s.gameScriptStatesByChat, newId);
+        if (!hasNewScriptState || resetMatchesRename) {
+            s.gameScriptStatesByChat[newId] = s.gameScriptStatesByChat[oldId];
+            delete s.gameScriptStatesByChat[oldId];
+            migratedGameScripts = true;
+        }
+    }
+
+    let settingsChanged = migratedPartition || migratedGameScripts;
     if (migratedPartition && preserveCampaignPrefixAfterRename(s, oldId, newId, { activeChatId: activeId })) {
         settingsChanged = true;
     } else if (!partitionCollision && s.routerCampaignPrefixOverrideAnchorChatId === oldId) {

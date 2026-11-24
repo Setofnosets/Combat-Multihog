@@ -107,6 +107,15 @@ import { syncLewdCombatSettingsUi } from './src/features/lewd-combat/lewd-combat
 import { applyLewdCombatTrigger } from './src/features/lewd-combat/lewd-combat-trigger.js';
 import { isTacticalCombatMode, isTraditionalCombatMode, resolveCombatStyle } from './src/features/combat/combat-mode.js';
 import { installCombatUiRouter, syncCombatHeaderButton } from './src/features/combat/combat-ui-router.js';
+import {
+    initScriptHostAdapter,
+    getClaimedScriptTagsForActiveChat,
+    buildActiveScriptsSyspromptBlock,
+    onScriptChatChanged,
+    syncScriptToolRegistrations,
+    seedInitialScriptStateForChat,
+} from './src/features/scripting/script-host-adapter.js';
+import { installScriptsUi, refreshScriptsUi } from './src/features/scripting/script-ui.js';
 import { installApiSetupGate, showApiSetupGate, syncApiSetupGate } from './src/ui/api-setup-gate.js';
 import { restoreEscapedCyoaChoiceMarkup } from './src/ui/panel/cyoa-markup.js';
 import { captureXpGainAnimationState, playXpGainAnimation } from './src/ui/panel/xp-gain-animation.js';
@@ -2765,6 +2774,8 @@ async function onChatChanged(newChatId) {
         try { syncCombatModeSettingsUi({ settings: s }); } catch (error) { console.warn('[RPG Tracker] Combat mode settings refresh skipped:', error); }
         try { syncLewdCombatSettingsUi(s); } catch (error) { console.warn('[RPG Tracker] Lewd Combat settings refresh skipped:', error); }
         try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
+        try { void onScriptChatChanged(); } catch (error) { console.warn('[RPG Tracker] Game Scripts chat refresh skipped:', error); }
+        try { refreshScriptsUi(); } catch (_) { /* boot */ }
         updateChatLinkUI();
         return;
     }
@@ -2849,6 +2860,8 @@ async function onChatChanged(newChatId) {
     try { onTraditionalCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Traditional Combat chat switch skipped:', error); }
     try { onLewdCombatChatChanged(resolvedId); } catch (error) { console.warn('[RPG Tracker] Lewd Combat chat switch skipped:', error); }
     try { syncCombatHeaderButton(); } catch (_) { /* boot */ }
+    try { void onScriptChatChanged(); } catch (error) { console.warn('[RPG Tracker] Game Scripts chat switch skipped:', error); }
+    try { refreshScriptsUi(); } catch (_) { /* boot */ }
     const ownsChat = createChatCommitGuard(resolvedId, getActiveChatId);
     runtimeState.hasActiveDungeonMap = false;
     if (s.chatLinkEnabled && oldChatId) {
@@ -3044,6 +3057,8 @@ async function onChatChanged(newChatId) {
         globalThis._rpgLoadAdventureCompanionForChat(resolvedId);
     }
     if (s.chatSetupLinkEnabled) syncAllNarratorTogglesForUnlockState();
+    try { void onScriptChatChanged(); } catch (error) { console.warn('[RPG Tracker] Game Scripts post-load sync skipped:', error); }
+    try { refreshScriptsUi(); } catch (_) { /* boot */ }
     if (migratedPortraitScope) void saveSettings(true);
 
     // Persist only after the arriving partition has been projected. Saving the
@@ -3510,6 +3525,15 @@ async function runStateModelPass(narrativeOutput, isFullContext = false, overrid
                         .replace(/\[COMBAT\][\s\S]*?\[\/COMBAT\]/gi, '')
                         .replace(/\n{3,}/g, '\n\n')
                         .trim();
+                }
+
+                const claimedScriptTags = getClaimedScriptTagsForActiveChat(settings, passChatId);
+                if (claimedScriptTags.size > 0) {
+                    for (const tag of claimedScriptTags) {
+                        const escaped = escapeRegex(tag);
+                        cleanedOutput = cleanedOutput.replace(new RegExp(`\\[${escaped}\\][\\s\\S]*?\\[\\/${escaped}\\]`, 'gi'), '');
+                    }
+                    cleanedOutput = cleanedOutput.replace(/\n{3,}/g, '\n\n').trim();
                 }
 
                 const merged = mergeMemo(memoBeforeThisChunk, cleanedOutput);
@@ -6065,6 +6089,10 @@ export function buildSysprompt(rawText) {
     }).filter(Boolean);
 
     let content = pieces.join('\n\n');
+    const scriptsPrompt = buildActiveScriptsSyspromptBlock(s, runtimeState.currentChatId || getActiveChatId());
+    if (scriptsPrompt) {
+        content = content ? `${content}\n\n${scriptsPrompt}` : scriptsPrompt;
+    }
 
     // Legacy placeholder substitution — kept for backward compatibility with any
     // custom prompt still using it; current sysprompt.txt no longer contains it.
@@ -6553,6 +6581,16 @@ function organizeConnectionSettingsUI() {
         installTraditionalCombatUi();
         installLewdCombatUi();
         installCombatUiRouter();
+        initScriptHostAdapter();
+        installScriptsUi({
+            getSettings,
+            saveSettings,
+            getActiveChatId,
+            syncTools: (liveSettings, chatId) => syncScriptToolRegistrations(liveSettings, chatId),
+            applySysprompt: () => autoApplySysprompt(true),
+            updateUIMemo: (memo) => updateUIMemo(memo),
+            seedInitialState: (liveSettings, chatId, scriptId) => seedInitialScriptStateForChat(liveSettings ?? getSettings(), chatId, scriptId),
+        });
         document.addEventListener('rt_open_settings_overlay', (event) => {
             openSettingsOverlay(event?.detail?.tab || 'combat');
         });
@@ -8289,6 +8327,7 @@ function organizeConnectionSettingsUI() {
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTacticalCombatToolRegistration());
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncTraditionalCombatToolRegistration());
         if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncLewdCombatToolRegistration());
+        if (event_types.MESSAGE_SENT) eventSource.on(event_types.MESSAGE_SENT, () => syncScriptToolRegistrations());
         if (event_types.MESSAGE_RECEIVED) eventSource.on(event_types.MESSAGE_RECEIVED, onMapArchitectAssistantMessage);
         const catchUpMapArchitectFence = () => {
             setTimeout(() => { void onMapArchitectAssistantMessage(undefined, 'normal'); }, 0);

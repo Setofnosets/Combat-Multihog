@@ -68,6 +68,12 @@ import {
     seedMapArchitectContinueText,
     stripCreateAreaMapCommand,
 } from './map-architect-opener.js';
+import {
+    runHostScriptsBeforeGenerate,
+    runHostScriptsAfterGenerate,
+    handleHostScriptSwipeRollback,
+    syncScriptToolRegistrations,
+} from './src/features/scripting/script-host-adapter.js';
 export { isPercentFormula, resolveDiceCompare };
 
 const dungeonMissingMapWarnings = new Set();
@@ -1011,6 +1017,7 @@ export function onLewdUserTurn() {
         if (getSettings()?.debugMode) console.warn('[RPG Tracker] Lewd Combat latch release failed:', error);
     }
     syncLewdCombatToolRegistration();
+    syncScriptToolRegistrations();
 }
 
 /** Lewd Combat is opt-in twice: module setting + Narrator Configuration section. */
@@ -1864,6 +1871,7 @@ export function installInterceptor() {
         const _rbLastAi = _rbChat ? [..._rbChat].reverse().find(m => !m.is_user && !m.is_system) : null;
         if (_rbLastAi) {
             applyMemoSwipeRollback(_rbLastAi, settings);
+            chatCommitResult(ownsChat, await handleHostScriptSwipeRollback(_rbLastAi, settings));
             if (settings.npcRelationshipBars) {
                 const _relRb = applyRelationshipSwipeRollback(_rbLastAi, settings);
                 if (_relRb.anyChanged) refreshRelationshipBarsDOM(settings);
@@ -1965,7 +1973,7 @@ export function installInterceptor() {
             prepareUserMessagesForContextInject(chat, idx);
         }
 
-        const content = extractTextContent(msg);
+        let content = extractTextContent(msg);
         let injections = "";     // core: pacing + CYOA + RNG + State Memo + Quests → user msg
         let loreInjections = ""; // lore: keyword/agent entries (configurable depth)
         let wpInjections = "";   // world progression reports (configurable depth)
@@ -2064,6 +2072,19 @@ export function installInterceptor() {
                         injections += buildRngBlock(queue, true);
                         if (settings.debugMode) console.log("RNG Queue (d100) generated for injection.");
                     }
+                }
+
+                const scriptPreResult = chatCommitResult(ownsChat, await runHostScriptsBeforeGenerate({
+                    chat,
+                    lastUserMessage: content,
+                    settings,
+                }));
+                if (scriptPreResult?.stripCommand && typeof scriptPreResult.strippedMessage === 'string') {
+                    content = scriptPreResult.strippedMessage;
+                    setChatMessageText(msg, content);
+                }
+                if (scriptPreResult?.promptInjection) {
+                    injections += `${scriptPreResult.promptInjection}\n\n`;
                 }
 
                 if (settings.currentMemo) {
@@ -3538,6 +3559,7 @@ export function isLatestAssistantFromActiveChar(chat, ctx) {
 export function onGenerationStarted(type, _options, dryRun) {
     syncTacticalCombatToolRegistration();
     syncLewdCombatToolRegistration();
+    syncScriptToolRegistrations();
     if (dryRun === true) {
         recordSchedulerEvent('generation_started_dry_run', { generationType: type ?? null });
         return;
@@ -3659,6 +3681,7 @@ function stripEndedCombatAftermath(settings) {
 export async function onGenerationEnded() {
     syncTacticalCombatToolRegistration();
     syncLewdCombatToolRegistration();
+    syncScriptToolRegistrations();
     const ownsChat = createChatCommitGuard(getActiveChatId(), getActiveChatId);
     try {
         _rpgIsGenerating = false;
@@ -3831,6 +3854,20 @@ export async function onGenerationEnded() {
                 if (typeof globalThis._rpgRenderRouterUI === 'function') {
                     globalThis._rpgRenderRouterUI();
                 }
+            }
+        }
+
+        const scriptLastAiMsg = getLatestNarrativeAssistantCandidate(chat);
+        if (ownsChat() && !['quiet', 'impersonate'].includes(typeLower) && scriptLastAiMsg) {
+            try {
+                chatCommitResult(ownsChat, await runHostScriptsAfterGenerate({
+                    chat,
+                    lastAiMsg: scriptLastAiMsg,
+                    settings,
+                }));
+            } catch (scriptErr) {
+                if (!ownsChat()) return;
+                console.warn('[RPG Tracker] Game Scripts post-generate hook failed:', scriptErr);
             }
         }
 

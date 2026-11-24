@@ -303,11 +303,49 @@ function collectLegacySetupArrays(settings, field) {
     return lists;
 }
 
+function normalizeBooleanStateMap(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+    const normalized = {};
+    for (const [key, value] of Object.entries(raw)) {
+        const id = String(key || '').trim();
+        if (!id) continue;
+        normalized[id] = !!value;
+    }
+    return normalized;
+}
+
+function getActiveChatScriptStates(settings) {
+    try {
+        const ctx = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext?.() : null;
+        const trackedId = typeof globalThis._rpgCurrentChatId === 'function' ? globalThis._rpgCurrentChatId() : null;
+        const chatId = String(trackedId || ctx?.getCurrentChatId?.() || ctx?.chatId || '').trim();
+        const setupStates = chatId ? settings?.chatStates?.[chatId]?.setup?.gameScriptStates : null;
+        return normalizeBooleanStateMap(setupStates);
+    } catch (_) {
+        return {};
+    }
+}
+
+function writeActiveChatScriptStates(settings, states) {
+    try {
+        const ctx = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext?.() : null;
+        const trackedId = typeof globalThis._rpgCurrentChatId === 'function' ? globalThis._rpgCurrentChatId() : null;
+        const chatId = String(trackedId || ctx?.getCurrentChatId?.() || ctx?.chatId || '').trim();
+        if (!chatId || !settings?.chatStates?.[chatId] || typeof settings.chatStates[chatId] !== 'object') return;
+        const chatState = settings.chatStates[chatId];
+        if (!chatState.setup || typeof chatState.setup !== 'object') chatState.setup = {};
+        chatState.setup.gameScriptStates = normalizeBooleanStateMap(states);
+    } catch (_) {
+        // Ignore when no SillyTavern chat context is active.
+    }
+}
+
 function upgradeLegacySetup(setup) {
     if (!setup || typeof setup !== 'object') return;
     if (!setup.customFieldStates) setup.customFieldStates = stateMap(setup.customFields, customFieldKey);
     if (!setup.syspromptSnippetStates) setup.syspromptSnippetStates = stateMap(setup.customSyspromptLibrary, snippetKey);
     if (!setup.gameSystemStates) setup.gameSystemStates = stateMap(setup.gameSystems, gameSystemKey);
+    setup.gameScriptStates = normalizeBooleanStateMap(setup.gameScriptStates);
     delete setup.customFields;
     delete setup.customSyspromptLibrary;
     delete setup.gameSystems;
@@ -398,6 +436,7 @@ export function snapshotChatSetup(settings) {
         customFieldStates: stateMap(settings?.customFields, customFieldKey),
         syspromptSnippetStates: stateMap(settings?.customSyspromptLibrary, snippetKey),
         gameSystemStates: stateMap(settings?.gameSystems, gameSystemKey),
+        gameScriptStates: getActiveChatScriptStates(settings),
     };
     for (const key of CHAT_SETUP_KEYS) {
         setup[key] = key === 'cyoaConfig'
@@ -429,6 +468,7 @@ export function applyChatSetup(settings, setup) {
     settings.gameSystems = hydrateCatalog(settings.gameSystemDatabase, setup.gameSystemStates, gameSystemKey);
     settings.customFields = hydrateCatalog(settings.trackerModuleDatabase, setup.customFieldStates, customFieldKey);
     settings.customSyspromptLibrary = hydrateCatalog(settings.syspromptSnippetDatabase, setup.syspromptSnippetStates, snippetKey);
+    writeActiveChatScriptStates(settings, setup.gameScriptStates);
     alignWizardScopes(settings);
     return true;
 }
@@ -436,7 +476,7 @@ export function applyChatSetup(settings, setup) {
 /** Reset only the Control Room / tracker setup; catalog items stay visible and inactive. */
 export function resetChatSetupToStock(settings) {
     const defaults = buildDefaultSettings();
-    const setup = { version: 3, customFieldStates: {}, syspromptSnippetStates: {}, gameSystemStates: {} };
+    const setup = { version: 3, customFieldStates: {}, syspromptSnippetStates: {}, gameSystemStates: {}, gameScriptStates: {} };
     for (const key of CHAT_SETUP_KEYS) setup[key] = clone(defaults[key]);
     return applyChatSetup(settings, setup);
 }
@@ -451,6 +491,7 @@ export function clearChatBoundActivations(settings) {
     setup.customFieldStates = {};
     setup.syspromptSnippetStates = {};
     setup.gameSystemStates = {};
+    setup.gameScriptStates = {};
     return applyChatSetup(settings, setup);
 }
 
@@ -462,15 +503,23 @@ export function removeChatSetupCatalogEntries(settings, {
     customFieldTags = [],
     syspromptIds = [],
     gameSystemIds = [],
+    gameScriptIds = [],
 } = {}) {
     if (!settings) return;
     const fieldKeys = new Set(customFieldTags.map(tag => String(tag || '').toUpperCase()).filter(Boolean));
     const snippetKeys = new Set(syspromptIds.map(id => String(id || '')).filter(Boolean));
     const systemKeys = new Set(gameSystemIds.map(id => String(id || '')).filter(Boolean));
+    const scriptKeys = new Set(gameScriptIds.map(id => String(id || '').trim()).filter(Boolean));
 
     settings.trackerModuleDatabase = (settings.trackerModuleDatabase || []).filter(item => !fieldKeys.has(customFieldKey(item)));
     settings.syspromptSnippetDatabase = (settings.syspromptSnippetDatabase || []).filter(item => !snippetKeys.has(snippetKey(item)));
     settings.gameSystemDatabase = (settings.gameSystemDatabase || []).filter(item => !systemKeys.has(gameSystemKey(item)));
+    if (Array.isArray(settings.gameScriptDatabase)) {
+        settings.gameScriptDatabase = settings.gameScriptDatabase.filter(item => !scriptKeys.has(String(item?.id || '').trim()));
+    }
+    if (Array.isArray(settings.gameScriptOrder)) {
+        settings.gameScriptOrder = settings.gameScriptOrder.filter(id => !scriptKeys.has(String(id || '').trim()));
+    }
     settings.customFields = (settings.customFields || []).filter(item => !fieldKeys.has(customFieldKey(item)));
     settings.customSyspromptLibrary = (settings.customSyspromptLibrary || []).filter(item => !snippetKeys.has(snippetKey(item)));
     settings.gameSystems = (settings.gameSystems || []).filter(item => !systemKeys.has(gameSystemKey(item)));
@@ -482,6 +531,7 @@ export function removeChatSetupCatalogEntries(settings, {
         for (const key of fieldKeys) delete setup.customFieldStates[key];
         for (const key of snippetKeys) delete setup.syspromptSnippetStates[key];
         for (const key of systemKeys) delete setup.gameSystemStates[key];
+        for (const key of scriptKeys) delete setup.gameScriptStates[key];
         if (Array.isArray(setup.blockOrder)) setup.blockOrder = setup.blockOrder.filter(tag => !fieldKeys.has(String(tag).toUpperCase()));
         if (Array.isArray(setup.syspromptSectionOrder)) {
             setup.syspromptSectionOrder = setup.syspromptSectionOrder.filter(key => !snippetKeys.has(String(key).replace(/^lib:/, '')));
