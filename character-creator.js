@@ -14,6 +14,14 @@ import { buildInstantActionPromptSection, extractInstantActionLevel, normalizeIn
 import { findCharacterCreatorPresetByName, upsertCharacterCreatorPreset } from './src/features/character-creator/presets.js';
 import { getCharacterCreationConnectionSettings } from './character-creation-connection.js';
 import { createChatCommitGuard } from './src/state/pass-affinity.js';
+import {
+    applyHydratedCardFields,
+    createCharacterCardHydrator,
+    getCharacterCardPreviewText,
+    hasHydratableAvatar,
+    isShallowCharacterCard,
+    normalizeListedCharacterCard,
+} from './src/state/character-cards.js';
 
 /**
  * sendDirectPrompt already refuses memo commits after a chat switch, but callers
@@ -1143,10 +1151,15 @@ export function showPcImportPanel(el) {
         editBtn.addEventListener('click', () => openPcSectionEditor());
     }
 
+    const cardHydrator = createCharacterCardHydrator({ getHeaders: getRequestHeaders });
+    let previewAbort = null;
+
     // Back button — restore exactly what was hidden, not a blank reset
     const backBtn = panel.querySelector('#rt-pc-import-back');
     if (backBtn) {
         backBtn.addEventListener('click', () => {
+            previewAbort?.abort();
+            previewAbort = null;
             panel.style.display = 'none';
             if (heroEl) heroEl.style.display = savedHeroDisplay;
             if (quickStartEl) quickStartEl.style.display = savedQuickStartDisplay;
@@ -1174,11 +1187,15 @@ export function showPcImportPanel(el) {
     }
 
     const ctx = SillyTavern.getContext();
-    const allChars = (ctx.characters || []).filter(c => c.name);
+    const allChars = (ctx.characters || [])
+        .filter(c => c?.name)
+        .map(normalizeListedCharacterCard);
     let currentFilter = '';
     let displayCount = 10;
 
     const renderPcList = () => {
+        previewAbort?.abort();
+        previewAbort = null;
         listEl.innerHTML = '';
         const filtered = currentFilter
             ? allChars.filter(c => c.name.toLowerCase().includes(currentFilter.toLowerCase()))
@@ -1188,7 +1205,13 @@ export function showPcImportPanel(el) {
             return;
         }
         const visible = filtered.slice(0, displayCount);
+        const pendingPreviewRows = [];
         for (const char of visible) {
+            const cached = cardHydrator.getCached(char);
+            if (!isShallowCharacterCard(cached) && isShallowCharacterCard(char)) {
+                applyHydratedCardFields(char, cached);
+            }
+
             const row = document.createElement('div');
             row.style.cssText = 'display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:5px;padding:5px 7px;';
 
@@ -1215,7 +1238,12 @@ export function showPcImportPanel(el) {
             nameEl.textContent = char.name;
             const descEl = document.createElement('div');
             descEl.style.cssText = 'font-size:10px;color:rgba(255,255,255,0.4);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-            descEl.textContent = (char.description || char.personality || 'No description').substring(0, 80);
+            if (isShallowCharacterCard(char) && hasHydratableAvatar(char)) {
+                descEl.textContent = 'Loading preview…';
+                pendingPreviewRows.push({ char, descEl });
+            } else {
+                descEl.textContent = getCharacterCardPreviewText(char, { maxLength: 80 });
+            }
             info.appendChild(nameEl);
             info.appendChild(descEl);
 
@@ -1237,7 +1265,12 @@ export function showPcImportPanel(el) {
                 addAsIsBtn.disabled = true; fitBtn.disabled = true;
                 addAsIsBtn.textContent = '⏳'; fitBtn.textContent = '⏳';
                 try {
-                    await importPcFromCard(char, mode, el);
+                    const fullChar = await cardHydrator.hydrate(char, { strict: true });
+                    applyHydratedCardFields(char, fullChar);
+                    if (descEl.isConnected) {
+                        descEl.textContent = getCharacterCardPreviewText(char, { maxLength: 80 });
+                    }
+                    await importPcFromCard(fullChar, mode, el);
                 } catch (err) {
                     toastr['error'](`Import failed: ${String(err.message || err).substring(0, 120)}`, 'PC Import');
                 } finally {
@@ -1262,6 +1295,29 @@ export function showPcImportPanel(el) {
             more.addEventListener('click', () => { displayCount += 10; renderPcList(); });
             listEl.appendChild(more);
         }
+
+        if (pendingPreviewRows.length > 0) {
+            const controller = new AbortController();
+            previewAbort = controller;
+            const rowByChar = new Map(pendingPreviewRows.map(entry => [entry.char, entry.descEl]));
+            const cardsToHydrate = pendingPreviewRows.map(entry => entry.char);
+            void cardHydrator.hydrateVisible(cardsToHydrate, {
+                signal: controller.signal,
+                onHydrated: (card, hydrated) => {
+                    applyHydratedCardFields(card, hydrated);
+                    const descNode = rowByChar.get(card);
+                    if (descNode && listEl.contains(descNode) && !controller.signal.aborted) {
+                        descNode.textContent = getCharacterCardPreviewText(card, { maxLength: 80 });
+                    }
+                },
+                onError: (card) => {
+                    const descNode = rowByChar.get(card);
+                    if (descNode && listEl.contains(descNode) && !controller.signal.aborted) {
+                        descNode.textContent = getCharacterCardPreviewText(card, { maxLength: 80 });
+                    }
+                },
+            });
+        }
     };
 
     if (searchEl) {
@@ -1285,17 +1341,28 @@ export function showPcImportPanel(el) {
 async function importPcFromCard(charCard, mode, el) {
     const s = getSettings();
     const ctx = SillyTavern.getContext();
-    const name = charCard.name || 'Unnamed';
 
-    // Read word count synchronously from the DOM before any async operations 
-    // potentially trigger a chat re-render and orphan the element
+    // Read word count and gear tier synchronously from the DOM before any async
+    // operations potentially trigger a chat re-render and orphan the element
     const wordSelectEl = /** @type {HTMLSelectElement|null} */ (el.querySelector('#rt-pc-import-wordselect'));
     const wordCountEl = /** @type {HTMLInputElement|null} */ (el.querySelector('#rt-pc-import-wordcount'));
+    const gearTierEl = /** @type {HTMLSelectElement|null} */ (el.querySelector('#rt-onboarding-gear-tier') || el.querySelector('#rt-cr-gear-tier'));
+    const gearTier = gearTierEl?.value || s.onboardingGearTier || 'auto';
     
     let wordCountStr = wordSelectEl?.value || 'same'; // Default to first option
     if (wordCountStr === 'custom') {
         wordCountStr = String(Math.max(50, Math.min(5000, parseInt(wordCountEl?.value || '150', 10) || 150)));
     }
+
+    const passChatId = getActiveChatId();
+    const ownsChat = createChatCommitGuard(passChatId, getActiveChatId);
+
+    if (isShallowCharacterCard(charCard) && hasHydratableAvatar(charCard)) {
+        charCard = await createCharacterCardHydrator({ getHeaders: getRequestHeaders }).hydrate(charCard, { strict: true });
+        if (!ownsChat()) return;
+    }
+
+    const name = charCard.name || 'Unnamed';
 
     // Gather world context
     const contextLines = [];
@@ -1313,8 +1380,6 @@ async function importPcFromCard(charCard, mode, el) {
 
     const importBlockList = buildOnboardingActiveBlocks(s).join(', ');
     const combatSkillHint = buildCombatAndSkillScalingHint();
-    const gearTierEl = /** @type {HTMLSelectElement|null} */ (el.querySelector('#rt-onboarding-gear-tier') || el.querySelector('#rt-cr-gear-tier'));
-    const gearTier = gearTierEl?.value || s.onboardingGearTier || 'auto';
     s.onboardingGearTier = gearTier;
     const importGenre = s.onboardingGenre || 'fantasy';
     const importHasInventory = !!s.modules?.inventory;
@@ -1355,8 +1420,6 @@ ${worldCtx}`;
     toastr['info'](`Importing "${name}" as PC… generating state memo.`, 'PC Import');
     el.querySelectorAll('.rt-random-char-btn').forEach(b => { /** @type {HTMLButtonElement} */ (b).disabled = true; });
 
-    const passChatId = getActiveChatId();
-    const ownsChat = createChatCommitGuard(passChatId, getActiveChatId);
     let importSucceeded = false;
     try {
         const result = await sendDirectPrompt(memoPrompt, {

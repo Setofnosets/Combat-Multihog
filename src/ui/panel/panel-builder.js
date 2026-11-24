@@ -27,6 +27,15 @@ import { clearMemoAndMapHistory, getDungeonMapHistoryEntry } from '../../state/d
 import { isLorebookAgentRuntimeActive, isLocationMappingEnabled } from '../../state/section-enabled.js';
 import { openDungeonMapReadablePopup } from './dungeon-map-panel.js';
 import { buildAddLibraryNpcToPartyPrompt, buildApplyLibraryCardAsPcPrompt, extractLibraryIdentityContent, findLibraryNpcByName, getNpcLibrary, sanitizeNpcLibraryRecords } from '../../../npc-library-lib.js';
+import {
+    applyHydratedCardFields,
+    createCharacterCardHydrator,
+    getCharacterCardPreviewText,
+    hasHydratableAvatar,
+    hydrateCharacterCards,
+    isShallowCharacterCard,
+    normalizeListedCharacterCard,
+} from '../../state/character-cards.js';
 
 const MAPS_GUIDE_HTML = `
     <div style="padding:24px;max-width:760px;max-height:calc(85vh - 48px);box-sizing:border-box;overflow-y:auto;text-align:left;font-family:var(--rt-font,system-ui,sans-serif);color:var(--SmartThemeBodyColor,inherit);line-height:1.55;">
@@ -119,7 +128,10 @@ function selectedCharacterCardReference(card) {
     if (!card || typeof card !== 'object') return null;
     const result = {};
     for (const key of ['name', 'description', 'personality', 'scenario', 'mes_example', 'mesExample', 'first_mes', 'firstMessage', 'creator_notes', 'creatorNotes']) {
-        if (card[key] != null) result[key] = String(card[key]);
+        const raw = (typeof card[key] === 'string' && card[key].length > 0)
+            ? card[key]
+            : (card.data?.[key] ?? card[key]);
+        if (raw != null) result[key] = String(raw);
     }
     return result;
 }
@@ -289,8 +301,8 @@ async function promptAndRunLorebookAgentMap(siteRoot, locationContent, escapeHtm
                     lookback: parseLookbackValue(popupValue(root, '#rt-map-create-lookback', lookbackValue), lookbackValue),
                     lorebookNames: [...root.querySelectorAll('input[data-map-context-lorebook]:checked')]
                         .map(input => String(input.dataset.mapContextLorebook || '').trim()).filter(Boolean),
-                    characterCards: [...root.querySelectorAll('input[data-map-context-character-card]:checked')]
-                        .map(input => selectedCharacterCardReference(ctx.characters?.[Number(input.dataset.mapContextCharacterCard)]))
+                    selectedCharacterCards: [...root.querySelectorAll('input[data-map-context-character-card]:checked')]
+                        .map(input => ctx.characters?.[Number(input.dataset.mapContextCharacterCard)])
                         .filter(Boolean),
                     include: [...root.querySelectorAll('input[data-map-include-site]:checked')]
                         .map(input => String(input.dataset.mapIncludeSite || '').trim()).filter(Boolean),
@@ -304,6 +316,11 @@ async function promptAndRunLorebookAgentMap(siteRoot, locationContent, escapeHtm
     if (!form) return { ok: false, error: 'Could not read the map form.' };
 
     try {
+        const hydratedCards = chatCommitResult(ownsChat, await hydrateCharacterCards(form.selectedCharacterCards, {
+            getHeaders: () => ctx?.getRequestHeaders?.() || {},
+        }));
+        form.characterCards = hydratedCards.map(selectedCharacterCardReference).filter(Boolean);
+
         if (form.mode === 'manual') {
             chatCommitResult(ownsChat, await runMapArchitect({
                 site,
@@ -456,8 +473,8 @@ async function promptAndCreateMappedLocation({ runMapArchitect, inferMapArchitec
                     lookback: parseLookbackValue(popupValue(root, '#rt-map-loc-lookback', lookbackValue), lookbackValue),
                     lorebookNames: [...root.querySelectorAll('input[data-map-context-lorebook]:checked')]
                         .map(input => String(input.dataset.mapContextLorebook || '').trim()).filter(Boolean),
-                    characterCards: [...root.querySelectorAll('input[data-map-context-character-card]:checked')]
-                        .map(input => selectedCharacterCardReference(ctx.characters?.[Number(input.dataset.mapContextCharacterCard)]))
+                    selectedCharacterCards: [...root.querySelectorAll('input[data-map-context-character-card]:checked')]
+                        .map(input => ctx.characters?.[Number(input.dataset.mapContextCharacterCard)])
                         .filter(Boolean),
                     locationKeys: parseKeywordInput(popupValue(root, '#rt-map-loc-keys')),
                     kind,
@@ -482,6 +499,11 @@ async function promptAndCreateMappedLocation({ runMapArchitect, inferMapArchitec
     if (site.includes('::')) return { ok: false, error: 'Use a location root name, not a nested :: path.' };
 
     try {
+        const hydratedCards = chatCommitResult(ownsChat, await hydrateCharacterCards(form.selectedCharacterCards, {
+            getHeaders: () => ctx?.getRequestHeaders?.() || {},
+        }));
+        form.characterCards = hydratedCards.map(selectedCharacterCardReference).filter(Boolean);
+
         if (form.mode === 'manual') {
             if (!form.prompt || !form.briefDescription) return { ok: false, error: 'Map-generation prompt and brief description are required.' };
             chatCommitResult(ownsChat, await runMapArchitect({
@@ -4698,16 +4720,8 @@ ${namingRule}`;
                 clearTimeout(timeoutId);
                 if (res.ok) {
                     const raw = chatCommitResult(ownsChat, await res.json());
-                    // Strip heavy fields to reduce memory — keep only what we need
-                    allChars = (Array.isArray(raw) ? raw : []).map(c => ({
-                        name: c.name || '',
-                        avatar: c.avatar || '',
-                        description: (c.description || ''),
-                        personality: (c.personality || ''),
-                        scenario: (c.scenario || ''),
-                        first_mes: (c.first_mes || ''),
-                        date_added: c.date_added || 0,
-                    }));
+                    // Strip heavy fields to reduce memory — keep only what we need, preserving `shallow`
+                    allChars = (Array.isArray(raw) ? raw : []).map(normalizeListedCharacterCard);
                     allChars.sort((a, b) => (b.date_added || 0) - (a.date_added || 0));
                 }
             } catch (err) {
@@ -4721,6 +4735,13 @@ ${namingRule}`;
                 return;
             }
 
+            // Per-dialog hydrator caches /api/characters/get responses for shallow cards
+            // (TauriTavern always returns shallow cards from /api/characters/all, and
+            // SillyTavern does so when performance.lazyLoadCharacters is enabled).
+            const cardHydrator = createCharacterCardHydrator({ getHeaders: getRequestHeaders });
+            let cardPreviewAbort = null;
+            let hydrateVisibleCardPreviews = null;
+
             // ── Build dialog shell ──────────────────────────────────────────
             document.getElementById(NPC_CREATOR_OVERLAY_ID)?.remove();
             const overlay = document.createElement('div');
@@ -4731,6 +4752,8 @@ ${namingRule}`;
             popup.className = 'rt-charpicker-popup';
 
             const dismissOverlay = () => {
+                cardPreviewAbort?.abort();
+                cardPreviewAbort = null;
                 if (onNpcLibraryUpdated) {
                     document.removeEventListener('rt_npc_library_updated', onNpcLibraryUpdated);
                     onNpcLibraryUpdated = null;
@@ -4753,6 +4776,7 @@ ${namingRule}`;
             tabBar.className = 'rt-npc-creator-tabs';
             const libraryCount = getNpcLibrary(getSettings()).length;
             const defaultTab = libraryCount > 0 ? 'library' : 'card';
+            let activeTab = defaultTab;
             const tabDefs = [
                 { id: 'library', label: '📚 Library' },
                 { id: 'card', label: '🗂️ From Card' },
@@ -4774,9 +4798,16 @@ ${namingRule}`;
                 tabPanels[id] = panel;
             }
             const switchTab = (id) => {
+                activeTab = id;
                 for (const [tid, btn] of Object.entries(tabBtns)) {
                     btn.classList.toggle('active', tid === id);
                     tabPanels[tid].classList.toggle('hidden', tid !== id);
+                }
+                if (id === 'card') {
+                    hydrateVisibleCardPreviews?.();
+                } else {
+                    cardPreviewAbort?.abort();
+                    cardPreviewAbort = null;
                 }
             };
             tabBar.addEventListener('click', (e) => {
@@ -4889,8 +4920,54 @@ ${namingRule}`;
 
                 let currentFilter = '';
                 let displayCount = 10;
+                let pendingPreviewRows = [];
+
+                hydrateVisibleCardPreviews = () => {
+                    cardPreviewAbort?.abort();
+                    cardPreviewAbort = null;
+                    if (activeTab !== 'card' || !ownsChat() || pendingPreviewRows.length === 0) return;
+
+                    const stillShallow = [];
+                    for (const entry of pendingPreviewRows) {
+                        const cached = cardHydrator.getCached(entry.char);
+                        if (!isShallowCharacterCard(cached)) {
+                            applyHydratedCardFields(entry.char, cached);
+                            if (listContainer.contains(entry.descEl)) {
+                                entry.descEl.textContent = getCharacterCardPreviewText(entry.char, { maxLength: 120 });
+                            }
+                        } else if (hasHydratableAvatar(entry.char)) {
+                            stillShallow.push(entry);
+                        }
+                    }
+                    pendingPreviewRows = stillShallow;
+                    if (pendingPreviewRows.length === 0) return;
+
+                    const controller = new AbortController();
+                    cardPreviewAbort = controller;
+                    const rowByChar = new Map(pendingPreviewRows.map(entry => [entry.char, entry.descEl]));
+                    const cardsToHydrate = pendingPreviewRows.map(entry => entry.char);
+                    void cardHydrator.hydrateVisible(cardsToHydrate, {
+                        signal: controller.signal,
+                        onHydrated: (card, hydrated) => {
+                            applyHydratedCardFields(card, hydrated);
+                            const descNode = rowByChar.get(card);
+                            if (descNode && listContainer.contains(descNode) && !controller.signal.aborted && ownsChat()) {
+                                descNode.textContent = getCharacterCardPreviewText(card, { maxLength: 120 });
+                            }
+                        },
+                        onError: (card) => {
+                            const descNode = rowByChar.get(card);
+                            if (descNode && listContainer.contains(descNode) && !controller.signal.aborted && ownsChat()) {
+                                descNode.textContent = getCharacterCardPreviewText(card, { maxLength: 120 });
+                            }
+                        },
+                    });
+                };
 
                 const renderList = () => {
+                    cardPreviewAbort?.abort();
+                    cardPreviewAbort = null;
+                    pendingPreviewRows = [];
                     listContainer.innerHTML = '';
                     const filtered = currentFilter
                         ? allChars.filter(c => (c.name || '').toLowerCase().includes(currentFilter.toLowerCase()))
@@ -4902,6 +4979,11 @@ ${namingRule}`;
                     }
                     const visible = filtered.slice(0, displayCount);
                     for (const char of visible) {
+                        const cached = cardHydrator.getCached(char);
+                        if (!isShallowCharacterCard(cached) && isShallowCharacterCard(char)) {
+                            applyHydratedCardFields(char, cached);
+                        }
+
                         const item = document.createElement('div');
                         item.className = 'rt-charpicker-item';
 
@@ -4925,7 +5007,12 @@ ${namingRule}`;
                         nameEl.textContent = char.name || 'Unnamed';
                         const descEl = document.createElement('div');
                         descEl.className = 'rt-charpicker-desc';
-                        descEl.textContent = (char.description || char.personality || 'No description').substring(0, 120);
+                        if (isShallowCharacterCard(char) && hasHydratableAvatar(char)) {
+                            descEl.textContent = 'Loading preview…';
+                            pendingPreviewRows.push({ char, descEl });
+                        } else {
+                            descEl.textContent = getCharacterCardPreviewText(char, { maxLength: 120 });
+                        }
                         infoDiv.appendChild(nameEl);
                         infoDiv.appendChild(descEl);
 
@@ -4945,16 +5032,21 @@ ${namingRule}`;
                             directBtn.disabled = true;
                             directBtn.textContent = mode === 'ai_review' ? '⏳ Reviewing...' : '⏳ Adding...';
                             try {
+                                const fullChar = chatCommitResult(ownsChat, await cardHydrator.hydrate(char, { strict: true }));
+                                applyHydratedCardFields(char, fullChar);
+                                if (descEl.isConnected) {
+                                    descEl.textContent = getCharacterCardPreviewText(char, { maxLength: 120 });
+                                }
                                 if (mode === 'ai_review') {
                                     // Minimal AI review pass — fix only world/era impossibilities
-                                    const reviewed = chatCommitResult(ownsChat, await minimalReviewNpcWithAI(char));
+                                    const reviewed = chatCommitResult(ownsChat, await minimalReviewNpcWithAI(fullChar));
                                     if (!reviewed) { directBtn.disabled = false; directBtn.textContent = '+ Add as is'; return; }
-                                    chatCommitResult(ownsChat, await showNpcPreviewAndAdd(reviewed, char.name, 'NPC Creator', char.avatar));
+                                    chatCommitResult(ownsChat, await showNpcPreviewAndAdd(reviewed, fullChar.name, 'NPC Creator', fullChar.avatar));
                                 } else {
                                     // Literal — wrap verbatim, no AI
-                                    const ok = chatCommitResult(ownsChat, await createNpcFromCharCard(char, bookName));
+                                    const ok = chatCommitResult(ownsChat, await createNpcFromCharCard(fullChar, bookName));
                                     if (ok) {
-                                        toastr['success'](`Added "${char.name}" as NPC.`, 'NPC Creator');
+                                        toastr['success'](`Added "${fullChar.name}" as NPC.`, 'NPC Creator');
                                         dismissOverlay();
                                         chatCommitResult(ownsChat, await refreshManifest());
                                     }
@@ -4979,9 +5071,14 @@ ${namingRule}`;
                             aiBtn.disabled = true;
                             aiBtn.textContent = '⏳ Adapting...';
                             try {
-                                const adapted = chatCommitResult(ownsChat, await adaptNpcWithAI(char));
+                                const fullChar = chatCommitResult(ownsChat, await cardHydrator.hydrate(char, { strict: true }));
+                                applyHydratedCardFields(char, fullChar);
+                                if (descEl.isConnected) {
+                                    descEl.textContent = getCharacterCardPreviewText(char, { maxLength: 120 });
+                                }
+                                const adapted = chatCommitResult(ownsChat, await adaptNpcWithAI(fullChar));
                                 if (!adapted) { aiBtn.disabled = false; aiBtn.textContent = '🤖 Fit into Story'; return; }
-                                chatCommitResult(ownsChat, await showNpcPreviewAndAdd(adapted, char.name, 'NPC Creator', char.avatar));
+                                chatCommitResult(ownsChat, await showNpcPreviewAndAdd(adapted, fullChar.name, 'NPC Creator', fullChar.avatar));
                             } catch (err) {
                                 if (!ownsChat()) return;
 
@@ -5008,6 +5105,7 @@ ${namingRule}`;
                             if (!ownsChat()) return; displayCount += 10; renderList(); });
                         listContainer.appendChild(loadMore);
                     }
+                    hydrateVisibleCardPreviews();
                 };
                 let searchTimeout = null;
                 searchInput.addEventListener('input', () => {
