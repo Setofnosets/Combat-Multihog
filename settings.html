@@ -914,6 +914,30 @@
                 </div>
             </div>
 
+            <!-- SUB-DRAWER: SCRIPTS -->
+            <div class="inline-drawer">
+                <div class="inline-drawer-toggle inline-drawer-header"><b>Scripts</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
+                <div class="inline-drawer-content">
+                    <div class="flex-container flexFlowColumn gap-1">
+                        <div style="font-size: 0.78em; opacity: 0.72; line-height: 1.4; margin-bottom: 4px;">
+                            Deterministic per-chat and character-bound Game Scripts supporting <code>!commands</code>, mid-turn Narrator tool calls, and native HUD <code>[TAG]</code> rendering.
+                        </div>
+                        <label class="checkbox_label">
+                            <input type="checkbox" id="rpg_scripts_enabled" />
+                            <span>Enable Game Scripts Engine</span>
+                        </label>
+                        <div class="rt-scripts-toolbar" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
+                            <button type="button" id="rpg_scripts_new_btn" class="menu_button interactable">+ New Script</button>
+                            <button type="button" id="rpg_scripts_import_btn" class="menu_button interactable">Import .json</button>
+                            <input type="file" id="rpg_scripts_import_file" accept=".json,application/json" style="display:none;" />
+                        </div>
+                        <div id="rpg_scripts_collision_banner" class="rt-scripts-collision-banner" style="display:none;"></div>
+                        <div id="rpg_scripts_list" class="rt-scripts-list"></div>
+                        <div id="rpg_scripts_live_section" class="rt-scripts-live-section"></div>
+                    </div>
+                </div>
+            </div>
+
             <!-- SUB-DRAWER 3: STATE TRACKER & MODULES -->
             <div class="inline-drawer">
                 <div class="inline-drawer-toggle inline-drawer-header">

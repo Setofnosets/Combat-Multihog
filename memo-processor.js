@@ -20,6 +20,7 @@ import {
     stripEndedCombatFromMemo,
     stripResolvedCombatantsFromMemo,
 } from './src/state/combat-persistence.js';
+import { getClaimedScriptTags } from './src/features/scripting/script-store.js';
 
 const COMBAT_BLOCK_RX = /\[COMBAT\]([\s\S]*?)\[\/COMBAT\]/i;
 
@@ -1823,9 +1824,19 @@ export async function buildLorebookContext() {
 /**
  * Builds the complete modules instruction block for the system prompt.
  */
-export function buildModulesInstructionText(settings) {
+export function buildModulesInstructionText(settings, options = {}) {
     let modulesText = "";
     const promptsMap = settings.stockPrompts || DEFAULT_STOCK_PROMPTS;
+    const ctxCharName = (() => {
+        try {
+            const c = typeof SillyTavern !== 'undefined' ? SillyTavern.getContext?.() : null;
+            return String(c?.characters?.[c?.characterId]?.name || c?.name2 || '').trim();
+        } catch (_) { return ''; }
+    })();
+    const chatId = options?.chatId ?? (typeof SillyTavern !== 'undefined' ? SillyTavern.getContext?.()?.chatId : '') ?? '';
+    const claimedScriptTags = options?.excludedTags instanceof Set
+        ? options.excludedTags
+        : getClaimedScriptTags(settings, chatId, ctxCharName);
 
     modulesText += "### CORE MODULES\n";
     for (const [key, prompt] of Object.entries(promptsMap)) {
@@ -1833,6 +1844,7 @@ export function buildModulesInstructionText(settings) {
         if (key === 'time_24h' || key === 'time_ddmmyy' || key === 'time_ddmmyy_24h') continue;
 
         if (key === 'quests' && settings.syspromptModules?.quests === false) continue;
+        if (claimedScriptTags.has(key.toUpperCase())) continue;
         if (settings.modules[key]) {
             let p = prompt;
 
@@ -1889,7 +1901,9 @@ export function buildModulesInstructionText(settings) {
         modulesText += `\n### CAMPAIGN TIMING RULES\n- The campaign starting date is ${settings.initialDate}. Ensure the very first [TIME] block and all early timeline entries align with this starting anchor.\n`;
     }
 
-    const enabledCustomFields = (settings.customFields || []).filter(f => f.enabled && f.tag);
+    const enabledCustomFields = (settings.customFields || []).filter(
+        f => f.enabled && f.tag && !claimedScriptTags.has(String(f.tag).trim().toUpperCase()),
+    );
     if (enabledCustomFields.length > 0) {
         modulesText += "\n### CUSTOM MODULES\n";
         enabledCustomFields.forEach(f => {

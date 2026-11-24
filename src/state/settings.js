@@ -1352,6 +1352,14 @@ function getSettingsInternal(extensionSettings) {
         }
         s.macroOnlyWorldSkeletonMigrated = true;
     }
+
+    if (typeof s.gameScriptsEnabled !== 'boolean') s.gameScriptsEnabled = true;
+    if (!Array.isArray(s.gameScriptDatabase)) s.gameScriptDatabase = [];
+    if (!s.gameScriptStatesByChat || typeof s.gameScriptStatesByChat !== 'object' || Array.isArray(s.gameScriptStatesByChat)) {
+        s.gameScriptStatesByChat = {};
+    }
+    if (!Array.isArray(s.gameScriptOrder)) s.gameScriptOrder = [];
+
     return extensionSettings[MODULE_NAME];
 }
 
@@ -1733,6 +1741,11 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'agentPanelBgOverlayStrength',
     'dayNightCycleEnabled',
     'xpBarAtBottom',
+    // Game Scripts definitions, order, and per-chat runtime state store live globally.
+    'gameScriptsEnabled',
+    'gameScriptDatabase',
+    'gameScriptStatesByChat',
+    'gameScriptOrder',
 ];
 
 /** Strip global UI keys from every chatStates partition (one-shot hygiene on load/save). */

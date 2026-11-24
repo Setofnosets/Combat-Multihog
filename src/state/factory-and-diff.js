@@ -527,6 +527,9 @@ const CARTRIDGE_PAYLOAD_KEYS = [
     'useDdMmYyFormat',
     'gameSystems',
     'customFields',
+    'gameScriptsEnabled',
+    'gameScriptDatabase',
+    'gameScriptOrder',
     'blockOrder',
     'modules',
     'stockPrompts',
@@ -609,6 +612,12 @@ export const CARTRIDGE_PAYLOAD_GROUPS = [
         label: 'Game Systems & Customization & Custom Fields',
         description: 'Custom game systems and custom tracker fields',
         keys: ['gameSystems', 'customFields'],
+    },
+    {
+        id: 'gameScripts',
+        label: 'Game Scripts',
+        description: 'Deterministic scripts, commands, and Narrator tool actions.',
+        keys: ['gameScriptsEnabled', 'gameScriptDatabase', 'gameScriptOrder'],
     },
     {
         id: 'characterSheets',

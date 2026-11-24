@@ -6,6 +6,7 @@ const LOCAL_CHAT_KEYS = [COMPANION_BY_CHAT_KEY, MEMO_RECOVERY_KEY];
 export function storedChatIds(settings) {
     return [...new Set([
         ...Object.keys(settings?.chatStates || {}),
+        ...Object.keys(settings?.gameScriptStatesByChat || {}),
         ...(settings?.routerHistory || []).map(entry => entry?.chatId).filter(Boolean),
         ...LOCAL_CHAT_KEYS.flatMap(localChatMapIds),
     ])];
@@ -29,6 +30,13 @@ export function removeDeletedChatData(settings, chatId) {
     let changed = false;
     if (Object.prototype.hasOwnProperty.call(settings.chatStates || {}, chatId)) {
         delete settings.chatStates[chatId];
+        changed = true;
+    }
+    if (settings.gameScriptStatesByChat
+        && typeof settings.gameScriptStatesByChat === 'object'
+        && !Array.isArray(settings.gameScriptStatesByChat)
+        && Object.prototype.hasOwnProperty.call(settings.gameScriptStatesByChat, chatId)) {
+        delete settings.gameScriptStatesByChat[chatId];
         changed = true;
     }
     if (Array.isArray(settings.routerHistory)) {

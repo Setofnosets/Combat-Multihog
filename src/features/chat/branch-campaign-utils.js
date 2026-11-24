@@ -104,5 +104,14 @@ export function copyChatStatePartition(s, oldId, newId, newPrefix, bookRenameMap
     copy.npcRelationshipLog = remapBookKeyedMap(relLogSource, bookRenameMap);
 
     s.chatStates[newId] = copy;
+    if (s.gameScriptStatesByChat
+        && typeof s.gameScriptStatesByChat === 'object'
+        && !Array.isArray(s.gameScriptStatesByChat)
+        && Object.prototype.hasOwnProperty.call(s.gameScriptStatesByChat, oldId)) {
+        const scriptSource = s.gameScriptStatesByChat[oldId];
+        s.gameScriptStatesByChat[newId] = scriptSource === undefined
+            ? undefined
+            : JSON.parse(JSON.stringify(scriptSource));
+    }
     return copy;
 }

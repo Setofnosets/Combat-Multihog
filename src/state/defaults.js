@@ -775,6 +775,10 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
         trackerModuleDatabase: [],
         syspromptSnippetDatabase: [],
         gameSystemDatabase: [],
+        gameScriptsEnabled: true,
+        gameScriptDatabase: [],
+        gameScriptStatesByChat: {},
+        gameScriptOrder: [],
         chatStates: {},
         quests: [],
 

@@ -12,6 +12,45 @@ const DEFAULT_HP_COLOR = '#00ffaa';
 const DEFAULT_XP_COLOR = 'linear-gradient(90deg, #0088ff, #00d4ff)';
 const BUY_ME_A_COFFEE_ICON = new URL('./src/ui/buy_me_a_coffee-63ed78263f6e.svg', import.meta.url).href;
 
+let _scriptCardMetaResolver = null;
+
+/**
+ * Registers an optional resolver callback `(tag) => ({ icon?, label?, portraitUrl? } | null)`
+ * used to supply Game Script card metadata and optional portraits for script-backed tracker blocks.
+ * @param {Function|null} fn
+ */
+export function registerScriptCardMetaResolver(fn) {
+    _scriptCardMetaResolver = typeof fn === 'function' ? fn : null;
+}
+
+function isSafeScriptPortraitUrl(url) {
+    if (typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    return (
+        lower.startsWith('https://') ||
+        lower.startsWith('http://') ||
+        lower.startsWith('/') ||
+        lower.startsWith('data:image/')
+    );
+}
+
+function resolveScriptCardMeta(tag) {
+    if (typeof _scriptCardMetaResolver !== 'function') return null;
+    try {
+        const meta = _scriptCardMetaResolver(tag);
+        if (!meta || typeof meta !== 'object') return null;
+        const icon = typeof meta.icon === 'string' && meta.icon.trim() ? meta.icon.trim() : '';
+        const label = typeof meta.label === 'string' && meta.label.trim() ? meta.label.trim() : '';
+        const rawPortrait = typeof meta.portraitUrl === 'string' ? meta.portraitUrl.trim() : '';
+        const portraitUrl = isSafeScriptPortraitUrl(rawPortrait) ? rawPortrait : '';
+        return { icon, label, portraitUrl };
+    } catch {
+        return null;
+    }
+}
+
 /** CSS tint for any browser-supported solid color token (named or hexadecimal). */
 function makeColorTintStyle(color, backgroundPct = 12, borderPct = 40) {
     return `background:color-mix(in srgb, ${color} ${backgroundPct}%, transparent);border-color:color-mix(in srgb, ${color} ${borderPct}%, transparent);color:${color};`;
@@ -2660,8 +2699,9 @@ function formatValueToCurrency(totalCp, detectedCurrency) {
         }
 
         const customField = (getSettings().customFields || []).find(f => f.tag.toUpperCase() === tag);
-        const icon = customField?.icon || BLOCK_ICONS[tag] || '📄';
-        const displayName = customField?.label || tag;
+        const scriptMeta = resolveScriptCardMeta(tag);
+        const icon = customField?.icon || scriptMeta?.icon || BLOCK_ICONS[tag] || '📄';
+        const displayName = customField?.label || scriptMeta?.label || tag;
         const items = blockToItems(tag, content);
         const isCollapsed = !uiOptions.bodyOnly && collapsed.has(tag);
         const isPartyCompact = tag === 'PARTY' && loadPartyCompact();
@@ -2740,8 +2780,12 @@ function formatValueToCurrency(totalCp, detectedCurrency) {
             benchedPanelHtml = renderBenchedPartyPanel(blocks['BENCHED PARTY'], collapsed.has('BENCHED PARTY'), loadBenchedExpanded());
         }
 
+        const scriptPortraitHtml = scriptMeta?.portraitUrl
+            ? `<div class="rt-script-card-portrait-wrap"><img class="rt-script-card-portrait" src="${escapeHtml(scriptMeta.portraitUrl)}" alt="${escapeHtml(String(displayName))}" loading="lazy" /></div>`
+            : '';
+
         const compactClass = isPartyCompact ? ' rt-party-compact' : '';
-        const bodyHtml = `<div class="${bodyClass}"${catStyleAttr}>${pageItems.join('')}${pagination}${benchedPanelHtml}</div>`;
+        const bodyHtml = `<div class="${bodyClass}"${catStyleAttr}>${scriptPortraitHtml}${pageItems.join('')}${pagination}${benchedPanelHtml}</div>`;
         if (uiOptions.bodyOnly) {
             return `<div class="rt-display-group-member${compactClass}" data-member-tag="${tag}">${bodyHtml}</div>`;
         }
@@ -3011,7 +3055,11 @@ export function renderTabModeView(memo, sectionPages, questsCtx = null) {
         const tag = entry.tag;
         if (tag === 'QUESTS') return { icon: BLOCK_ICONS.QUESTS || '📋', label: 'Quests' };
         const customField = (s.customFields || []).find(f => f.tag.toUpperCase() === tag);
-        return { icon: customField?.icon || BLOCK_ICONS[tag] || '📄', label: customField?.label || tag };
+        const scriptMeta = resolveScriptCardMeta(tag);
+        return {
+            icon: customField?.icon || scriptMeta?.icon || BLOCK_ICONS[tag] || '📄',
+            label: customField?.label || scriptMeta?.label || tag,
+        };
     };
 
     const tabBadge = (entry) => {
