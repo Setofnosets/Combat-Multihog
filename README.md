@@ -15,6 +15,8 @@ I know it says "D&D Framework," but in addition to fantasy, the system works jus
 >
 > Open it from the new **Settings → Combat** tab or the crosshair button in the tracker header. The same tab also contains the new **Traditional** turn-based mode: no grid, no movement, just choose an action and a target while the combat agent declares enemy actions and the local engine resolves them deterministically. Choose **Narration**, **Tactical**, or **Traditional** from the Combat style dropdown. Full setup, the JSON action contract, and prompt/catalogue customization are documented in [`docs/tactical-combat.md`](docs/tactical-combat.md) and [`docs/traditional-combat.md`](docs/traditional-combat.md).
 >
+> Deterministic, sandboxed **Game Scripts** (`!commands`, mid-turn Narrator tool calls, character auto-binding, native HUD rendering, and the 4-tab Script Studio) are configured in **Settings → Scripts** and documented in [`docs/game-scripts.md`](docs/game-scripts.md).
+>
 > Fork: https://github.com/Setofnosets/Combat-Multihog — upstream: https://github.com/MultihogAurelius/SillyTavern-MultihogDnDFramework. `auto_update` is disabled so this fork is never overwritten by upstream updates.
 
 ---
