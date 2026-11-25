@@ -734,7 +734,768 @@ return promptInjection ? { state, promptInjection } : { state };`,
 ];
 
 /**
- * Looks up a starter template by ID and returns a deep-cloned copy, or null if not found.
+ * Canonical Python (Pyodide) starter templates for Game Scripts.
+ *
+ * Mirrors the canonical script schema with `lang: 'python'` and idiomatic
+ * snake_case hooks (`init_state`, `on_before_generate`, `on_tool_call`,
+ * `on_after_generate`, `render_memo`) and snake_case return dictionary keys.
+ */
+export const SCRIPT_PYTHON_STARTER_TEMPLATES = [
+    {
+        id: 'py_blank',
+        name: 'Blank Python Script',
+        icon: '🐍',
+        description: 'Minimal Python skeleton implementing init_state, on_before_generate, on_tool_call, on_after_generate, and render_memo.',
+        lang: 'python',
+        scope: 'chat',
+        boundCharacters: [],
+        globalEnabled: false,
+        trackerTag: 'SCRIPT_STATE',
+        commandPrefix: '!script',
+        stripCommandFromPrompt: true,
+        toolEnabled: false,
+        toolName: 'update_script_state',
+        toolDescription: 'Update or inspect the custom script state.',
+        toolActions: ['status', 'set'],
+        gmPrompt: 'Respect the [SCRIPT_STATE] tracker block when narrating outcomes.',
+        code: `def init_state(ctx):
+    return {
+        "turn_count": 0,
+        "status": "Ready",
+        "note": "Initialized",
+    }
+
+
+def on_before_generate(state, ctx):
+    cmd = ctx.get("command") or {}
+    sub = str(cmd.get("subcommand") or "").strip().lower()
+    raw_args = str(cmd.get("rawArgs") or "").strip()
+    if not sub:
+        return {"state": state}
+
+    if sub == "reset":
+        next_state = init_state(ctx)
+        return {
+            "state": next_state,
+            "prompt_injection": "[SCRIPT_EVENT] Script state reset to initial defaults.",
+        }
+
+    note_text = f"{sub} {raw_args}".strip() if raw_args else sub
+    next_state = dict(state)
+    next_state["note"] = note_text
+    return {
+        "state": next_state,
+        "prompt_injection": f"[SCRIPT_EVENT] Updated script note to: {note_text}.",
+    }
+
+
+def on_tool_call(state, call, ctx):
+    call = call if isinstance(call, dict) else {}
+    action = str(call.get("action") or "").strip()
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+
+    if action == "status":
+        return {
+            "state": state,
+            "tool_result": {
+                "ok": True,
+                "turn_count": int(state.get("turn_count") or 0),
+                "status": state.get("status") or "Ready",
+                "note": state.get("note") or "None",
+            },
+        }
+
+    if action == "set":
+        next_status = str(args.get("status") or "").strip() or state.get("status") or "Ready"
+        next_note = str(args.get("note") or "").strip() or state.get("note") or "Initialized"
+        next_state = dict(state)
+        next_state["status"] = next_status
+        next_state["note"] = next_note
+        return {
+            "state": next_state,
+            "tool_result": {
+                "ok": True,
+                "status": next_status,
+                "note": next_note,
+            },
+        }
+
+    return {
+        "state": state,
+        "tool_result": {
+            "ok": False,
+            "error": f"Unknown action: {action}",
+        },
+    }
+
+
+def on_after_generate(state, ctx):
+    next_state = dict(state)
+    next_state["turn_count"] = int(state.get("turn_count") or 0) + 1
+    return {"state": next_state}
+
+
+def render_memo(state, ctx):
+    status = state.get("status") or "Ready"
+    turns = int(state.get("turn_count") or 0)
+    note = state.get("note") or "None"
+    return "\\n".join([
+        f"Status: ((PILLS)) {status}",
+        f"Turns: {turns}",
+        f"Note: {note}",
+    ])
+`,
+    },
+    {
+        id: 'py_time_decay_meter',
+        name: 'Time-Decay Meter (Python)',
+        icon: '⏳',
+        description: 'Tracks 0–100 Stamina & Focus that decay over ctx["time"]["deltaMinutes"], recover via !meter rest / !meter boost or the recover tool, and render ((BAR)) + ((PILLS)).',
+        lang: 'python',
+        scope: 'chat',
+        boundCharacters: [],
+        globalEnabled: false,
+        trackerTag: 'VITAL_METER',
+        commandPrefix: '!meter',
+        stripCommandFromPrompt: true,
+        toolEnabled: true,
+        toolName: 'meter_recover',
+        toolDescription: 'Recover Stamina or Focus during rest, meals, or tactical pauses.',
+        toolActions: ['recover'],
+        gmPrompt: 'Keep narration consistent with [VITAL_METER]. When Stamina or Focus falls below 30, describe fatigue or distraction and invoke meter_recover only when the narrative includes genuine rest or recovery.',
+        code: `def clamp(value, min_val=0, max_val=100):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return min_val
+    return max(min_val, min(max_val, round(num)))
+
+
+def init_state(ctx):
+    return {
+        "stamina": 100,
+        "focus": 100,
+        "last_day": None,
+    }
+
+
+def compute_condition_pills(stamina, focus):
+    pills = []
+    if stamina >= 75:
+        pills.append("Rested")
+    elif stamina >= 35:
+        pills.append("Steady")
+    elif stamina >= 15:
+        pills.append("Fatigued")
+    else:
+        pills.append("Exhausted")
+
+    if focus >= 75:
+        pills.append("Sharp")
+    elif focus >= 35:
+        pills.append("Alert")
+    else:
+        pills.append("Unfocused")
+
+    return pills
+
+
+def on_before_generate(state, ctx):
+    stamina = clamp(state.get("stamina", 100), 0, 100)
+    focus = clamp(state.get("focus", 100), 0, 100)
+    day_cue = ""
+
+    time_info = ctx.get("time") if isinstance(ctx.get("time"), dict) else {}
+    delta_minutes = max(0, int(time_info.get("deltaMinutes") or 0))
+    day_changed = bool(time_info.get("dayChanged"))
+
+    if delta_minutes > 0:
+        stamina = clamp(stamina - (delta_minutes // 30), 0, 100)
+        focus = clamp(focus - (delta_minutes // 45), 0, 100)
+
+    if day_changed:
+        stamina = clamp(stamina + 25, 0, 100)
+        focus = clamp(focus + 20, 0, 100)
+        day_cue = "A new day dawns, partially restoring stamina and focus."
+
+    cmd = ctx.get("command") or {}
+    sub = str(cmd.get("subcommand") or "").strip().lower()
+    next_day = time_info.get("day") if "day" in time_info else state.get("last_day")
+
+    if sub == "rest":
+        stamina = clamp(stamina + 30, 0, 100)
+        focus = clamp(focus + 20, 0, 100)
+        next_state = dict(state)
+        next_state.update({"stamina": stamina, "focus": focus, "last_day": next_day})
+        return {
+            "state": next_state,
+            "prompt_injection": f"[Vital Meter] Rested. Stamina {stamina}/100, Focus {focus}/100.",
+        }
+
+    if sub == "boost":
+        stamina = clamp(stamina + 15, 0, 100)
+        focus = clamp(focus + 35, 0, 100)
+        next_state = dict(state)
+        next_state.update({"stamina": stamina, "focus": focus, "last_day": next_day})
+        return {
+            "state": next_state,
+            "prompt_injection": f"[Vital Meter] Focus boosted. Stamina {stamina}/100, Focus {focus}/100.",
+        }
+
+    next_state = dict(state)
+    next_state.update({"stamina": stamina, "focus": focus, "last_day": next_day})
+    result = {"state": next_state}
+    if stamina <= 20 or focus <= 20:
+        result["prompt_injection"] = (
+            f"[Vital Meter Warning] Stamina is {stamina}/100 and Focus is {focus}/100. "
+            "Reflect weariness in the scene."
+        )
+    elif day_cue:
+        result["prompt_injection"] = day_cue
+    return result
+
+
+def on_tool_call(state, call, ctx):
+    call = call if isinstance(call, dict) else {}
+    action = str(call.get("action") or "").strip()
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+
+    if action != "recover":
+        return {
+            "state": state,
+            "tool_result": {"ok": False, "error": f"Unsupported action: {action}"},
+        }
+
+    stamina_gain = clamp(args.get("stamina", 20), 0, 100)
+    focus_gain = clamp(args.get("focus", 15), 0, 100)
+    stamina = clamp(state.get("stamina", 100) + stamina_gain, 0, 100)
+    focus = clamp(state.get("focus", 100) + focus_gain, 0, 100)
+
+    next_state = dict(state)
+    next_state.update({"stamina": stamina, "focus": focus})
+    return {
+        "state": next_state,
+        "tool_result": {
+            "ok": True,
+            "stamina": stamina,
+            "focus": focus,
+            "recovered": {"stamina": stamina_gain, "focus": focus_gain},
+        },
+    }
+
+
+def on_after_generate(state, ctx):
+    stamina = clamp(state.get("stamina", 100) - 3, 0, 100)
+    focus = clamp(state.get("focus", 100) - 2, 0, 100)
+    next_state = dict(state)
+    next_state.update({"stamina": stamina, "focus": focus})
+    return {"state": next_state}
+
+
+def render_memo(state, ctx):
+    stamina = clamp(state.get("stamina", 100), 0, 100)
+    focus = clamp(state.get("focus", 100), 0, 100)
+    pills = compute_condition_pills(stamina, focus)
+    return "\\n".join([
+        f"Stamina: ((BAR)) {stamina}/100",
+        f"Focus: ((BAR)) {focus}/100",
+        f"Condition: ((PILLS)) {', '.join(pills)}",
+    ])
+`,
+    },
+    {
+        id: 'py_command_tool_companion',
+        name: 'Command + Tool Companion (Python)',
+        icon: '🤝',
+        description: 'Tracks a companion’s Affinity, Mood, and Name via both !ally name: ... / !ally praise pre-turn commands and interact / set_name mid-turn tool actions without double-firing.',
+        lang: 'python',
+        scope: 'chat',
+        boundCharacters: [],
+        globalEnabled: false,
+        trackerTag: 'COMPANION',
+        commandPrefix: '!ally',
+        stripCommandFromPrompt: true,
+        toolEnabled: true,
+        toolName: 'companion_action',
+        toolDescription: 'Update companion name or record a meaningful interaction when not already handled by a player command this turn.',
+        toolActions: ['interact', 'set_name'],
+        gmPrompt: 'Track the companion shown in [COMPANION]. Call companion_action(action="interact"|"set_name") only when the scene meaningfully shifts rapport or reveals/changes their name, and never repeat an adjustment already acknowledged by a player command.',
+        code: `def clamp(value, min_val=0, max_val=100):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return min_val
+    return max(min_val, min(max_val, round(num)))
+
+
+def get_tier(affinity):
+    if affinity >= 80:
+        return "Devoted"
+    if affinity >= 55:
+        return "Trusted"
+    if affinity >= 30:
+        return "Friendly"
+    if affinity >= 15:
+        return "Cordial"
+    return "Wary"
+
+
+def init_state(ctx):
+    return {
+        "name": "Vesper",
+        "affinity": 25,
+        "mood": "Observant",
+        "last_command_turn_handled": False,
+    }
+
+
+def on_before_generate(state, ctx):
+    cmd = ctx.get("command") or {}
+    sub = str(cmd.get("subcommand") or "").strip().lower()
+    raw_args = str(cmd.get("rawArgs") or "").strip()
+
+    if not sub:
+        next_state = dict(state)
+        next_state["last_command_turn_handled"] = False
+        return {"state": next_state}
+
+    if sub == "name":
+        next_name = raw_args[:48].strip()
+        if not next_name:
+            return {
+                "state": state,
+                "prompt_injection": "[COMPANION] Usage: !ally name: <Companion Name>",
+            }
+        next_state = dict(state)
+        next_state["name"] = next_name
+        next_state["last_command_turn_handled"] = True
+        return {
+            "state": next_state,
+            "prompt_injection": f"[COMPANION] Companion renamed to {next_name}.",
+        }
+
+    if sub == "praise":
+        next_affinity = clamp(state.get("affinity", 25) + 8, 0, 100)
+        next_state = dict(state)
+        next_state.update({
+            "affinity": next_affinity,
+            "mood": "Encouraged",
+            "last_command_turn_handled": True,
+        })
+        name = state.get("name") or "Companion"
+        return {
+            "state": next_state,
+            "prompt_injection": f"[COMPANION] {name} appreciates the encouragement (Affinity {next_affinity}/100).",
+        }
+
+    next_state = dict(state)
+    next_state["last_command_turn_handled"] = False
+    return {
+        "state": next_state,
+        "prompt_injection": f'[COMPANION] Unknown !ally command "{sub}". Try "!ally praise" or "!ally name: <Name>".',
+    }
+
+
+def on_tool_call(state, call, ctx):
+    if state.get("last_command_turn_handled"):
+        return {
+            "state": state,
+            "tool_result": {
+                "ok": True,
+                "skipped": True,
+                "reason": "Already handled by pre-turn player command this turn.",
+                "name": state.get("name"),
+                "affinity": state.get("affinity"),
+                "mood": state.get("mood"),
+            },
+        }
+
+    call = call if isinstance(call, dict) else {}
+    action = str(call.get("action") or "").strip()
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+
+    if action == "set_name":
+        next_name = str(args.get("name") or "").strip()[:48]
+        if not next_name:
+            return {
+                "state": state,
+                "tool_result": {"ok": False, "error": "Missing non-empty name argument."},
+            }
+        next_state = dict(state)
+        next_state.update({"name": next_name, "last_command_turn_handled": True})
+        return {
+            "state": next_state,
+            "tool_result": {"ok": True, "name": next_name},
+        }
+
+    if action == "interact":
+        raw_delta = args.get("affinityDelta")
+        if raw_delta is None:
+            raw_delta = args.get("affinity_delta", 5)
+        delta = clamp(raw_delta, -15, 15)
+        next_affinity = clamp(state.get("affinity", 25) + delta, 0, 100)
+        raw_mood = str(args.get("mood") or "").strip()
+        next_mood = raw_mood[:32] if raw_mood else ("Warm" if delta >= 0 else "Guarded")
+
+        next_state = dict(state)
+        next_state.update({
+            "affinity": next_affinity,
+            "mood": next_mood,
+            "last_command_turn_handled": True,
+        })
+        return {
+            "state": next_state,
+            "tool_result": {
+                "ok": True,
+                "name": state.get("name"),
+                "affinity": next_affinity,
+                "mood": next_mood,
+                "tier": get_tier(next_affinity),
+            },
+        }
+
+    return {
+        "state": state,
+        "tool_result": {"ok": False, "error": f"Unknown action: {action}"},
+    }
+
+
+def on_after_generate(state, ctx):
+    if not state.get("last_command_turn_handled"):
+        return {"state": state}
+    next_state = dict(state)
+    next_state["last_command_turn_handled"] = False
+    return {"state": next_state}
+
+
+def render_memo(state, ctx):
+    affinity = clamp(state.get("affinity", 25), 0, 100)
+    tier = get_tier(affinity)
+    name = state.get("name") or "Unnamed"
+    mood = state.get("mood") or "Calm"
+    return "\\n".join([
+        f"Companion: {name}",
+        f"Affinity: ((BAR)) {affinity}/100",
+        f"Standing: ((PILLS)) {tier}, {mood}",
+    ])
+`,
+    },
+    {
+        id: 'py_stage_route_progression',
+        name: 'Stage & Route Progression (Python)',
+        icon: '🧭',
+        description: 'Tracks Reputation, Discipline, and Empathy, advances monotone stages (Novice → Seasoned → Master), emits one-shot prompt_injection cues, and demonstrates portrait_url + append_markdown.',
+        lang: 'python',
+        scope: 'chat',
+        boundCharacters: [],
+        globalEnabled: false,
+        trackerTag: 'ROUTE_PROGRESS',
+        commandPrefix: '!route',
+        stripCommandFromPrompt: true,
+        toolEnabled: true,
+        toolName: 'advance_route',
+        toolDescription: 'Adjust Reputation, Discipline, or Empathy after a consequential decision or trial.',
+        toolActions: ['progress', 'inspect'],
+        gmPrompt: 'Consult [ROUTE_PROGRESS] to reflect the protagonist’s current Stage and dominant Route (Vanguard, Balanced, or Diplomat). Call advance_route(action="progress") when choices noticeably shift Reputation, Discipline, or Empathy.',
+        code: `STAGES = [
+    {"index": 0, "label": "Novice", "min_score": 0, "portrait": "/assets/portraits/stage-novice.png"},
+    {"index": 1, "label": "Seasoned", "min_score": 40, "portrait": "/assets/portraits/stage-seasoned.png"},
+    {"index": 2, "label": "Master", "min_score": 80, "portrait": "/assets/portraits/stage-master.png"},
+]
+
+
+def clamp(value, min_val=0, max_val=100):
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return min_val
+    return max(min_val, min(max_val, round(num)))
+
+
+def resolve_stage_index(reputation, current_stage_index):
+    computed = 0
+    for stage in STAGES:
+        if reputation >= stage["min_score"]:
+            computed = stage["index"]
+    # Monotone progression: stage never regresses once unlocked.
+    return max(int(current_stage_index or 0), computed)
+
+
+def resolve_route(discipline, empathy):
+    if abs(discipline - empathy) < 10:
+        return "Balanced"
+    return "Vanguard" if discipline > empathy else "Diplomat"
+
+
+def init_state(ctx):
+    return {
+        "reputation": 10,
+        "discipline": 20,
+        "empathy": 20,
+        "stage_index": 0,
+        "announced_stage_index": 0,
+        "pending_milestone_cue": "",
+        "pending_append_card": "",
+    }
+
+
+def apply_delta(state, rep_delta, disc_delta, emp_delta):
+    reputation = clamp(state.get("reputation", 10) + rep_delta, 0, 100)
+    discipline = clamp(state.get("discipline", 20) + disc_delta, 0, 100)
+    empathy = clamp(state.get("empathy", 20) + emp_delta, 0, 100)
+    prev_stage = int(state.get("stage_index") or 0)
+    stage_index = resolve_stage_index(reputation, prev_stage)
+
+    pending_milestone_cue = state.get("pending_milestone_cue") or ""
+    pending_append_card = state.get("pending_append_card") or ""
+    announced_stage_index = int(state.get("announced_stage_index") or 0)
+
+    if stage_index > announced_stage_index:
+        stage_info = STAGES[stage_index]
+        route = resolve_route(discipline, empathy)
+        announced_stage_index = stage_index
+        pending_milestone_cue = (
+            f"[Milestone Reached] The protagonist has ascended to {stage_info['label']} rank "
+            f"on the {route} route. Acknowledge this earned recognition naturally."
+        )
+        pending_append_card = f"\\n> **Rank Unlocked:** {stage_info['label']} ({route} Route)"
+
+    next_state = dict(state)
+    next_state.update({
+        "reputation": reputation,
+        "discipline": discipline,
+        "empathy": empathy,
+        "stage_index": stage_index,
+        "announced_stage_index": announced_stage_index,
+        "pending_milestone_cue": pending_milestone_cue,
+        "pending_append_card": pending_append_card,
+    })
+    return next_state
+
+
+def on_before_generate(state, ctx):
+    next_state = dict(state)
+    cmd = ctx.get("command") or {}
+    sub = str(cmd.get("subcommand") or "").strip().lower()
+
+    if sub == "train":
+        next_state = apply_delta(next_state, 12, 8, 0)
+        cue = next_state.get("pending_milestone_cue") or (
+            f"[Route] Training complete. Reputation {next_state['reputation']}/100, "
+            f"Discipline {next_state['discipline']}/100."
+        )
+        next_state["pending_milestone_cue"] = ""
+        return {
+            "state": next_state,
+            "prompt_injection": cue,
+        }
+
+    if sub == "counsel":
+        next_state = apply_delta(next_state, 12, 0, 8)
+        cue = next_state.get("pending_milestone_cue") or (
+            f"[Route] Counsel offered. Reputation {next_state['reputation']}/100, "
+            f"Empathy {next_state['empathy']}/100."
+        )
+        next_state["pending_milestone_cue"] = ""
+        return {
+            "state": next_state,
+            "prompt_injection": cue,
+        }
+
+    output = {"state": next_state}
+    if next_state.get("pending_milestone_cue"):
+        output["prompt_injection"] = next_state["pending_milestone_cue"]
+        next_state["pending_milestone_cue"] = ""
+    return output
+
+
+def on_tool_call(state, call, ctx):
+    call = call if isinstance(call, dict) else {}
+    action = str(call.get("action") or "").strip()
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+
+    if action == "inspect":
+        idx = int(state.get("stage_index") or 0)
+        stage_info = STAGES[idx] if 0 <= idx < len(STAGES) else STAGES[0]
+        return {
+            "state": state,
+            "tool_result": {
+                "ok": True,
+                "stage": stage_info["label"],
+                "route": resolve_route(state.get("discipline", 20), state.get("empathy", 20)),
+                "reputation": state.get("reputation", 10),
+                "discipline": state.get("discipline", 20),
+                "empathy": state.get("empathy", 20),
+            },
+        }
+
+    if action == "progress":
+        rep_delta = clamp(args.get("reputation", 10), -25, 50)
+        disc_delta = clamp(args.get("discipline", 0), -25, 50)
+        emp_delta = clamp(args.get("empathy", 0), -25, 50)
+        next_state = apply_delta(state, rep_delta, disc_delta, emp_delta)
+        idx = int(next_state.get("stage_index") or 0)
+        stage_info = STAGES[idx] if 0 <= idx < len(STAGES) else STAGES[0]
+        return {
+            "state": next_state,
+            "tool_result": {
+                "ok": True,
+                "stage": stage_info["label"],
+                "route": resolve_route(next_state["discipline"], next_state["empathy"]),
+                "reputation": next_state["reputation"],
+                "discipline": next_state["discipline"],
+                "empathy": next_state["empathy"],
+            },
+        }
+
+    return {
+        "state": state,
+        "tool_result": {"ok": False, "error": f"Unknown action: {action}"},
+    }
+
+
+def on_after_generate(state, ctx):
+    idx = int(state.get("stage_index") or 0)
+    stage_info = STAGES[idx] if 0 <= idx < len(STAGES) else STAGES[0]
+    append_markdown = state.get("pending_append_card") or ""
+    next_state = dict(state)
+    next_state["pending_append_card"] = ""
+    return {
+        "state": next_state,
+        "portrait_url": stage_info["portrait"],
+        "append_markdown": append_markdown,
+    }
+
+
+def render_memo(state, ctx):
+    idx = int(state.get("stage_index") or 0)
+    stage_info = STAGES[idx] if 0 <= idx < len(STAGES) else STAGES[0]
+    reputation = clamp(state.get("reputation", 10), 0, 100)
+    discipline = clamp(state.get("discipline", 20), 0, 100)
+    empathy = clamp(state.get("empathy", 20), 0, 100)
+    route = resolve_route(discipline, empathy)
+    return "\\n".join([
+        f"Stage: ((PILLS)) {stage_info['label']}, {route}",
+        f"Reputation: ((BAR)) {reputation}/100",
+        f"Discipline: ((BAR)) {discipline}/100",
+        f"Empathy: ((BAR)) {empathy}/100",
+    ])
+`,
+    },
+];
+
+/**
+ * Reusable Python code pattern snippets for inserting into custom Game Scripts.
+ */
+export const SCRIPT_PYTHON_PATTERN_SNIPPETS = [
+    {
+        id: 'py_time_delta',
+        label: 'Time Delta & Day Rollover (Python)',
+        description: 'Reads ctx["time"]["deltaMinutes"] and ctx["time"]["dayChanged"] safely to drive decay or daily resets.',
+        code: `time_info = ctx.get("time") or {}
+delta_minutes = max(0, int(time_info.get("deltaMinutes") or 0))
+day_changed = bool(time_info.get("dayChanged"))
+if delta_minutes > 0:
+    # Example: lose 1 point per 30 elapsed in-world minutes
+    decay = delta_minutes // 30
+    state["meter"] = max(0, int(state.get("meter", 100)) - decay)
+if day_changed:
+    state["daily_uses"] = 0`,
+    },
+    {
+        id: 'py_bar_and_pills',
+        label: 'BAR & PILLS Formatting (Python)',
+        description: 'Formats ((BAR)) progress bars and ((PILLS)) status badges in render_memo.',
+        code: `def render_memo(state, ctx):
+    raw_statuses = state.get("statuses") or []
+    statuses = ", ".join(raw_statuses) if raw_statuses else "Steady"
+    meter = int(state.get("meter", 0))
+    return "\\n".join([
+        f"Meter: ((BAR)) {meter}/100",
+        f"Status: ((PILLS)) {statuses}",
+    ])`,
+    },
+    {
+        id: 'py_clamp_and_tier',
+        label: 'Clamp & Threshold Tier Lookup (Python)',
+        description: 'Provides clamp(n, 0, 100) and a descending threshold lookup helper.',
+        code: `def clamp(n, min_val=0, max_val=100):
+    try:
+        num = float(n)
+    except (TypeError, ValueError):
+        return min_val
+    return max(min_val, min(max_val, round(num)))
+
+
+def get_tier(score, tiers=None):
+    if tiers is None:
+        tiers = [
+            {"min": 80, "label": "Master"},
+            {"min": 40, "label": "Seasoned"},
+            {"min": 0, "label": "Novice"},
+        ]
+    val = clamp(score, 0, 100)
+    for tier in tiers:
+        if val >= tier["min"]:
+            return tier["label"]
+    return tiers[-1]["label"]`,
+    },
+    {
+        id: 'py_one_shot_prompt',
+        label: 'One-Shot Prompt Injection (Python)',
+        description: 'Consumes a queued event flag once and emits prompt_injection for the current turn only.',
+        code: `prompt_injection = ""
+if state.get("pending_cue"):
+    prompt_injection = str(state["pending_cue"])
+    state = {**state, "pending_cue": ""}
+return {"state": state, "prompt_injection": prompt_injection} if prompt_injection else {"state": state}`,
+    },
+    {
+        id: 'py_media_attachment',
+        label: 'Deterministic Portrait & Append Markdown (Python)',
+        description: 'Returns a deterministic portrait_url and consumes a one-shot append_markdown banner in on_after_generate.',
+        code: `def on_after_generate(state, ctx):
+    portrait_url = (
+        "/assets/portraits/stage-2.png"
+        if int(state.get("stage", 0)) >= 2
+        else "/assets/portraits/stage-1.png"
+    )
+    append_markdown = state.get("pending_banner") or ""
+    return {
+        "state": {**state, "pending_banner": ""},
+        "portrait_url": portrait_url,
+        "append_markdown": append_markdown,
+    }`,
+    },
+];
+
+/**
+ * Returns the starter template list for a given script language (`'js'` or `'python'`).
+ *
+ * @param {string} [lang='js']
+ * @returns {Array<object>}
+ */
+export function getStarterTemplatesForLang(lang = 'js') {
+    return String(lang).toLowerCase() === 'python'
+        ? SCRIPT_PYTHON_STARTER_TEMPLATES
+        : SCRIPT_STARTER_TEMPLATES;
+}
+
+/**
+ * Returns the pattern snippet list for a given script language (`'js'` or `'python'`).
+ *
+ * @param {string} [lang='js']
+ * @returns {Array<object>}
+ */
+export function getPatternSnippetsForLang(lang = 'js') {
+    return String(lang).toLowerCase() === 'python'
+        ? SCRIPT_PYTHON_PATTERN_SNIPPETS
+        : SCRIPT_PATTERN_SNIPPETS;
+}
+
+/**
+ * Looks up a starter template by ID across both JS and Python starter templates
+ * and returns a deep-cloned copy, or null if not found.
  *
  * @param {string} id
  * @returns {object | null}
@@ -743,6 +1504,8 @@ export function getStarterTemplateById(id) {
     if (typeof id !== 'string' || !id) {
         return null;
     }
-    const found = SCRIPT_STARTER_TEMPLATES.find((tpl) => tpl.id === id);
+    const found =
+        SCRIPT_STARTER_TEMPLATES.find((tpl) => tpl.id === id) ||
+        SCRIPT_PYTHON_STARTER_TEMPLATES.find((tpl) => tpl.id === id);
     return found ? deepClone(found) : null;
 }

@@ -14395,3 +14395,176 @@ body.rt-tc-modal-open {
     color: #8f1d1d;
 }
 
+.rt-script-wizard-modal {
+    width: min(680px, 95vw);
+}
+
+.rt-script-wizard-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rt-script-wizard-chip {
+    appearance: none;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--rt-studio-border, var(--rt-so-border, rgba(255, 255, 255, 0.14)));
+    background: var(--rt-studio-btn-bg, var(--rt-so-btn-bg, rgba(255, 255, 255, 0.08)));
+    color: var(--rt-studio-fg, var(--rt-so-fg, #e8eaef));
+    font-size: 0.8em;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.rt-script-wizard-chip:hover:not(:disabled) {
+    background: var(--rt-studio-btn-hover, var(--rt-so-btn-hover, rgba(255, 255, 255, 0.14)));
+    border-color: var(--rt-studio-accent, var(--rt-so-accent, #6ea8ff));
+}
+
+.rt-script-wizard-chip:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.rt-script-wizard-status {
+    padding: 9px 11px;
+    border-radius: 8px;
+    border: 1px solid var(--rt-studio-border, var(--rt-so-border, rgba(255, 255, 255, 0.14)));
+    background: var(--rt-studio-bg, var(--rt-so-bg, #141820));
+    color: var(--rt-studio-fg, var(--rt-so-fg, #e8eaef));
+    font-size: 0.83em;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.rt-script-wizard-status.is-info {
+    border-color: rgba(110, 168, 255, 0.45);
+    background: rgba(110, 168, 255, 0.12);
+}
+
+.rt-script-wizard-status.is-warning {
+    border-color: rgba(245, 166, 35, 0.45);
+    background: rgba(245, 166, 35, 0.12);
+}
+
+.rt-script-wizard-status.is-error {
+    border-color: rgba(224, 90, 90, 0.5);
+    background: rgba(224, 90, 90, 0.12);
+    color: #ffb8b8;
+}
+
+.rt-script-wizard-status.is-success {
+    border-color: rgba(46, 204, 113, 0.45);
+    background: rgba(46, 204, 113, 0.12);
+}
+
+.rt-so-mode-dark .rt-script-wizard-chip {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.08);
+    color: #e8eaef;
+}
+
+.rt-so-mode-light .rt-script-wizard-chip {
+    border-color: rgba(20, 28, 40, 0.18);
+    background: rgba(20, 28, 40, 0.06);
+    color: #12151c;
+}
+
+.rt-so-mode-light .rt-script-wizard-chip:hover:not(:disabled) {
+    background: rgba(20, 28, 40, 0.12);
+    border-color: #2f6fed;
+}
+
+.rt-so-mode-dark .rt-script-wizard-status {
+    border-color: rgba(255, 255, 255, 0.14);
+    background: #141820;
+    color: #e8eaef;
+}
+
+.rt-so-mode-light .rt-script-wizard-status {
+    border-color: rgba(20, 28, 40, 0.14);
+    background: #ffffff;
+    color: #12151c;
+}
+
+.rt-so-mode-light .rt-script-wizard-status.is-info {
+    border-color: rgba(47, 111, 237, 0.35);
+    background: rgba(47, 111, 237, 0.1);
+    color: #173d8a;
+}
+
+.rt-so-mode-light .rt-script-wizard-status.is-warning {
+    border-color: rgba(184, 110, 0, 0.38);
+    background: rgba(245, 166, 35, 0.14);
+    color: #5c3700;
+}
+
+.rt-so-mode-light .rt-script-wizard-status.is-error {
+    border-color: rgba(185, 36, 36, 0.4);
+    background: rgba(220, 53, 69, 0.1);
+    color: #8f1d1d;
+}
+
+.rt-so-mode-light .rt-script-wizard-status.is-success {
+    border-color: rgba(20, 130, 82, 0.38);
+    background: rgba(46, 204, 113, 0.12);
+    color: #0e6b42;
+}
+
+.rt-script-pyodide-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+    padding: 9px 11px;
+    border-radius: 8px;
+    border: 1px solid var(--rt-so-border, rgba(255, 255, 255, 0.12));
+    background: var(--rt-so-bg-elev, #1c2230);
+    color: var(--rt-so-fg, #e8eaef);
+}
+
+.rt-script-pyodide-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.rt-script-pyodide-label {
+    font-size: 0.84em;
+    font-weight: 600;
+    margin: 0;
+}
+
+.rt-script-pyodide-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.rt-script-pyodide-controls .text_pole {
+    flex: 1 1 240px;
+    min-width: 0;
+    font-family: var(--rt-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+    font-size: 0.84em;
+}
+
+.rt-settings-overlay.rt-so-mode-dark .rt-script-pyodide-bar,
+.rt-so-mode-dark .rt-script-pyodide-bar {
+    border-color: rgba(255, 255, 255, 0.12);
+    background: #1c2230;
+    color: #e8eaef;
+}
+
+.rt-settings-overlay.rt-so-mode-light .rt-script-pyodide-bar,
+.rt-so-mode-light .rt-script-pyodide-bar {
+    border-color: rgba(20, 28, 40, 0.14);
+    background: #ffffff;
+    color: #12151c;
+}
+
