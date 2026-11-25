@@ -3,11 +3,14 @@
  *
  * Pure ESM, zero SillyTavern/DOM/Multihog imports.
  * Auto-registers the appropriate JS sandbox runner (Web Worker in browsers,
- * Node `vm` in headless Node/Vitest) and registers a metadata placeholder for Python.
+ * Node `vm` in headless Node/Vitest) and Python sandbox runner (Pyodide Web
+ * Worker in browsers, Node `python3` in headless Node/Vitest).
  */
 
 import { createJsWorkerRunner, isWorkerRunnerAvailable } from './runner-js-worker.js';
 import { createJsNodeRunner, isNodeVmRunnerAvailable } from './runner-js-node.js';
+import { createPyodideRunner, isPyodideWorkerAvailable } from './runner-python-pyodide.js';
+import { createPythonNodeRunner, isPythonNodeRunnerAvailable } from './runner-python-node.js';
 
 export const DEFAULT_SCRIPT_TIMEOUT_MS = 1500;
 
@@ -87,11 +90,72 @@ export function listRunners() {
 }
 
 /**
+ * Updates runtime configuration on a registered runner if it supports `configure()`.
+ * @param {string} lang
+ * @param {object} [config={}]
+ * @returns {object|null}
+ */
+export function configureRunner(lang, config = {}) {
+    const runner = getRunner(lang);
+    if (!runner || typeof runner.configure !== 'function') {
+        return getRunnerStatus(lang);
+    }
+    const res = runner.configure(config);
+    return res !== undefined ? res : getRunnerStatus(lang);
+}
+
+/**
+ * Returns the live status object for a registered runner.
+ * @param {string} lang
+ * @returns {{ state: string, lastError: string|null, [key: string]: any }}
+ */
+export function getRunnerStatus(lang) {
+    const runner = getRunner(lang);
+    if (typeof runner?.getStatus === 'function') {
+        const status = runner.getStatus();
+        if (status && typeof status === 'object') {
+            return status;
+        }
+    }
+    return {
+        state: runner?.available ? 'ready' : 'unavailable',
+        lastError: null,
+    };
+}
+
+/**
+ * Pre-warms a registered runner if it supports `warmup()`.
+ * @param {string} lang
+ * @returns {Promise<{ ok: boolean, state: string, error?: string|null }>}
+ */
+export async function warmupRunner(lang) {
+    const runner = getRunner(lang);
+    if (!runner || !runner.available) {
+        return {
+            ok: false,
+            state: 'unavailable',
+            error: runner?.note || `Runner for language "${normalizeLang(lang)}" is unavailable`,
+        };
+    }
+    if (typeof runner.warmup === 'function') {
+        const res = await runner.warmup();
+        if (res && typeof res === 'object') {
+            return res;
+        }
+    }
+    const status = getRunnerStatus(lang);
+    return {
+        ok: true,
+        state: status?.state || 'ready',
+    };
+}
+
+/**
  * Executes a hook on a script object using the registered runner for `script.lang`.
  * @param {{ lang?: string, code?: string, timeoutMs?: number }} script
  * @param {string} hookName
  * @param {object} [payload]
- * @param {{ timeoutMs?: number }} [options]
+ * @param {{ timeoutMs?: number, pyodideIndexUrl?: string, bootTimeoutMs?: number }} [options]
  * @returns {Promise<{ ok: boolean, result: any, missingHook?: boolean, logs: string[], error: string|null, durationMs: number, timedOut: boolean }>}
  */
 export async function executeScriptHook(script, hookName, payload = {}, options = {}) {
@@ -140,12 +204,23 @@ export async function executeScriptHook(script, hookName, payload = {}, options 
         ? Math.floor(Number(rawTimeout))
         : DEFAULT_SCRIPT_TIMEOUT_MS;
 
-    return runFn({
+    const runOpts = {
         code: typeof script.code === 'string' ? script.code : '',
         hookName: String(hookName || ''),
         payload: payload ?? {},
         timeoutMs,
-    });
+    };
+
+    if (options && typeof options === 'object') {
+        if (options.pyodideIndexUrl !== undefined) {
+            runOpts.pyodideIndexUrl = options.pyodideIndexUrl;
+        }
+        if (options.bootTimeoutMs !== undefined) {
+            runOpts.bootTimeoutMs = options.bootTimeoutMs;
+        }
+    }
+
+    return runFn(runOpts);
 }
 
 function registerDefaultRunners() {
@@ -175,11 +250,37 @@ function registerDefaultRunners() {
         });
     }
 
-    registerRunner('python', {
-        label: 'Python (Pyodide)',
-        available: false,
-        note: 'Planned for Phase 2 (Pyodide WebAssembly)',
-    });
+    if (isPyodideWorkerAvailable()) {
+        const pyWorker = createPyodideRunner();
+        registerRunner('python', {
+            label: 'Python (Pyodide)',
+            available: true,
+            note: 'Browser Pyodide WebAssembly Worker sandbox',
+            runHook: pyWorker.runHook,
+            configure: pyWorker.configure,
+            warmup: pyWorker.warmup,
+            getStatus: pyWorker.getStatus,
+            terminate: pyWorker.terminate,
+        });
+    } else if (isPythonNodeRunnerAvailable()) {
+        const pyNode = createPythonNodeRunner();
+        registerRunner('python', {
+            label: 'Python (Node python3)',
+            available: true,
+            note: 'Node python3 isolated sandbox runner',
+            runHook: pyNode.runHook,
+            configure: pyNode.configure,
+            warmup: pyNode.warmup,
+            getStatus: pyNode.getStatus,
+            terminate: pyNode.terminate,
+        });
+    } else {
+        registerRunner('python', {
+            label: 'Python',
+            available: false,
+            note: 'No Python sandbox runner available in this environment',
+        });
+    }
 }
 
 registerDefaultRunners();

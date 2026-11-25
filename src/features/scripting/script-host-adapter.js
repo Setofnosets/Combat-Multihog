@@ -10,13 +10,18 @@ import {
     sanitizeTrackerTag,
 } from './core/script-schema.js';
 import {
-    createTurnLedger,
-    ensureScriptState,
-    renderScriptMemo,
+    runScriptToolAction,
     runScriptsAfterGenerate,
     runScriptsBeforeGenerate,
-    runScriptToolAction,
+    renderScriptMemo,
+    ensureScriptState,
+    createTurnLedger,
 } from './core/script-engine.js';
+import {
+    configureRunner,
+    getRunnerStatus,
+    warmupRunner,
+} from './core/runner-registry.js';
 import {
     captureScriptSnapshot,
     getChatScriptRecord,
@@ -148,6 +153,17 @@ function findScriptOwningTag(tag, settings = getSettings(), chatId = getActiveCh
     return null;
 }
 
+function buildRunnerOpts(settings) {
+    const opts = {};
+    if (settings?.gameScriptPyodideIndexUrl !== undefined) {
+        opts.pyodideIndexUrl = settings.gameScriptPyodideIndexUrl;
+    }
+    if (settings?.gameScriptPyodideBootTimeoutMs !== undefined) {
+        opts.bootTimeoutMs = settings.gameScriptPyodideBootTimeoutMs;
+    }
+    return opts;
+}
+
 async function handleToolInvocation(scriptId, rawArgs) {
     const settings = getSettings();
     const chatId = getActiveChatId();
@@ -170,6 +186,7 @@ async function handleToolInvocation(scriptId, rawArgs) {
     const existingRecord = getChatScriptRecord(settings, chatId, script.id);
     const currentState = existingRecord ? existingRecord.state : null;
     const baseCtx = buildHostContext(settings, chatId, { priorMemo });
+    const runnerOpts = buildRunnerOpts(settings);
 
     const res = await runScriptToolAction(
         script,
@@ -178,6 +195,7 @@ async function handleToolInvocation(scriptId, rawArgs) {
         args,
         baseCtx,
         ledger,
+        runnerOpts,
     );
 
     if (chatId) {
@@ -480,7 +498,8 @@ export async function seedInitialScriptStateForChat(settings, chatId, scriptId) 
 
     const existingRecord = getChatScriptRecord(settings, cid, script.id);
     const baseCtx = buildHostContext(settings, cid);
-    const initRes = await ensureScriptState(script, existingRecord?.state ?? null, baseCtx);
+    const runnerOpts = buildRunnerOpts(settings);
+    const initRes = await ensureScriptState(script, existingRecord?.state ?? null, baseCtx, runnerOpts);
 
     if (!initRes.ok) {
         setChatScriptRecord(settings, cid, script.id, {
@@ -495,7 +514,7 @@ export async function seedInitialScriptStateForChat(settings, chatId, scriptId) 
     const trackerTag = sanitizeTrackerTag(script.trackerTag);
 
     if (trackerTag) {
-        const memoRes = await renderScriptMemo(script, initRes.state, baseCtx);
+        const memoRes = await renderScriptMemo(script, initRes.state, baseCtx, runnerOpts);
         if (memoRes.ok) {
             memoBlock = memoRes.memoBlock;
             if (memoBlock && memoBlock.trim()) {
@@ -519,6 +538,28 @@ export async function seedInitialScriptStateForChat(settings, chatId, scriptId) 
         memoBlock,
         error: renderError,
     };
+}
+
+/**
+ * Synchronizes Python runner configuration (Pyodide index URL and boot timeout)
+ * from extension settings.
+ *
+ * @param {object} [settings=getSettings()]
+ * @returns {object|null}
+ */
+export function syncPythonRunnerConfig(settings = getSettings()) {
+    return configureRunner('python', {
+        pyodideIndexUrl: settings?.gameScriptPyodideIndexUrl,
+        bootTimeoutMs: settings?.gameScriptPyodideBootTimeoutMs,
+    });
+}
+
+/**
+ * Returns the live status of the Python runner (state, indexUrl, lastError).
+ * @returns {{ state: string, lastError: string|null, [key: string]: any }}
+ */
+export function getPythonRunnerStatus() {
+    return getRunnerStatus('python');
 }
 
 /**
@@ -570,8 +611,9 @@ export async function runHostScriptsBeforeGenerate({
         userMessage: lastUserMessage,
         priorMemo,
     });
+    const runnerOpts = buildRunnerOpts(settings);
 
-    const result = await runScriptsBeforeGenerate(scripts, statesById, baseCtx, ledger);
+    const result = await runScriptsBeforeGenerate(scripts, statesById, baseCtx, ledger, runnerOpts);
 
     const errorsByScript = new Map();
     for (const err of result.errors || []) {
@@ -679,8 +721,9 @@ export async function runHostScriptsAfterGenerate({
         assistantMessage: typeof lastAiMsg?.mes === 'string' ? lastAiMsg.mes : '',
         priorMemo,
     });
+    const runnerOpts = buildRunnerOpts(settings);
 
-    const afterRes = await runScriptsAfterGenerate(scripts, statesById, baseCtx, ledger);
+    const afterRes = await runScriptsAfterGenerate(scripts, statesById, baseCtx, ledger, runnerOpts);
 
     const errorsByScript = new Map();
     for (const err of afterRes.errors || []) {
@@ -796,6 +839,7 @@ export async function handleHostScriptSwipeRollback(lastAiMsg, settings = getSet
     const scripts = getActiveChatScripts(settings, cid);
     const records = getChatScriptRecords(settings, cid);
     const baseCtx = buildHostContext(settings, cid);
+    const runnerOpts = buildRunnerOpts(settings);
     const memoPatches = {};
 
     for (const script of scripts) {
@@ -806,7 +850,7 @@ export async function handleHostScriptSwipeRollback(lastAiMsg, settings = getSet
             memoPatches[trackerTag] = '';
             continue;
         }
-        const memoRes = await renderScriptMemo(script, record.state, baseCtx);
+        const memoRes = await renderScriptMemo(script, record.state, baseCtx, runnerOpts);
         if (memoRes.ok && memoRes.memoBlock !== null) {
             memoPatches[trackerTag] = memoRes.memoBlock;
         }
@@ -820,18 +864,24 @@ export async function handleHostScriptSwipeRollback(lastAiMsg, settings = getSet
 }
 
 /**
- * Re-synchronizes script tool registrations and seeds initial state for active
- * tracker-backed scripts that have no state yet in the current chat.
+ * Re-synchronizes script tool registrations, Python runner configuration,
+ * background warmup when Python scripts are active, and seeds initial state for
+ * active tracker-backed scripts that have no state yet in the current chat.
  */
 export async function onScriptChatChanged() {
     const settings = getSettings();
     const chatId = resolveChatId(getActiveChatId());
 
+    syncPythonRunnerConfig(settings);
     syncScriptToolRegistrations(settings, chatId);
 
     if (!chatId) return;
 
     const scripts = getActiveChatScripts(settings, chatId);
+    if (scripts.some((script) => String(script?.lang || '').trim().toLowerCase() === 'python')) {
+        Promise.resolve(warmupRunner('python')).catch(() => {});
+    }
+
     const existingRecords = getChatScriptRecords(settings, chatId);
     let seededAny = false;
 
@@ -855,16 +905,18 @@ export async function onScriptChatChanged() {
 }
 
 /**
- * Registers the renderer script card metadata resolver and synchronizes active
- * script function tools on startup.
+ * Registers the renderer script card metadata resolver, syncs Python runner
+ * configuration, and synchronizes active script function tools on startup.
  */
 export function initScriptHostAdapter() {
+    const settings = getSettings();
+
     registerScriptCardMetaResolver((tag) => {
-        const settings = getSettings();
+        const curSettings = getSettings();
         const chatId = getActiveChatId();
-        const script = findScriptOwningTag(tag, settings, chatId);
+        const script = findScriptOwningTag(tag, curSettings, chatId);
         if (!script) return null;
-        const record = chatId ? getChatScriptRecord(settings, chatId, script.id) : null;
+        const record = chatId ? getChatScriptRecord(curSettings, chatId, script.id) : null;
         return {
             icon: script.icon || '',
             label: script.name || '',
@@ -872,5 +924,6 @@ export function initScriptHostAdapter() {
         };
     });
 
+    syncPythonRunnerConfig(settings);
     syncScriptToolRegistrations();
 }

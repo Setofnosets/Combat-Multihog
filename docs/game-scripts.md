@@ -19,8 +19,10 @@ Open it from **Settings → Scripts**.
    - [Sandboxing & Security Model](#sandboxing--security-model)
 3. [Guide: Writing Your Own Scripts](#guide-writing-your-own-scripts)
    - [Quick Start in the Script Studio](#quick-start-in-the-script-studio)
+   - [AI Script Wizard](#ai-script-wizard)
    - [Canonical `.script.json` Schema](#canonical-scriptjson-schema)
    - [JavaScript Authoring Styles](#javascript-authoring-styles)
+   - [Python (Pyodide) Authoring & Runtime](#python-pyodide-authoring--runtime)
    - [Hook Signatures & Context (`ctx`) Reference](#hook-signatures--context-ctx-reference)
    - [Hook Return Fields](#hook-return-fields)
    - [Common Implementation Patterns](#common-implementation-patterns)
@@ -53,12 +55,12 @@ The subsystem lives under `src/features/scripting/` and is intentionally split i
 
 | Layer | Files | Responsibility |
 | :--- | :--- | :--- |
-| **Pure `core/`** *(zero SillyTavern, DOM, or Multihog imports)* | `src/features/scripting/core/script-schema.js`<br>`src/features/scripting/core/runner-registry.js`<br>`src/features/scripting/core/runner-js-worker.js`<br>`src/features/scripting/core/runner-js-node.js`<br>`src/features/scripting/core/script-engine.js`<br>`src/features/scripting/core/script-templates.js` | Portable `.script.json` schema, command parser, tool JSON-Schema compiler, pluggable language runners, sandboxed execution, turn orchestrator, deduplication ledger, starter templates. |
-| **Host Adapter, Store & UI** | `src/features/scripting/script-store.js`<br>`src/features/scripting/script-host-adapter.js`<br>`src/features/scripting/script-ui.js`<br>`src/features/scripting/script-studio.js` | Settings catalog CRUD, per-chat/global/character-binding resolution, swipe snapshots, SillyTavern `registerFunctionTool` sync, `[TIME]` parsing, HUD card metadata/portraits, Settings tab & 4-tab Script Studio modal. |
+| **Pure `core/`** *(zero SillyTavern, DOM, or Multihog imports)* | `src/features/scripting/core/script-schema.js`<br>`src/features/scripting/core/runner-registry.js`<br>`src/features/scripting/core/runner-js-worker.js`<br>`src/features/scripting/core/runner-js-node.js`<br>`src/features/scripting/core/python-bootstrap.js`<br>`src/features/scripting/core/runner-python-pyodide.js`<br>`src/features/scripting/core/runner-python-node.js`<br>`src/features/scripting/core/script-engine.js`<br>`src/features/scripting/core/script-templates.js` | Portable `.script.json` schema, command parser, tool JSON-Schema compiler, pluggable JS & Python (Pyodide / `python3`) sandbox runners, turn orchestrator, deduplication ledger, starter templates. |
+| **Host Adapter, Store & UI** | `src/features/scripting/script-store.js`<br>`src/features/scripting/script-host-adapter.js`<br>`src/features/scripting/script-ui.js`<br>`src/features/scripting/script-studio.js`<br>`src/features/scripting/script-wizard.js`<br>`src/features/scripting/script-wizard-prompts.js` | Settings catalog CRUD, per-chat/global/character-binding resolution, swipe snapshots, SillyTavern `registerFunctionTool` sync, `[TIME]` parsing, HUD card metadata/portraits, Settings tab, 4-tab Script Studio modal, and AI Script Wizard. |
 
 Because `core/` communicates purely through JSON payloads and has zero host imports:
-- Every core module and script runs directly under Node + Vitest (`npm test`).
-- Future language runtimes (such as **Pyodide** in-browser Python in Phase 2) plug directly into `runner-registry.js` without changing the engine, store, or UI.
+- Every core module and script (both JavaScript and Python) runs directly under Node + Vitest (`npm test`).
+- Both **JavaScript** (`runner-js-worker.js` / `runner-js-node.js`) and **Python (Pyodide)** (`runner-python-pyodide.js` / `runner-python-node.js`) plug cleanly into `runner-registry.js` without changing the engine, store, or UI.
 - The entire `core/` layer and all user `.script.json` files can be extracted into a standalone SillyTavern extension in the future by swapping out only the host adapter.
 
 ---
@@ -158,10 +160,11 @@ Multiple scripts can run together in the same chat (e.g., a character-bound comp
 ### Sandboxing & Security Model
 
 Imported scripts can come from third-party creators, so execution is strictly sandboxed:
-- **Browser Web Worker (`runner-js-worker.js`):** Each hook runs in an ephemeral `Blob` Web Worker that is terminated after completion. Inside the user script wrapper scope, `fetch`, `XMLHttpRequest`, `importScripts`, `WebSocket`, `EventSource`, `indexedDB`, `caches`, `navigator`, `self`, `globalThis`, `postMessage`, `close`, `Worker`, and `SharedWorker` are shadowed as `undefined` — preventing DOM access, SillyTavern settings access, or network exfiltration.
-- **Hard Timeout (`DEFAULT_SCRIPT_TIMEOUT_MS = 1500`):** Infinite loops (e.g., `while (true) {}`) or stalled async promises are terminated cleanly (`timedOut: true`) without freezing SillyTavern.
-- **Node VM Test Sandbox (`runner-js-node.js`):** Dynamically loads `node:vm` only in Node/Vitest (never parsed as a static import in browsers), creates a null-prototype context with `codeGeneration: { strings: false, wasm: false }`, and blocks host globals (`process`, `require`, `Buffer`, `fetch`, `globalThis`).
-- **JSON Boundary & URL Sanitization:** All hook inputs/outputs round-trip through JSON cloning to prevent prototype leakage. `portraitUrl` is allowlisted to `https://`, `http://`, `/`, or `data:image/` (`javascript:`, `vbscript:`, and `data:text/html` are rejected). `console.log`/`info`/`warn`/`error` calls are captured into `logs[]` (capped at 100 entries).
+- **Browser JS Web Worker (`runner-js-worker.js`):** Each JS hook runs in an ephemeral `Blob` Web Worker that is terminated after completion. Inside the user script wrapper scope, `fetch`, `XMLHttpRequest`, `importScripts`, `WebSocket`, `EventSource`, `indexedDB`, `caches`, `navigator`, `self`, `globalThis`, `postMessage`, `close`, `Worker`, and `SharedWorker` are shadowed as `undefined` — preventing DOM access, SillyTavern settings access, or network exfiltration.
+- **Browser Python Pyodide Worker (`runner-python-pyodide.js`):** Python scripts run in a **persistent warm Pyodide WebAssembly Web Worker** loaded from the configurable **Pyodide Base URL** (default `https://cdn.jsdelivr.net/pyodide/v0.27.5/full/`). Once Pyodide finishes booting, the worker neutralizes network/storage globals (`fetch`, `XMLHttpRequest`, `importScripts`, `WebSocket`, `EventSource`, `indexedDB`, `caches`, `navigator`, `Worker`, `SharedWorker`, etc.) and evaluates every hook inside a restricted namespace (`_SAFE_BUILTIN_NAMES`, blocked dangerous dunders like `__subclasses__`/`__globals__`/`__builtins__`, and an allowlisted `__import__`).
+- **Hard Timeout (`DEFAULT_SCRIPT_TIMEOUT_MS = 1500`):** Infinite loops (e.g., `while (true) {}` or `while True: pass`) or stalled async promises are terminated cleanly (`timedOut: true`) without freezing SillyTavern. (Pyodide's initial WebAssembly runtime boot uses a separate `DEFAULT_PYODIDE_BOOT_TIMEOUT_MS = 25000` watchdog.)
+- **Node Test Sandboxes (`runner-js-node.js` & `runner-python-node.js`):** Dynamically load `node:vm` or `node:child_process` (`python3 -I`) only in Node/Vitest (never parsed as a static import in browsers), isolating scripts from host globals (`process`, `require`, `Buffer`, `fetch`, `globalThis`, or blocked Python modules like `os`, `sys`, `subprocess`, `socket`).
+- **JSON Boundary & URL Sanitization:** All hook inputs/outputs round-trip through JSON cloning to prevent prototype leakage. `portraitUrl` is allowlisted to `https://`, `http://`, `/`, or `data:image/` (`javascript:`, `vbscript:`, and `data:text/html` are rejected). `console.log`/`info`/`warn`/`error` (JS) and `print(...)` (Python) calls are captured into `logs[]` (capped at 100 entries).
 
 ---
 
@@ -170,13 +173,28 @@ Imported scripts can come from third-party creators, so execution is strictly sa
 ### Quick Start in the Script Studio
 
 1. Open **Settings → Scripts** and make sure **Enable Game Scripts Engine** is checked.
-2. Click **+ New Script** (or **Import `.json`** to load an existing file like `tests/fixtures/my-succubus-companion.script.json`).
+2. Click **+ New Script** (or **✨ AI Script Wizard** to generate a draft automatically, or **Import `.json`** to load an existing file like `tests/fixtures/my-succubus-companion.script.json` or `tests/fixtures/hearth-companion-py.script.json`).
 3. Work across the 4 tabs of the **Structured Script Studio**:
-   - **Setup & Binding:** Give your script a Name, Icon, Scope (`chat`, `global`, or `character` with **Add Current Character**), optional Tracker `[TAG]` (e.g., `SANITY`), optional `!commandPrefix` (e.g., `!sanity`), and toggle **Enable Narrator Tool Call**.
+   - **Setup & Binding:** Give your script a Name, Icon, Language (`JavaScript` or `Python (Pyodide)`), Scope (`chat`, `global`, or `character` with **Add Current Character**), optional Tracker `[TAG]` (e.g., `SANITY`), optional `!commandPrefix` (e.g., `!sanity`), and toggle **Enable Narrator Tool Call**.
    - **Narrator Prompt & Actions:** Write concise `<tag>...</tag>` instructions for the Narrator and add tool actions using the row-based **Action Builder** (no manual JSON Schema writing needed — the live schema preview updates automatically).
-   - **Code & Templates:** Pick a starter template (*Blank*, *Time-Decay Meter*, *Command + Tool Companion*, or *Stage & Route Progression*), insert common helpers with the **Pattern Snippet** buttons, and click **Validate Script** to test syntax + `initState()`.
+   - **Code & Templates:** Pick a starter template (*Blank*, *Time-Decay Meter*, *Command + Tool Companion*, or *Stage & Route Progression*), insert common helpers with the **Pattern Snippet** buttons, and click **Validate Script** to test syntax + `initState()` / `init_state()`.
    - **Live Test Sandbox:** Simulate `!commands`, `[TIME]` jumps (`+Minutes` / Day Changed), tool calls, and post-turn replies right inside the modal — inspecting the mutated State JSON, rendered HUD card preview, prompt injection, and console logs without affecting your active chat.
 4. Click **Save Script**. You can inspect, manually edit, or reset live chat state at any time via the **Live State** button on the script row.
+
+---
+
+### AI Script Wizard
+
+Click **✨ AI Script Wizard** in **Settings → Scripts** to draft a complete, sandbox-tested `.script.json` using an LLM:
+
+- **Source Material:**
+  - **Active Character Card:** Automatically hydrates shallow/lazy-loaded SillyTavern character cards (`createCharacterCardHydrator`) and extracts Scenario, Description, Personality, First Message, Example Dialogs, and Creator Notes.
+  - **Upload Character Card (`.json`):** Load any V1 or V2 character card JSON file from disk.
+  - **Custom Description Only:** Write a plain-English ruleset brief without any character card.
+- **Options:** Choose target language (**JavaScript** or **Python (Pyodide)**), interaction style (**Both `!commands` & Tool Calls**, **Natural RP Tool Calls Only**, or **Explicit `!commands` Only**), and optional context toggles (*recent chat messages*, *active Lorebook entries*, *current State Memo*).
+- **Connection Slot:** Reuses the shared **Game System Wizard** connection settings under **Settings → Connections & Models** (`rpg_connection_slot_game_system_wizard` / `gameSystemWizard*`), keeping setup in one place.
+- **Automatic Sandbox Validation & Self-Repair:** Every generated or iterated draft is schema-validated (`validateScriptDefinition`) and executed in the sandbox (`initState` + `onBeforeGenerate` + `renderMemo`). If validation or runtime errors occur, the wizard automatically performs **1 retry self-repair pass** with the exact error trace before opening the finished draft in **Script Studio**.
+- **Iterate / Convert Inside Script Studio:** Click **✨ Iterate with AI** inside Script Studio to refine mechanics, fix validation/sandbox errors, improve HUD bars & pills, or **convert scripts cleanly between JavaScript and Python** (`js` ↔ `python`) with quick-action chips.
 
 ---
 
@@ -241,7 +259,7 @@ Scripts export and import as portable single-file JSON documents (`schemaVersion
 | `id` | Auto | Sanitized to lowercase `snake_case` (`[a-z0-9_]+`). Derived from `name` if omitted. |
 | `name` | Yes | Human-readable script title (also used as HUD card label fallback). |
 | `icon` | No | Emoji or icon string (default `📜`), used on the HUD card header. |
-| `lang` | No | `'js'` (default). `'python'` is reserved for Phase 2 Pyodide support. |
+| `lang` | No | `'js'` (default) or `'python'` (executed via the persistent Pyodide Web Worker in browsers and `python3 -I` in Node/Vitest). |
 | `scope` | No | `'chat'` (default), `'global'`, or `'character'`. |
 | `boundCharacters` | No | Array of character names for `scope: 'character'` (case-insensitive match). |
 | `globalEnabled` | No | When `scope === 'global'`, whether enabled by default across all chats. |
@@ -252,7 +270,7 @@ Scripts export and import as portable single-file JSON documents (`schemaVersion
 | `toolName` | Auto | Must match `^[A-Za-z][A-Za-z0-9_]{1,63}$`; defaults to `Script_<PascalCaseName>`. |
 | `toolActions` | No | Array of `{ name, description, params: [{ name, type, required, enum?, description }] }`. Param `type` is `'string' \| 'number' \| 'boolean'`. |
 | `gmPrompt` | No | Narrator system-prompt instructions injected into `buildSysprompt` while active. |
-| `code` | Yes | JavaScript source implementing the script's hooks. |
+| `code` | Yes | JavaScript or Python source implementing the script's hooks. |
 
 ---
 
@@ -296,6 +314,60 @@ module.exports = {
 ```
 
 All hooks are optional — if your script omits `onAfterGenerate` or `onToolCall`, the engine skips it without error.
+
+---
+
+### Python (Pyodide) Authoring & Runtime
+
+**Python (Pyodide)** is live for scripts with `"lang": "python"`. In browsers, Python runs inside a **persistent warm Pyodide Web Worker** (loaded on demand when the first Python hook runs and reused across turns without re-downloading WASM).
+
+- **Pyodide Base URL Configuration:** Configure **Pyodide Base URL** (and inspect live worker status: `Idle` / `Loading...` / `Ready` / `Error`, or click **Reset CDN**) in **Settings → Scripts → Python (Pyodide) Runtime**. Default CDN: `https://cdn.jsdelivr.net/pyodide/v0.27.5/full/`. Changing the URL cleanly terminates and reconfigures the worker on next use.
+- **Idiomatic `snake_case` Hook Names:** Python scripts may define either `snake_case` hooks (recommended) or `camelCase` equivalents:
+  - `init_state(ctx)` *(alias for `initState`)*
+  - `on_before_generate(state, ctx)` *(alias for `onBeforeGenerate`)*
+  - `on_tool_call(state, call, ctx)` *(alias for `onToolCall`)*
+  - `on_after_generate(state, ctx)` *(alias for `onAfterGenerate`)*
+  - `render_memo(state, ctx)` *(alias for `renderMemo`)*
+- **Idiomatic `snake_case` Return Keys:** Hook return dicts accept both `snake_case` and `camelCase` keys:
+  - `memo_block` → `memoBlock`
+  - `prompt_injection` → `promptInjection`
+  - `tool_result` → `toolResult`
+  - `strip_command` → `stripCommand`
+  - `portrait_url` → `portraitUrl`
+  - `append_markdown` → `appendMarkdown`
+- **Allowed Python Standard Library Modules:** Only pure, deterministic standard library modules are importable (`PYTHON_ALLOWED_MODULES` in `src/features/scripting/core/python-bootstrap.js`):
+  `math`, `re`, `json`, `random`, `datetime`, `collections`, `itertools`, `functools`, `dataclasses`, `copy`, `statistics`, `string`, `typing`, `enum`, `decimal`, `fractions`.
+- **Blocked Builtins & Modules:** File I/O, OS/process, and network modules (`os`, `sys`, `subprocess`, `socket`, `pathlib`, `urllib`, `http`, `importlib`, `builtins`, `ctypes`, etc.), dangerous builtins (`open`, `eval`, `exec`, `compile`, `input`), and reflection dunders (`__subclasses__`, `__globals__`, `__builtins__`, `__code__`, `__closure__`, `__import__`, `__loader__`, `__spec__`) are blocked. Use `print(...)` for sandbox logs (captured into `logs[]`).
+- **Production Python Example:** Inspect [`tests/fixtures/hearth-companion-py.script.json`](../tests/fixtures/hearth-companion-py.script.json) for a full idiomatic Python companion script with `!hearth` commands, `[TIME]` decay, `Script_HearthCompanion` tool calls, stage transitions, `portrait_url`, `append_markdown`, and `render_memo`.
+
+```python
+import math
+
+
+def init_state(ctx):
+    return {"trust": 10, "warmth": 45}
+
+
+def on_before_generate(state, ctx):
+    nxt = dict(state or init_state(ctx))
+    delta = int((ctx.get("time") or {}).get("deltaMinutes") or 0)
+    if delta > 0:
+        nxt["warmth"] = max(0, nxt["warmth"] - (delta // 15))
+    return {"state": nxt}
+
+
+def on_tool_call(state, call, ctx):
+    nxt = dict(state or init_state(ctx))
+    action = str((call or {}).get("action") or "")
+    if action == "tend_fire":
+        nxt["warmth"] = min(100, nxt["warmth"] + 15)
+        return {"state": nxt, "tool_result": {"ok": True, "warmth": nxt["warmth"]}}
+    return {"state": nxt, "tool_result": {"ok": False}}
+
+
+def render_memo(state, ctx):
+    return f"Warmth: ((BAR)) {state['warmth']}/100\nTrust: ((BARGREEN)) {state['trust']}/100"
+```
 
 ---
 

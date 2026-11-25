@@ -776,6 +776,8 @@ You may be asked to use Markers: ((PLS)), ((B)), ((XB)), ((BDG)), ((HGT)). These
         syspromptSnippetDatabase: [],
         gameSystemDatabase: [],
         gameScriptsEnabled: true,
+        gameScriptPyodideIndexUrl: 'https://cdn.jsdelivr.net/pyodide/v0.27.5/full/',
+        gameScriptPyodideBootTimeoutMs: 25000,
         gameScriptDatabase: [],
         gameScriptStatesByChat: {},
         gameScriptOrder: [],

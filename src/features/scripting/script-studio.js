@@ -18,14 +18,20 @@ import {
     validateScriptDefinition,
 } from './core/script-schema.js';
 import {
-    SCRIPT_PATTERN_SNIPPETS,
-    SCRIPT_STARTER_TEMPLATES,
+    getPatternSnippetsForLang,
     getStarterTemplateById,
+    getStarterTemplatesForLang,
 } from './core/script-templates.js';
+import {
+    getRunnerStatus,
+} from './core/runner-registry.js';
 import {
     createTurnLedger,
     runSandboxSimulation,
 } from './core/script-engine.js';
+import {
+    openScriptIterateModal,
+} from './script-wizard.js';
 import { renderMemoAsCards } from '../../../renderer.js';
 import { getSettingsOverlayAppearance } from '../../ui/settings-overlay.js';
 
@@ -218,6 +224,7 @@ function renderPreviewHud(tag, memoBlock) {
  *   onSave?: (normalizedDraft: object) => (void|Promise<void>),
  *   onCancel?: () => void,
  *   getActiveCharacterName?: () => string,
+ *   getSettings?: () => object,
  *   isNew?: boolean,
  * }} [deps={}]
  * @returns {{ close: () => void, getDraft: () => object } | null}
@@ -236,6 +243,8 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
     let activeTab = 'setup';
     let validationReportHtml = '';
     let footerErrorHtml = '';
+    let lastValidationErrors = [];
+    let lastSandboxErrors = [];
 
     // In-memory sandbox state isolated from live RP chats.
     const sandbox = {
@@ -249,8 +258,21 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
         argsText: JSON.stringify(buildDefaultArgsForAction(draft.toolActions[0]), null, 2),
         assistantMessage: '',
         lastOutput: null,
+        statusMessage: '',
         running: false,
     };
+
+    function resetSandboxState() {
+        validationReportHtml = '';
+        lastValidationErrors = [];
+        lastSandboxErrors = [];
+        sandbox.state = null;
+        sandbox.hasInitialized = false;
+        sandbox.ledger = createTurnLedger();
+        sandbox.lastOutput = null;
+        sandbox.statusMessage = '';
+        syncSandboxSelectedAction();
+    }
 
     const appearance = getAppearanceSafe();
     const overlay = document.createElement('div');
@@ -391,10 +413,10 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                             if (lang === 'js') {
                                 return `<option value="js"${draft.lang === 'js' ? ' selected' : ''}>JavaScript (Sandboxed Worker)</option>`;
                             }
-                            return `<option value="python" disabled${draft.lang === 'python' ? ' selected' : ''}>Python (Pyodide — Phase 2)</option>`;
+                            return `<option value="python"${draft.lang === 'python' ? ' selected' : ''}>Python (Pyodide)</option>`;
                         }).join('')}
                     </select>
-                    <small style="opacity:0.7;font-size:0.75em;">Python (Pyodide — Phase 2) coming soon; Phase 1 executes sandboxed JavaScript.</small>
+                    <small style="opacity:0.7;font-size:0.75em;">JavaScript runs in an isolated Web Worker; Python runs in-browser via Pyodide WebAssembly (lazy-loaded on first run).</small>
                 </div>
             </div>
 
@@ -553,11 +575,20 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
     }
 
     function renderCodeAndTemplatesTabHtml() {
+        const templates = getStarterTemplatesForLang(draft.lang);
+        const snippets = getPatternSnippetsForLang(draft.lang);
+        const codeLabel = draft.lang === 'python'
+            ? 'Python (Pyodide) Sandbox Code'
+            : 'JavaScript Sandbox Code';
+        const codePlaceholder = draft.lang === 'python'
+            ? 'Define init_state(ctx), on_before_generate(state, ctx), on_tool_call(state, call, ctx), on_after_generate(state, ctx), render_memo(state, ctx)...'
+            : 'Define initState(), onBeforeGenerate(state, ctx), onToolCall(state, call, ctx), onAfterGenerate(state, ctx), renderMemo(state, ctx)...';
+
         return `
             <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;border:1px solid var(--rt-studio-border);background:var(--rt-studio-bg);">
                 <label style="font-size:0.82em;font-weight:600;">Starter Template:</label>
                 <select id="rt-ss-template-select" class="text_pole" style="flex:1 1 240px;">
-                    ${SCRIPT_STARTER_TEMPLATES.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.icon || '📜')} ${escapeHtml(tpl.name)} — ${escapeHtml(tpl.description || '')}</option>`).join('')}
+                    ${templates.map((tpl) => `<option value="${escapeHtml(tpl.id)}">${escapeHtml(tpl.icon || '📜')} ${escapeHtml(tpl.name)} — ${escapeHtml(tpl.description || '')}</option>`).join('')}
                 </select>
                 <button type="button" id="rt-ss-apply-template" class="menu_button interactable">Apply Template</button>
             </div>
@@ -565,7 +596,7 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
             <div style="display:flex;flex-direction:column;gap:5px;">
                 <label style="font-size:0.8em;font-weight:600;">Pattern Snippets <span style="opacity:0.68;font-weight:400;">(insert at cursor)</span>:</label>
                 <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                    ${SCRIPT_PATTERN_SNIPPETS.map((snip) => `
+                    ${snippets.map((snip) => `
                         <button type="button" class="menu_button interactable rt-ss-snippet-btn" data-snippet-id="${escapeHtml(snip.id)}" title="${escapeHtml(snip.description || '')}" style="font-size:0.78em;">+ ${escapeHtml(snip.label)}</button>
                     `).join('')}
                 </div>
@@ -573,10 +604,10 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
 
             <div style="display:flex;flex-direction:column;gap:4px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                    <label style="font-size:0.82em;font-weight:600;">JavaScript Sandbox Code</label>
+                    <label style="font-size:0.82em;font-weight:600;">${codeLabel}</label>
                     <button type="button" id="rt-ss-validate-btn" class="menu_button interactable">Validate Script</button>
                 </div>
-                <textarea id="rt-ss-code" class="rt-script-code-editor" spellcheck="false" placeholder="Define initState(), onBeforeGenerate(state, ctx), onToolCall(state, call, ctx), onAfterGenerate(state, ctx), renderMemo(state, ctx)...">${escapeHtml(draft.code)}</textarea>
+                <textarea id="rt-ss-code" class="rt-script-code-editor" spellcheck="false" placeholder="${codePlaceholder}">${escapeHtml(draft.code)}</textarea>
             </div>
 
             <div id="rt-ss-validation-box" style="display:flex;flex-direction:column;gap:6px;">
@@ -622,12 +653,17 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
             diagParts.push('No sandbox simulation run yet.');
         }
 
+        const statusBannerHtml = sandbox.statusMessage
+            ? `<div id="rt-ss-sb-status" style="padding:7px 10px;border-radius:6px;border:1px solid rgba(110,168,255,0.45);background:rgba(110,168,255,0.12);font-size:0.82em;line-height:1.4;" role="status" aria-live="polite">${escapeHtml(sandbox.statusMessage)}</div>`
+            : '';
+
         return `
             <div style="display:flex;flex-direction:column;gap:8px;padding:10px;border-radius:8px;border:1px solid var(--rt-studio-border);background:var(--rt-studio-bg);">
                 <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
                     <span style="font-size:0.8em;opacity:0.78;">Runs purely in memory inside this modal — zero impact on active chat state.</span>
                     <button type="button" id="rt-ss-sb-init" class="menu_button interactable"${sandbox.running ? ' disabled' : ''}>Init / Reset State</button>
                 </div>
+                ${statusBannerHtml}
 
                 <div style="display:grid;grid-template-columns:minmax(0,1fr) 120px auto auto;gap:8px;align-items:end;">
                     <div style="display:flex;flex-direction:column;gap:3px;">
@@ -741,8 +777,11 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
             });
 
             langSelect?.addEventListener('change', () => {
-                if (langSelect.value === 'js') {
-                    draft.lang = 'js';
+                const nextLang = SCRIPT_LANGUAGES.includes(langSelect.value) ? langSelect.value : 'js';
+                if (draft.lang !== nextLang) {
+                    draft.lang = nextLang;
+                    resetSandboxState();
+                    renderModal();
                 }
             });
 
@@ -953,6 +992,9 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                         draft.id = sanitizeScriptId(tpl.name);
                     }
                 }
+                if (tpl.lang && SCRIPT_LANGUAGES.includes(tpl.lang)) {
+                    draft.lang = tpl.lang;
+                }
                 if (tpl.icon) draft.icon = tpl.icon;
                 if (tpl.description && !draft.description) draft.description = tpl.description;
                 draft.trackerTag = sanitizeTrackerTag(tpl.trackerTag);
@@ -965,19 +1007,14 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                 draft.gmPrompt = tpl.gmPrompt || '';
                 draft.code = tpl.code || '';
 
-                validationReportHtml = '';
-                sandbox.state = null;
-                sandbox.hasInitialized = false;
-                sandbox.ledger = createTurnLedger();
-                sandbox.lastOutput = null;
-                syncSandboxSelectedAction();
+                resetSandboxState();
                 renderModal();
             });
 
             pane.querySelectorAll('.rt-ss-snippet-btn').forEach((btn) => {
                 btn.addEventListener('click', () => {
                     const snipId = btn.getAttribute('data-snippet-id');
-                    const snip = SCRIPT_PATTERN_SNIPPETS.find((s) => s.id === snipId);
+                    const snip = getPatternSnippetsForLang(draft.lang).find((s) => s.id === snipId);
                     if (!snip || !codeEditor) return;
                     draft.code = insertTextAtCursor(codeEditor, snip.code);
                 });
@@ -986,12 +1023,33 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
             pane.querySelector('#rt-ss-validate-btn')?.addEventListener('click', async () => {
                 const candidate = getValidationCandidate();
                 const validation = validateScriptDefinition(candidate);
+                lastValidationErrors = [...(validation?.errors || [])];
+                lastSandboxErrors = [];
+
+                const box = pane.querySelector('#rt-ss-validation-box');
                 let simRes = null;
-                if (validation.valid && candidate.lang === 'js') {
-                    simRes = await runSandboxSimulation(getNormalizedDraftSnapshot(), null, { type: 'init' });
+                if (validation.valid) {
+                    if (candidate.lang === 'python' && getRunnerStatus('python')?.state !== 'ready') {
+                        const loadingHtml = '<div style="padding:8px 10px;border-radius:8px;border:1px solid rgba(110,168,255,0.45);background:rgba(110,168,255,0.12);font-size:0.84em;line-height:1.4;" role="status" aria-live="polite">Loading Python (Pyodide) runtime on first run...</div>';
+                        validationReportHtml = loadingHtml;
+                        if (box) {
+                            box.innerHTML = loadingHtml;
+                        }
+                    }
+                    try {
+                        simRes = await runSandboxSimulation(getNormalizedDraftSnapshot(), null, { type: 'init' });
+                    } catch (err) {
+                        simRes = {
+                            ok: false,
+                            error: err?.message || String(err),
+                            durationMs: 0,
+                        };
+                    }
+                    if (simRes && !simRes.ok && simRes.error) {
+                        lastSandboxErrors = [`Sandbox initState() failed: ${simRes.error}`];
+                    }
                 }
                 validationReportHtml = renderValidationMessageBox(validation, simRes);
-                const box = pane.querySelector('#rt-ss-validation-box');
                 if (box) {
                     box.innerHTML = validationReportHtml;
                 }
@@ -1034,10 +1092,13 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
 
             const runSim = async (simEvent) => {
                 if (sandbox.running) return;
+                const candidate = getNormalizedDraftSnapshot();
                 sandbox.running = true;
+                sandbox.statusMessage = (candidate.lang === 'python' && getRunnerStatus('python')?.state !== 'ready')
+                    ? 'Loading Python (Pyodide) runtime on first run...'
+                    : '';
                 renderModal();
                 try {
-                    const candidate = getNormalizedDraftSnapshot();
                     const res = await runSandboxSimulation(candidate, sandbox.state, simEvent);
                     if (simEvent.type === 'init') {
                         sandbox.ledger = createTurnLedger();
@@ -1047,7 +1108,9 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                         sandbox.hasInitialized = true;
                     }
                     sandbox.lastOutput = res;
+                    lastSandboxErrors = (!res.ok && res.error) ? [res.error] : [];
                 } catch (err) {
+                    const errMessage = err?.message || String(err);
                     sandbox.lastOutput = {
                         ok: false,
                         state: sandbox.state,
@@ -1059,11 +1122,13 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                         stripCommand: false,
                         strippedMessage: sandbox.userMessage,
                         logs: [],
-                        error: err?.message || String(err),
+                        error: errMessage,
                         durationMs: 0,
                     };
+                    lastSandboxErrors = [errMessage];
                 } finally {
                     sandbox.running = false;
+                    sandbox.statusMessage = '';
                     renderModal();
                 }
             };
@@ -1094,6 +1159,7 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                     try {
                         parsedArgs = JSON.parse(rawArgsText);
                     } catch (err) {
+                        const errMessage = `Invalid Tool JSON Args: ${err?.message || String(err)}`;
                         sandbox.lastOutput = {
                             ok: false,
                             state: sandbox.state,
@@ -1105,9 +1171,10 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
                             stripCommand: false,
                             strippedMessage: sandbox.userMessage,
                             logs: [],
-                            error: `Invalid Tool JSON Args: ${err?.message || String(err)}`,
+                            error: errMessage,
                             durationMs: 0,
                         };
+                        lastSandboxErrors = [errMessage];
                         renderModal();
                         return;
                     }
@@ -1160,14 +1227,35 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
 
             ${footerErrorHtml ? `<div id="rt-ss-footer-error">${footerErrorHtml}</div>` : ''}
 
-            <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;">
-                <button type="button" id="rt-ss-cancel" class="menu_button interactable">Cancel</button>
-                <button type="button" id="rt-ss-save" class="menu_button interactable" style="background:var(--rt-studio-accent);border-color:var(--rt-studio-accent);color:#fff;font-weight:600;">Save Script</button>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+                <button type="button" id="rt-ss-ai-iterate" class="menu_button interactable">✨ Iterate / Convert with AI</button>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <button type="button" id="rt-ss-cancel" class="menu_button interactable">Cancel</button>
+                    <button type="button" id="rt-ss-save" class="menu_button interactable" style="background:var(--rt-studio-accent);border-color:var(--rt-studio-accent);color:#fff;font-weight:600;">Save Script</button>
+                </div>
             </div>
         `;
 
         modal.querySelector('#rt-ss-close-x')?.addEventListener('click', () => closeStudio(true));
         modal.querySelector('#rt-ss-cancel')?.addEventListener('click', () => closeStudio(true));
+        modal.querySelector('#rt-ss-ai-iterate')?.addEventListener('click', () => {
+            const candidate = getValidationCandidate();
+            const currentValidation = validateScriptDefinition(candidate);
+            const validationErrorsToPass = lastValidationErrors.length > 0
+                ? lastValidationErrors
+                : (currentValidation.errors || []);
+            openScriptIterateModal(candidate, {
+                getSettings: deps?.getSettings,
+                validationErrors: validationErrorsToPass,
+                sandboxErrors: lastSandboxErrors,
+                onApply: (updatedScript) => {
+                    Object.assign(draft, normalizeScriptDefinition(updatedScript));
+                    footerErrorHtml = '';
+                    resetSandboxState();
+                    renderModal();
+                },
+            });
+        });
 
         modal.querySelectorAll('.rt-script-studio-tab').forEach((tabBtn) => {
             tabBtn.addEventListener('click', () => {
@@ -1182,6 +1270,7 @@ export function openScriptStudio(scriptOrNull, deps = {}) {
         modal.querySelector('#rt-ss-save')?.addEventListener('click', async () => {
             const candidate = getValidationCandidate();
             const validation = validateScriptDefinition(candidate);
+            lastValidationErrors = [...(validation?.errors || [])];
             if (!validation.valid) {
                 footerErrorHtml = `<div class="rt-script-error-box" role="alert"><strong>Cannot save script:</strong>\n${validation.errors.map((e) => `• ${escapeHtml(e)}`).join('\n')}</div>`;
                 renderModal();

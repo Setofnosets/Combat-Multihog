@@ -528,6 +528,8 @@ const CARTRIDGE_PAYLOAD_KEYS = [
     'gameSystems',
     'customFields',
     'gameScriptsEnabled',
+    'gameScriptPyodideIndexUrl',
+    'gameScriptPyodideBootTimeoutMs',
     'gameScriptDatabase',
     'gameScriptOrder',
     'blockOrder',
@@ -617,7 +619,7 @@ export const CARTRIDGE_PAYLOAD_GROUPS = [
         id: 'gameScripts',
         label: 'Game Scripts',
         description: 'Deterministic scripts, commands, and Narrator tool actions.',
-        keys: ['gameScriptsEnabled', 'gameScriptDatabase', 'gameScriptOrder'],
+        keys: ['gameScriptsEnabled', 'gameScriptPyodideIndexUrl', 'gameScriptPyodideBootTimeoutMs', 'gameScriptDatabase', 'gameScriptOrder'],
     },
     {
         id: 'characterSheets',

@@ -31,10 +31,14 @@ import {
 import {
     applyScriptMemoPatches,
     getActiveCharacterName as defaultGetActiveCharacterName,
+    getPythonRunnerStatus,
     seedInitialScriptStateForChat,
+    syncPythonRunnerConfig,
     syncScriptToolRegistrations,
 } from './script-host-adapter.js';
 import { openScriptStudio } from './script-studio.js';
+import { openScriptWizardModal } from './script-wizard.js';
+import { DEFAULT_PYODIDE_INDEX_URL } from './core/runner-python-pyodide.js';
 import { renderScriptMemo } from './core/script-engine.js';
 import { getActiveChatId as defaultGetActiveChatId, getSettings as defaultGetSettings } from '../../../state-manager.js';
 import {
@@ -424,8 +428,10 @@ function renderCollisionBanner(bannerEl, enabledScripts) {
     `;
 }
 
-function openStudioForScript(scriptOrNull) {
-    const isNew = !(scriptOrNull && scriptOrNull.id);
+function openStudioForScript(scriptOrNull, options = {}) {
+    const isNew = typeof options?.isNew === 'boolean'
+        ? options.isNew
+        : !(scriptOrNull && scriptOrNull.id);
     openScriptStudio(scriptOrNull, {
         isNew,
         getActiveCharacterName: () => getActiveCharacterNameSafe(),
@@ -509,6 +515,35 @@ async function handleImportedJsonText(rawText) {
     }
 }
 
+function formatPyodideStatusLabel(status) {
+    const rawState = String(status?.state || '').trim().toLowerCase();
+    switch (rawState) {
+        case 'loading':
+            return 'Loading...';
+        case 'ready':
+            return 'Ready';
+        case 'error':
+            return 'Error';
+        case 'idle':
+        default:
+            return 'Idle';
+    }
+}
+
+function syncPyodideRuntimeBar(settings) {
+    const urlInput = /** @type {HTMLInputElement|null} */ (document.getElementById('rpg_scripts_pyodide_url'));
+    if (urlInput) {
+        urlInput.value = settings?.gameScriptPyodideIndexUrl || DEFAULT_PYODIDE_INDEX_URL;
+    }
+
+    const statusEl = document.getElementById('rpg_scripts_pyodide_status');
+    if (statusEl) {
+        const status = getPythonRunnerStatus();
+        statusEl.textContent = formatPyodideStatusLabel(status);
+        statusEl.title = status?.lastError ? String(status.lastError) : (status?.indexUrl ? String(status.indexUrl) : '');
+    }
+}
+
 /**
  * Re-renders the Scripts settings tab list, collision banner, and live state section.
  */
@@ -523,6 +558,8 @@ export function refreshScriptsUi() {
     if (masterToggle) {
         masterToggle.checked = settings?.gameScriptsEnabled !== false;
     }
+
+    syncPyodideRuntimeBar(settings);
 
     const allScripts = listScripts(settings);
     const enabledScripts = resolveEnabledScriptsForChat(settings, chatId, charName);
@@ -818,6 +855,38 @@ export function installScriptsUi(deps = {}) {
         const newBtn = document.getElementById('rpg_scripts_new_btn');
         newBtn?.addEventListener('click', () => {
             openStudioForScript(null);
+        });
+
+        const wizardBtn = document.getElementById('rpg_scripts_wizard_btn');
+        wizardBtn?.addEventListener('click', () => {
+            openScriptWizardModal({
+                getSettings: () => getSettingsSafe(),
+                getActiveChatId: () => getActiveChatIdSafe(),
+                getActiveCharacterName: () => getActiveCharacterNameSafe(),
+                onDraftReady: (draft) => openStudioForScript(draft, { isNew: true }),
+            });
+        });
+
+        const pyodideUrlInput = /** @type {HTMLInputElement|null} */ (document.getElementById('rpg_scripts_pyodide_url'));
+        pyodideUrlInput?.addEventListener('change', () => {
+            const settings = getSettingsSafe();
+            const val = String(pyodideUrlInput.value ?? '').trim();
+            settings.gameScriptPyodideIndexUrl = val || DEFAULT_PYODIDE_INDEX_URL;
+            syncPythonRunnerConfig(settings);
+            saveSettingsSafe();
+            refreshScriptsUi();
+        });
+
+        const pyodideResetBtn = document.getElementById('rpg_scripts_pyodide_reset_btn');
+        pyodideResetBtn?.addEventListener('click', () => {
+            const settings = getSettingsSafe();
+            settings.gameScriptPyodideIndexUrl = DEFAULT_PYODIDE_INDEX_URL;
+            if (pyodideUrlInput) {
+                pyodideUrlInput.value = DEFAULT_PYODIDE_INDEX_URL;
+            }
+            syncPythonRunnerConfig(settings);
+            saveSettingsSafe();
+            refreshScriptsUi();
         });
 
         const importBtn = document.getElementById('rpg_scripts_import_btn');

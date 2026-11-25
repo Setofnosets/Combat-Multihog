@@ -323,8 +323,6 @@ export function validateScriptDefinition(def) {
     const lang = typeof def.lang === 'string' ? def.lang.trim().toLowerCase() : '';
     if (!SCRIPT_LANGUAGES.includes(lang)) {
         errors.push(`Invalid script language "${def.lang ?? ''}". Expected one of: ${SCRIPT_LANGUAGES.join(', ')}.`);
-    } else if (lang === 'python') {
-        warnings.push('Python scripts are targeted for Phase 2 and are not yet executable in the Phase 1 JS sandbox.');
     }
 
     const scope = typeof def.scope === 'string' ? def.scope.trim().toLowerCase() : '';
@@ -587,33 +585,54 @@ export function normalizeScriptResult(raw) {
     const hasState = Object.prototype.hasOwnProperty.call(raw, 'state') && raw.state !== undefined;
     const state = hasState ? raw.state : undefined;
 
-    const hasMemoProp = Object.prototype.hasOwnProperty.call(raw, 'memoBlock') && raw.memoBlock !== undefined;
+    const rawMemoBlock = Object.prototype.hasOwnProperty.call(raw, 'memoBlock') && raw.memoBlock !== undefined
+        ? raw.memoBlock
+        : (Object.prototype.hasOwnProperty.call(raw, 'memo_block') && raw.memo_block !== undefined
+            ? raw.memo_block
+            : undefined);
+    const hasMemoProp = rawMemoBlock !== undefined;
     let hasMemoBlock = false;
     let memoBlock = null;
     if (hasMemoProp) {
         hasMemoBlock = true;
-        memoBlock = raw.memoBlock === null ? null : String(raw.memoBlock);
+        memoBlock = rawMemoBlock === null ? null : String(rawMemoBlock);
     }
 
-    const promptInjection = raw.promptInjection == null ? '' : String(raw.promptInjection);
+    const rawPromptInjection = raw.promptInjection !== undefined
+        ? raw.promptInjection
+        : raw.prompt_injection;
+    const promptInjection = rawPromptInjection == null ? '' : String(rawPromptInjection);
 
-    const hasToolResult = Object.prototype.hasOwnProperty.call(raw, 'toolResult') && raw.toolResult !== undefined;
-    const toolResult = hasToolResult ? raw.toolResult : undefined;
+    const rawToolResult = Object.prototype.hasOwnProperty.call(raw, 'toolResult') && raw.toolResult !== undefined
+        ? raw.toolResult
+        : (Object.prototype.hasOwnProperty.call(raw, 'tool_result') && raw.tool_result !== undefined
+            ? raw.tool_result
+            : undefined);
+    const hasToolResult = rawToolResult !== undefined;
+    const toolResult = hasToolResult ? rawToolResult : undefined;
 
-    const stripCommand = Boolean(raw.stripCommand);
+    const rawStripCommand = raw.stripCommand !== undefined
+        ? raw.stripCommand
+        : raw.strip_command;
+    const stripCommand = Boolean(rawStripCommand);
 
+    const rawPortraitUrl = Object.prototype.hasOwnProperty.call(raw, 'portraitUrl') && raw.portraitUrl !== undefined
+        ? raw.portraitUrl
+        : (Object.prototype.hasOwnProperty.call(raw, 'portrait_url') && raw.portrait_url !== undefined
+            ? raw.portrait_url
+            : undefined);
     let hasPortraitUrl = false;
     let portraitUrl = null;
-    if (Object.prototype.hasOwnProperty.call(raw, 'portraitUrl') && raw.portraitUrl !== undefined) {
-        if (raw.portraitUrl === null) {
+    if (rawPortraitUrl !== undefined) {
+        if (rawPortraitUrl === null) {
             hasPortraitUrl = true;
             portraitUrl = null;
-        } else if (typeof raw.portraitUrl === 'string') {
-            if (raw.portraitUrl.trim() === '') {
+        } else if (typeof rawPortraitUrl === 'string') {
+            if (rawPortraitUrl.trim() === '') {
                 hasPortraitUrl = true;
                 portraitUrl = '';
             } else {
-                const safeUrl = sanitizePortraitUrl(raw.portraitUrl);
+                const safeUrl = sanitizePortraitUrl(rawPortraitUrl);
                 if (safeUrl) {
                     hasPortraitUrl = true;
                     portraitUrl = safeUrl;
@@ -622,7 +641,10 @@ export function normalizeScriptResult(raw) {
         }
     }
 
-    const appendMarkdown = raw.appendMarkdown == null ? '' : String(raw.appendMarkdown);
+    const rawAppendMarkdown = raw.appendMarkdown !== undefined
+        ? raw.appendMarkdown
+        : raw.append_markdown;
+    const appendMarkdown = rawAppendMarkdown == null ? '' : String(rawAppendMarkdown);
 
     const logs = Array.isArray(raw.logs)
         ? raw.logs.map(entry => String(entry ?? ''))

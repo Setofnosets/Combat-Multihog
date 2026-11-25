@@ -1354,6 +1354,11 @@ function getSettingsInternal(extensionSettings) {
     }
 
     if (typeof s.gameScriptsEnabled !== 'boolean') s.gameScriptsEnabled = true;
+    if (typeof s.gameScriptPyodideIndexUrl !== 'string' || !s.gameScriptPyodideIndexUrl.trim()) {
+        s.gameScriptPyodideIndexUrl = 'https://cdn.jsdelivr.net/pyodide/v0.27.5/full/';
+    }
+    const bootMs = Number(s.gameScriptPyodideBootTimeoutMs);
+    s.gameScriptPyodideBootTimeoutMs = Number.isFinite(bootMs) ? Math.max(5000, Math.min(120000, Math.floor(bootMs))) : 25000;
     if (!Array.isArray(s.gameScriptDatabase)) s.gameScriptDatabase = [];
     if (!s.gameScriptStatesByChat || typeof s.gameScriptStatesByChat !== 'object' || Array.isArray(s.gameScriptStatesByChat)) {
         s.gameScriptStatesByChat = {};
@@ -1743,6 +1748,8 @@ export const CHAT_STATE_GLOBAL_UI_KEYS = [
     'xpBarAtBottom',
     // Game Scripts definitions, order, and per-chat runtime state store live globally.
     'gameScriptsEnabled',
+    'gameScriptPyodideIndexUrl',
+    'gameScriptPyodideBootTimeoutMs',
     'gameScriptDatabase',
     'gameScriptStatesByChat',
     'gameScriptOrder',

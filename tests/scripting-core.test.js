@@ -129,9 +129,9 @@ describe('script-schema.js', () => {
             ]));
         });
 
-        it('warns on lang: python and on toolEnabled with empty toolActions', () => {
+        it('accepts lang: python without warning and warns on toolEnabled with empty toolActions', () => {
             const normalized = normalizeScriptDefinition({
-                name: 'Future Py Script',
+                name: 'Py Script',
                 lang: 'python',
                 toolEnabled: true,
                 toolActions: [],
@@ -141,8 +141,7 @@ describe('script-schema.js', () => {
             const validation = validateScriptDefinition(normalized);
             expect(validation.valid).toBe(true);
             expect(validation.errors).toEqual([]);
-            expect(validation.warnings).toHaveLength(2);
-            expect(validation.warnings.some((w) => /python/i.test(w))).toBe(true);
+            expect(validation.warnings).toHaveLength(1);
             expect(validation.warnings.some((w) => /no tool actions/i.test(w))).toBe(true);
         });
     });
@@ -494,7 +493,7 @@ describe('runner-registry.js & Node VM sandbox', () => {
         });
     });
 
-    it('lists the Python runner placeholder as unavailable', async () => {
+    it('registers the Python runner as available and executes hooks cleanly', async () => {
         const runners = listRunners();
         const jsRunner = runners.find((r) => r.lang === 'js');
         const pyRunner = runners.find((r) => r.lang === 'python');
@@ -502,16 +501,16 @@ describe('runner-registry.js & Node VM sandbox', () => {
         expect(jsRunner).toBeDefined();
         expect(jsRunner.available).toBe(true);
         expect(pyRunner).toBeDefined();
-        expect(pyRunner.available).toBe(false);
-        expect(getRunner('python')?.available).toBe(false);
+        expect(pyRunner.available).toBe(true);
+        expect(getRunner('python')?.available).toBe(true);
 
         const pyExec = await executeScriptHook(
-            { lang: 'python', code: 'def init_state(): return {}' },
+            { lang: 'python', code: 'def init_state(): return {"ready": True}' },
             'initState',
             {},
         );
-        expect(pyExec.ok).toBe(false);
-        expect(pyExec.error).toMatch(/Phase 2|Pyodide|unavailable/i);
+        expect(pyExec.ok).toBe(true);
+        expect(pyExec.result).toEqual({ ready: true });
     });
 });
 

@@ -928,12 +928,23 @@
                         </label>
                         <div class="rt-scripts-toolbar" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
                             <button type="button" id="rpg_scripts_new_btn" class="menu_button interactable">+ New Script</button>
+                            <button type="button" id="rpg_scripts_wizard_btn" class="menu_button">✨ AI Script Wizard</button>
                             <button type="button" id="rpg_scripts_import_btn" class="menu_button interactable">Import .json</button>
                             <input type="file" id="rpg_scripts_import_file" accept=".json,application/json" style="display:none;" />
                         </div>
                         <div id="rpg_scripts_collision_banner" class="rt-scripts-collision-banner" style="display:none;"></div>
                         <div id="rpg_scripts_list" class="rt-scripts-list"></div>
                         <div id="rpg_scripts_live_section" class="rt-scripts-live-section"></div>
+                        <div class="rt-script-pyodide-bar">
+                            <div class="rt-script-pyodide-header">
+                                <label for="rpg_scripts_pyodide_url" class="rt-script-pyodide-label">Python (Pyodide) Runtime</label>
+                                <span id="rpg_scripts_pyodide_status" class="rt-script-badge rt-script-badge--lang">Idle</span>
+                            </div>
+                            <div class="rt-script-pyodide-controls">
+                                <input type="text" id="rpg_scripts_pyodide_url" class="text_pole" placeholder="https://cdn.jsdelivr.net/pyodide/v0.27.5/full/" />
+                                <button type="button" id="rpg_scripts_pyodide_reset_btn" class="menu_button">Reset CDN</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

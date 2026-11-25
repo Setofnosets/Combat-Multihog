@@ -553,23 +553,38 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             const script = upsertScript(settings, makeRoundTripScript({ id: 'cart_script', name: 'Cartridge Script' }));
             settings.gameScriptsEnabled = false;
 
+            settings.gameScriptPyodideIndexUrl = 'https://custom.local/pyodide/';
+            settings.gameScriptPyodideBootTimeoutMs = 30000;
+
             const payload = buildCartridgePayload(settings);
             expect(payload.gameScriptsEnabled).toBe(false);
+            expect(payload.gameScriptPyodideIndexUrl).toBe('https://custom.local/pyodide/');
+            expect(payload.gameScriptPyodideBootTimeoutMs).toBe(30000);
             expect(payload.gameScriptDatabase).toHaveLength(1);
             expect(payload.gameScriptDatabase[0].id).toBe(script.id);
             expect(payload.gameScriptOrder).toEqual(['cart_script']);
 
             const group = CARTRIDGE_PAYLOAD_GROUPS.find(g => g.id === 'gameScripts');
             expect(group).toBeDefined();
-            expect(group.keys).toEqual(['gameScriptsEnabled', 'gameScriptDatabase', 'gameScriptOrder']);
+            expect(group.keys).toEqual([
+                'gameScriptsEnabled',
+                'gameScriptPyodideIndexUrl',
+                'gameScriptPyodideBootTimeoutMs',
+                'gameScriptDatabase',
+                'gameScriptOrder',
+            ]);
 
             // Wipe live settings then restore from cartridge payload
             settings.gameScriptsEnabled = true;
+            settings.gameScriptPyodideIndexUrl = 'https://cdn.jsdelivr.net/pyodide/v0.27.5/full/';
+            settings.gameScriptPyodideBootTimeoutMs = 25000;
             settings.gameScriptDatabase = [];
             settings.gameScriptOrder = [];
 
             applyCartridgePayload(settings, payload);
             expect(settings.gameScriptsEnabled).toBe(false);
+            expect(settings.gameScriptPyodideIndexUrl).toBe('https://custom.local/pyodide/');
+            expect(settings.gameScriptPyodideBootTimeoutMs).toBe(30000);
             expect(settings.gameScriptDatabase).toHaveLength(1);
             expect(settings.gameScriptDatabase[0].id).toBe('cart_script');
             expect(settings.gameScriptOrder).toEqual(['cart_script']);
@@ -712,11 +727,15 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             for (const id of [
                 'rpg_scripts_enabled',
                 'rpg_scripts_new_btn',
+                'rpg_scripts_wizard_btn',
                 'rpg_scripts_import_btn',
                 'rpg_scripts_import_file',
                 'rpg_scripts_collision_banner',
                 'rpg_scripts_list',
                 'rpg_scripts_live_section',
+                'rpg_scripts_pyodide_url',
+                'rpg_scripts_pyodide_reset_btn',
+                'rpg_scripts_pyodide_status',
             ]) {
                 expect(settingsHtmlSource).toContain(`id="${id}"`);
             }
