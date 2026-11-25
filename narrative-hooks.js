@@ -2078,6 +2078,8 @@ export function installInterceptor() {
                     chat,
                     lastUserMessage: content,
                     settings,
+                    generationType: type,
+                    userMessageIndex: idx,
                 }));
                 if (scriptPreResult?.stripCommand && typeof scriptPreResult.strippedMessage === 'string') {
                     content = scriptPreResult.strippedMessage;
