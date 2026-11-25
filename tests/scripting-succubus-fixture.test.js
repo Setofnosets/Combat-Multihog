@@ -73,10 +73,11 @@ describe('Succubus Companion reference fixture', () => {
                 'protection',
                 'evolve',
                 'pass_day',
+                'recover_vitality',
                 'status',
             ]),
         );
-        expect(schema.parameters.properties.action.enum).toHaveLength(10);
+        expect(schema.parameters.properties.action.enum).toHaveLength(11);
 
         const settings = getSettings();
         upsertScript(settings, script);
@@ -408,5 +409,104 @@ describe('Succubus Companion reference fixture', () => {
         } finally {
             globalThis.SillyTavern.getContext = prevGetContext;
         }
+    });
+
+    it('9. Player Vitality Recovery: passive [TIME] regen, day rollover, !succubus rest/heal commands, and recover_vitality tool call', async () => {
+        const script = loadFixtureScript();
+        const initRes = await ensureScriptState(script, null, {});
+        let state = { ...initRes.state, userVitality: 30, lastDrain: 18 };
+
+        // 1) Passive [TIME] regeneration: floor(90 / 30) = +3 userVitality
+        const timeRes = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            {
+                userMessage: 'I sit by the fire to catch my breath.',
+                time: { deltaMinutes: 90, dayChanged: false },
+            },
+        );
+        expect(timeRes.errors).toEqual([]);
+        state = timeRes.updatedStates[script.id];
+        expect(state.userVitality).toBe(33);
+
+        // 2) Explicit pre-turn commands: !succubus rest (+15), !succubus rest: meal (+20), !succubus recover 10 (+10)
+        const restCmd = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            { userMessage: '!succubus rest' },
+        );
+        expect(restCmd.errors).toEqual([]);
+        state = restCmd.updatedStates[script.id];
+        expect(state.userVitality).toBe(48);
+
+        const mealCmd = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            { userMessage: '!succubus rest: meal' },
+        );
+        expect(mealCmd.errors).toEqual([]);
+        state = mealCmd.updatedStates[script.id];
+        expect(state.userVitality).toBe(68);
+
+        const numericCmd = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            { userMessage: '!succubus recover 10' },
+        );
+        expect(numericCmd.errors).toEqual([]);
+        state = numericCmd.updatedStates[script.id];
+        expect(state.userVitality).toBe(78);
+
+        // 3) Mid-turn Narrator tool call: recover_vitality (clamps at 100 and clears lastDrain)
+        const toolHeal = await runScriptToolAction(
+            script,
+            state,
+            'recover_vitality',
+            { method: 'sleep' },
+            {},
+            createTurnLedger(),
+        );
+        expect(toolHeal.ok).toBe(true);
+        expect(toolHeal.deduped).toBe(false);
+        state = toolHeal.state;
+        expect(state.userVitality).toBe(100);
+        expect(state.lastDrain).toBe(0);
+
+        // 4) Overnight day rollover restores +40 and clears lastDrain
+        state = { ...state, userVitality: 42, lastDrain: 12 };
+        const dayRes = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            { userMessage: '!succubus pass-day' },
+        );
+        expect(dayRes.errors).toEqual([]);
+        state = dayRes.updatedStates[script.id];
+        expect(state.userVitality).toBe(82);
+        expect(state.lastDrain).toBe(0);
+
+        // 5) Pre-turn !succubus recover-vitality dedupes matching mid-turn recover_vitality tool call
+        state = { ...state, userVitality: 50, lastDrain: 10 };
+        const ledger = createTurnLedger();
+        const preRecover = await runScriptsBeforeGenerate(
+            [script],
+            { [script.id]: state },
+            { userMessage: '!succubus recover-vitality: meal' },
+            ledger,
+        );
+        expect(preRecover.errors).toEqual([]);
+        expect(preRecover.updatedStates[script.id].userVitality).toBe(70);
+
+        const dupRecover = await runScriptToolAction(
+            script,
+            preRecover.updatedStates[script.id],
+            'recover_vitality',
+            { method: 'meal' },
+            {},
+            ledger,
+        );
+        expect(dupRecover.ok).toBe(true);
+        expect(dupRecover.deduped).toBe(true);
+        expect(dupRecover.reason).toBe('already_handled_pre_turn');
+        expect(dupRecover.state.userVitality).toBe(70);
     });
 });
