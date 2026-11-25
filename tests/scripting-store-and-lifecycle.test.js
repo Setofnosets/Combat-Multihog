@@ -479,6 +479,7 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             SillyTavern.getContext = () => ({
                 ...baseCtx,
                 chatId,
+                getCurrentChatId: () => chatId,
                 name1: 'Tester',
                 name2: 'GM',
                 registerFunctionTool: (def) => registered.push(def),
@@ -538,7 +539,7 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 0 });
 
             // 2) Mid-turn tool call executes
-            const toolOut = JSON.parse(await toolDef.action({ action: 'bump' }));
+            const toolOut = JSON.parse(await toolDef.action({ action: 'bump', step: 1 }));
             expect(toolOut).toEqual({ ok: true, toolCalls: 1 });
             expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 1 });
 
@@ -560,8 +561,8 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             // Turn counter MUST NOT have incremented to 2!
             expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 1 });
 
-            // 4) Second tool call in the same turn + another continuation pass
-            await toolDef.action({ action: 'bump' });
+            // 4) Second distinct tool call in the same turn + another continuation pass
+            await toolDef.action({ action: 'bump', step: 2 });
             const preContinuation2 = await runHostScriptsBeforeGenerate({
                 chat: [userMsg, toolCallMsg, toolResultMsg, { role: 'tool', tool_call_id: 'tc_2', content: '{"ok":true}' }],
                 lastUserMessage: userMsg.mes,
