@@ -468,6 +468,124 @@ describe('Game Scripts Store, Persistence & Integration', () => {
             expect(duplicateRes.appendedMarkdown).toEqual([]);
             expect(lastAiMsg.mes.match(/\*\*Script Log:\*\*/g)).toHaveLength(1);
         });
+
+        it('does not re-run onBeforeGenerate or corrupt swipe rollback on SillyTavern tool-call continuation passes', async () => {
+            const settings = getSettings();
+            settings.gameScriptsEnabled = true;
+            const chatId = 'chat-tool-continuation';
+
+            const registered = [];
+            const baseCtx = SillyTavern.getContext();
+            SillyTavern.getContext = () => ({
+                ...baseCtx,
+                chatId,
+                name1: 'Tester',
+                name2: 'GM',
+                registerFunctionTool: (def) => registered.push(def),
+                unregisterFunctionTool: () => {},
+            });
+
+            const script = upsertScript(settings, {
+                id: 'turn_counter',
+                name: 'Turn Counter',
+                scope: 'global',
+                globalEnabled: true,
+                trackerTag: 'TURN_COUNTER',
+                commandPrefix: '!tc',
+                stripCommandFromPrompt: true,
+                toolEnabled: true,
+                toolName: 'Script_TurnCounter',
+                toolActions: [{ name: 'bump', description: 'Bump tool counter', params: [] }],
+                code: `
+                    function initState() { return { turns: 0, toolCalls: 0 }; }
+                    function onBeforeGenerate(state, ctx) {
+                        const next = { ...state, turns: state.turns + 1 };
+                        return {
+                            state: next,
+                            promptInjection: 'Turn ' + next.turns,
+                            stripCommand: Boolean(ctx.command),
+                        };
+                    }
+                    function onToolCall(state, call) {
+                        const next = { ...state, toolCalls: state.toolCalls + 1 };
+                        return { state: next, toolResult: { ok: true, toolCalls: next.toolCalls } };
+                    }
+                    function renderMemo(state) {
+                        return 'Turns: ' + state.turns + ' | Tools: ' + state.toolCalls;
+                    }
+                `,
+            });
+
+            syncScriptToolRegistrations(settings, chatId);
+            const toolDef = registered.find((t) => t.name === 'Script_TurnCounter');
+            expect(toolDef).toBeTruthy();
+
+            // Seed initial state (turns: 0, toolCalls: 0)
+            const userMsg = { is_user: true, role: 'user', send_date: '2026-11-25T10:00:00Z', mes: '!tc ping\nWatch the fight.' };
+
+            // 1) Initial pre-turn pass -> turns becomes 1, command stripped
+            const pre1 = await runHostScriptsBeforeGenerate({
+                chat: [userMsg],
+                lastUserMessage: userMsg.mes,
+                settings,
+                chatId,
+                generationType: 'normal',
+                userMessageIndex: 0,
+            });
+            expect(pre1.ran).toBe(true);
+            expect(pre1.stripCommand).toBe(true);
+            expect(pre1.strippedMessage).toBe('Watch the fight.');
+            expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 0 });
+
+            // 2) Mid-turn tool call executes
+            const toolOut = JSON.parse(await toolDef.action({ action: 'bump' }));
+            expect(toolOut).toEqual({ ok: true, toolCalls: 1 });
+            expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 1 });
+
+            // 3) SillyTavern re-invokes generate_interceptor for tool-call continuation pass!
+            const toolCallMsg = { role: 'assistant', tool_calls: [{ id: 'tc_1', function: { name: 'Script_TurnCounter' } }] };
+            const toolResultMsg = { role: 'tool', tool_call_id: 'tc_1', content: '{"ok":true}' };
+            const preContinuation = await runHostScriptsBeforeGenerate({
+                chat: [userMsg, toolCallMsg, toolResultMsg],
+                lastUserMessage: userMsg.mes,
+                settings,
+                chatId,
+                generationType: 'normal',
+                userMessageIndex: 0,
+            });
+            expect(preContinuation.ran).toBe(false);
+            expect(preContinuation.reusedActiveTurn).toBe(true);
+            expect(preContinuation.stripCommand).toBe(true);
+            expect(preContinuation.strippedMessage).toBe('Watch the fight.');
+            // Turn counter MUST NOT have incremented to 2!
+            expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 1 });
+
+            // 4) Second tool call in the same turn + another continuation pass
+            await toolDef.action({ action: 'bump' });
+            const preContinuation2 = await runHostScriptsBeforeGenerate({
+                chat: [userMsg, toolCallMsg, toolResultMsg, { role: 'tool', tool_call_id: 'tc_2', content: '{"ok":true}' }],
+                lastUserMessage: userMsg.mes,
+                settings,
+                chatId,
+                generationType: 'normal',
+                userMessageIndex: 0,
+            });
+            expect(preContinuation2.ran).toBe(false);
+            expect(getChatScriptState(settings, chatId, script.id)).toEqual({ turns: 1, toolCalls: 2 });
+
+            // 5) Final assistant message completes the turn -> swipe rollback restores original pre-turn snapshot!
+            const finalAiMsg = { mes: 'Done.', content: 'Done.', swipes: ['Done.'], swipe_id: 0, extra: {} };
+            await runHostScriptsAfterGenerate({
+                chat: [userMsg, finalAiMsg],
+                lastAiMsg: finalAiMsg,
+                settings,
+                chatId,
+            });
+            finalAiMsg.swipe_id = 1;
+            await handleHostScriptSwipeRollback(finalAiMsg, settings, chatId);
+            // Original pre-turn snapshot had no state yet (null/undefined), proving beforeSnapshot was NOT clobbered mid-turn!
+            expect(getChatScriptState(settings, chatId, script.id)).toBeNull();
+        });
     });
 
     describe('4. Chat Rename, Delete & Campaign Branch Persistence', () => {

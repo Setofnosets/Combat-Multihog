@@ -49,6 +49,64 @@ import { saveSettings } from '../../app/runtime-bridge.js';
 
 const _registeredScriptTools = new Set();
 let _activeTurn = null;
+const _lastCompletedTurnByChat = new Map();
+
+function isToolLikeChatMessage(msg) {
+    if (!msg || typeof msg !== 'object') return false;
+    const role = String(msg.role || msg.Role || '').toLowerCase().trim();
+    if (role === 'tool' || role === 'function') return true;
+    if (Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) return true;
+    if (msg.tool_call_id) return true;
+    const extra = msg.extra && typeof msg.extra === 'object' ? msg.extra : null;
+    if (extra) {
+        if (extra.tool_call || extra.isTool || extra.tcResultId) return true;
+        if (Array.isArray(extra.tool_invocations) && extra.tool_invocations.length > 0) return true;
+        const extraType = String(extra.type || '').toLowerCase().trim();
+        if (['tool', 'tool_call', 'tool_result', 'function'].includes(extraType)) return true;
+    }
+    return false;
+}
+
+function findLastUserMessageIndex(chat, hintIdx) {
+    if (!Array.isArray(chat) || chat.length === 0) return -1;
+    if (Number.isInteger(hintIdx) && hintIdx >= 0 && hintIdx < chat.length) {
+        return hintIdx;
+    }
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const m = chat[i];
+        if (!m || typeof m !== 'object') continue;
+        const role = String(m.role || m.Role || '').toLowerCase().trim();
+        if (m.is_user || role === 'user' || role === 'human' || role === 'player') {
+            return i;
+        }
+    }
+    return -1;
+}
+
+function hasToolMessagesAfterUser(chat, userIdx) {
+    if (Array.isArray(chat) && userIdx >= 0) {
+        for (let i = userIdx + 1; i < chat.length; i++) {
+            if (isToolLikeChatMessage(chat[i])) return true;
+        }
+    }
+    const liveChat = getStContextSafe()?.chat;
+    if (Array.isArray(liveChat) && liveChat.length > 0) {
+        const liveUserIdx = findLastUserMessageIndex(liveChat, -1);
+        if (liveUserIdx >= 0) {
+            for (let i = liveUserIdx + 1; i < liveChat.length; i++) {
+                if (isToolLikeChatMessage(liveChat[i])) return true;
+            }
+        }
+    }
+    return false;
+}
+
+function buildUserTurnKey(chat, userIdx, rawUserMessage) {
+    if (!Array.isArray(chat) || userIdx < 0 || !chat[userIdx]) return '';
+    const msg = chat[userIdx];
+    const sendDate = msg.send_date ?? msg.sendDate ?? '';
+    return `${userIdx}|${sendDate}|${String(rawUserMessage ?? '')}`;
+}
 
 function getStContextSafe() {
     try {
@@ -582,8 +640,9 @@ export async function runHostScriptsBeforeGenerate({
     lastUserMessage = '',
     settings = getSettings(),
     chatId = getActiveChatId(),
+    generationType = '',
+    userMessageIndex = -1,
 } = {}) {
-    void chat;
     const cid = resolveChatId(chatId);
     const scripts = getActiveChatScripts(settings, cid);
     if (!scripts.length) {
@@ -596,14 +655,108 @@ export async function runHostScriptsBeforeGenerate({
         };
     }
 
+    const typeLower = String(generationType || '').toLowerCase().trim();
+    if (typeLower === 'quiet' || typeLower === 'impersonate') {
+        return {
+            ran: false,
+            skippedReason: typeLower,
+            promptInjection: '',
+            stripCommand: false,
+            strippedMessage: lastUserMessage,
+        };
+    }
+
+    const userIdx = findLastUserMessageIndex(chat, userMessageIndex);
+    const turnKey = buildUserTurnKey(chat, userIdx, lastUserMessage);
+    const userMsgIsTool = userIdx >= 0 && isToolLikeChatMessage(chat[userIdx]);
+    const hasToolAfterUser = hasToolMessagesAfterUser(chat, userIdx);
+    const isReplacingLatestNarratorMessage = typeLower === 'swipe' || typeLower === 'regenerate';
+
+    if (typeLower === 'continue') {
+        if (_activeTurn && _activeTurn.chatId === cid) {
+            return {
+                ran: false,
+                reusedActiveTurn: true,
+                skippedReason: 'continue',
+                promptInjection: _activeTurn.lastPromptInjection || '',
+                stripCommand: Boolean(_activeTurn.stripCommand),
+                strippedMessage: _activeTurn.stripCommand ? _activeTurn.strippedMessage : lastUserMessage,
+                memoPatches: {},
+                errors: [],
+            };
+        }
+        return {
+            ran: false,
+            skippedReason: 'continue',
+            promptInjection: '',
+            stripCommand: false,
+            strippedMessage: lastUserMessage,
+        };
+    }
+
+    if (!isReplacingLatestNarratorMessage) {
+        const activeMatchesChat = Boolean(_activeTurn && _activeTurn.chatId === cid);
+        const sameTurnKey = !turnKey || !_activeTurn?.turnKey || _activeTurn.turnKey === turnKey;
+        const activeHasToolChain = activeMatchesChat && (
+            hasToolAfterUser
+            || userMsgIsTool
+            || (sameTurnKey && (
+                (_activeTurn.ledger?.toolCallCount || 0) > 0
+                || (Boolean(turnKey) && userIdx >= 0 && userIdx < chat.length - 1)
+            ))
+        );
+        if (activeHasToolChain) {
+            return {
+                ran: false,
+                reusedActiveTurn: true,
+                skippedReason: 'tool_continuation',
+                promptInjection: _activeTurn.lastPromptInjection || '',
+                stripCommand: Boolean(_activeTurn.stripCommand),
+                strippedMessage: _activeTurn.stripCommand ? _activeTurn.strippedMessage : lastUserMessage,
+                memoPatches: {},
+                errors: [],
+            };
+        }
+
+        if (hasToolAfterUser || userMsgIsTool) {
+            const lastDone = _lastCompletedTurnByChat.get(cid);
+            if (lastDone && (!turnKey || !lastDone.turnKey || lastDone.turnKey === turnKey)) {
+                _activeTurn = lastDone;
+                return {
+                    ran: false,
+                    reusedActiveTurn: true,
+                    skippedReason: 'tool_continuation',
+                    promptInjection: lastDone.lastPromptInjection || '',
+                    stripCommand: Boolean(lastDone.stripCommand),
+                    strippedMessage: lastDone.stripCommand ? lastDone.strippedMessage : lastUserMessage,
+                    memoPatches: {},
+                    errors: [],
+                };
+            }
+            return {
+                ran: false,
+                skippedReason: 'tool_continuation',
+                promptInjection: '',
+                stripCommand: false,
+                strippedMessage: lastUserMessage,
+                memoPatches: {},
+                errors: [],
+            };
+        }
+    }
+
     const beforeSnapshot = captureScriptSnapshot(settings, cid);
     const priorMemo = typeof settings?.currentMemo === 'string' ? settings.currentMemo : '';
     const ledger = createTurnLedger();
     _activeTurn = {
         chatId: cid,
+        turnKey,
         ledger,
         beforeSnapshot,
         priorMemo,
+        lastPromptInjection: '',
+        stripCommand: false,
+        strippedMessage: lastUserMessage,
     };
 
     const statesById = getRecordsStatesMap(settings, cid);
@@ -671,6 +824,12 @@ export async function runHostScriptsBeforeGenerate({
     const promptInjection = eventLines.length > 0
         ? `[SCRIPT_EVENT]\n${eventLines.join('\n')}\n[/SCRIPT_EVENT]`
         : '';
+
+    if (_activeTurn && _activeTurn.chatId === cid) {
+        _activeTurn.lastPromptInjection = promptInjection;
+        _activeTurn.stripCommand = Boolean(result.stripCommand);
+        _activeTurn.strippedMessage = result.strippedMessage;
+    }
 
     return {
         ran: true,
@@ -810,6 +969,19 @@ export async function runHostScriptsAfterGenerate({
         stampScriptSwipeSnapshot(lastAiMsg, lastAiMsg?.swipe_id ?? 0, beforeSnapshot, afterSnapshot);
     }
 
+    if (cid) {
+        _lastCompletedTurnByChat.set(cid, {
+            chatId: cid,
+            turnKey: sameTurn ? (_activeTurn.turnKey || '') : '',
+            ledger,
+            beforeSnapshot,
+            priorMemo,
+            lastPromptInjection: sameTurn ? (_activeTurn.lastPromptInjection || '') : '',
+            stripCommand: sameTurn ? Boolean(_activeTurn.stripCommand) : false,
+            strippedMessage: sameTurn ? (_activeTurn.strippedMessage || '') : '',
+        });
+    }
+
     saveSettingsSafe();
     _activeTurn = null;
 
@@ -871,6 +1043,10 @@ export async function handleHostScriptSwipeRollback(lastAiMsg, settings = getSet
 export async function onScriptChatChanged() {
     const settings = getSettings();
     const chatId = resolveChatId(getActiveChatId());
+
+    if (_activeTurn && _activeTurn.chatId !== chatId) {
+        _activeTurn = null;
+    }
 
     syncPythonRunnerConfig(settings);
     syncScriptToolRegistrations(settings, chatId);
